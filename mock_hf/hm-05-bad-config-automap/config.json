@@ -1,0 +1,14 @@
+{
+  "model_type": "huggingmask_demo",
+  "architectures": ["SafeDemoModel"],
+  "auto_map": {
+    "AutoModel": "modeling_safe.SafeDemoModel"
+  },
+  "custom_pipelines": {
+    "text-classification": {
+      "impl": "modeling_safe.SafeDemoPipeline"
+    }
+  },
+  "hidden_size": 2,
+  "num_labels": 2
+}

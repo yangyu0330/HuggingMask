@@ -1,0 +1,18 @@
+{
+  "scenario_id": "hm-01-safe-st",
+  "demo_title": "정상 safetensors",
+  "demo_policy_profile": "strict_default",
+  "expected_overall_decision": "APPROVE",
+  "expected_overall_status": "PASS",
+  "expected_primary_stage": "VALIDATE_SAFETENSORS",
+  "expected_release_action": "APPROVE_AND_STORE",
+  "expected_grade": "N/A",
+  "expected_reason_codes": [
+    "SAFE_TENSORS_HASH_OK"
+  ],
+  "expected_cache_behavior": "second_request_cache_hit",
+  "notes": [
+    "Second request should show CACHE_HIT.",
+    "No custom code or config trigger should exist."
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "model_type": "huggingmask_demo",
+  "architectures": ["EvilDemoModel"],
+  "auto_map": {
+    "AutoModel": "modeling_evil.EvilDemoModel"
+  },
+  "hidden_size": 2,
+  "num_labels": 2
+}
