@@ -1,0 +1,135 @@
+{
+  "ValidationJobRequest.sample": {
+    "schema_version": "1.0",
+    "request_id": "0c7d3f5a-0f86-4f8d-a9df-8c0c315e7284",
+    "job_id": "9a7675b3-c726-45c8-9dae-98e5a6df7da2",
+    "model": {
+      "repo_id": "org/demo-model",
+      "revision": "main",
+      "source_host": "huggingface.co",
+      "source_url": "https://huggingface.co/org/demo-model",
+      "requested_by": "developer-a",
+      "requested_at": "2026-04-20T09:00:00Z",
+      "endpoint_mode": "HF_ENDPOINT_PROXY"
+    },
+    "policy": {
+      "policy_version": "policy-2026.04.20",
+      "whitelist_version": "wl-2026.04.20",
+      "opcode_policy_version": "opcode-2026.04.20",
+      "config_schema_version": "cfg-2026.04.20",
+      "runtime_profile_version": "rt-2026.04.20",
+      "policy_fingerprint": "policy-2026.04.20|wl-2026.04.20|opcode-2026.04.20|cfg-2026.04.20|rt-2026.04.20"
+    },
+    "runtime_context": {
+      "sandbox_runtime": "gvisor",
+      "network_disabled": true,
+      "read_only_fs": true,
+      "compare_mode": "TORCH_ALLCLOSE_THEN_SHA256",
+      "allow_cache_lookup": true,
+      "generate_mlbom": true,
+      "write_audit_log": true
+    },
+    "artifacts": [
+      {
+        "artifact_id": "sha256:2c1c7d10...",
+        "repo_path": "modeling_custom.py",
+        "file_name": "modeling_custom.py",
+        "file_kind": "PYTHON",
+        "detected_extension": ".py",
+        "media_type": "text/x-python",
+        "size_bytes": 10423,
+        "sha256": "2c1c7d10...",
+        "source_url": "https://huggingface.co/org/demo-model/resolve/main/modeling_custom.py",
+        "temp_local_path": "/tmp/jobs/9a7675/modeling_custom.py",
+        "referenced_by": [
+          "config.json"
+        ],
+        "is_generated": false
+      }
+    ],
+    "requested_routes": [],
+    "stop_on_first_block": false,
+    "notes": null
+  },
+  "ValidationJobResponse.sample": {
+    "schema_version": "1.0",
+    "request_id": "0c7d3f5a-0f86-4f8d-a9df-8c0c315e7284",
+    "job_id": "9a7675b3-c726-45c8-9dae-98e5a6df7da2",
+    "overall_decision": "REVIEW_REQUIRED",
+    "overall_status": "PENDING_REVIEW",
+    "release_action": "REVIEW_QUEUE",
+    "approved_artifact_ids": [],
+    "blocked_artifact_ids": [],
+    "pending_artifact_ids": [
+      "sha256:2c1c7d10..."
+    ],
+    "generated_artifacts": [],
+    "report_id": "vr_2026_04_20_001",
+    "report_path": "/reports/vr_2026_04_20_001.json",
+    "reason_entries": [
+      {
+        "code": "UNREGISTERED_API",
+        "severity": "HIGH",
+        "message": "화이트리스트 미등록 API 탐지",
+        "evidence": [
+          "torch.nn.functional.scaled_dot_product_attention"
+        ],
+        "review_required": true
+      }
+    ],
+    "created_at": "2026-04-20T09:10:20Z"
+  },
+  "PendingApiRecord.sample": {
+    "api_path": "torch.nn.functional.scaled_dot_product_attention",
+    "first_seen_at": "2026-04-20T09:10:11Z",
+    "last_seen_at": "2026-04-20T09:10:11Z",
+    "seen_count": 1,
+    "auto_classification": "AUTO_APPROVE",
+    "verified_org_count": 3,
+    "verified_org_list": [
+      "Meta",
+      "Google",
+      "Mistral"
+    ],
+    "in_official_docs": true,
+    "review_status": "PENDING",
+    "model_list": [
+      "org/demo-model"
+    ],
+    "risk_keywords": [],
+    "matched_namespace_rule": "torch.nn.functional.*",
+    "documentation_url": "https://pytorch.org/docs/stable/generated/...",
+    "sample_callsites": [
+      "F.scaled_dot_product_attention(q, k, v)"
+    ],
+    "created_from_job_id": "9a7675b3-c726-45c8-9dae-98e5a6df7da2"
+  },
+  "ReviewDecisionRequest.sample": {
+    "schema_version": "1.0",
+    "review_id": "rev_2026_04_20_003",
+    "queue_entry_id": "rq_2026_04_20_001",
+    "decision": "APPROVE",
+    "reviewer_id": "security_admin_01",
+    "review_note": "공식 문서 등재 및 Verified Org 사용 확인. 위험 키워드 없음.",
+    "conditions": null,
+    "decided_at": "2026-04-20T10:00:00Z"
+  },
+  "AuditEvent.sample": {
+    "event_id": "evt_2026_04_20_1001",
+    "prev_event_hash": "1d34...",
+    "event_hash": "93af...",
+    "event_type": "PENDING_API_REGISTERED",
+    "occurred_at": "2026-04-20T09:10:12Z",
+    "request_id": "0c7d3f5a-0f86-4f8d-a9df-8c0c315e7284",
+    "job_id": "9a7675b3-c726-45c8-9dae-98e5a6df7da2",
+    "actor_type": "SYSTEM",
+    "actor_id": "whitelist-engine",
+    "model_repo_id": "org/demo-model",
+    "artifact_id": null,
+    "payload_digest": "5ddf...",
+    "payload_inline": {
+      "api_path": "torch.nn.functional.scaled_dot_product_attention",
+      "review_status": "PENDING"
+    }
+  }
+}
