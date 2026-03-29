@@ -1,11 +1,11 @@
-1. Work Details
+1. 작업 내용
 -
 
-2. Reason for Change
+2. 수정 이유
 -
 
-3. Test Results
+3. 테스트 결과
 -
 
-4. Reviewer Notes
+4. 확인 요청 사항
 -
