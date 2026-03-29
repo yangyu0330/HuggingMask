@@ -1,0 +1,17 @@
+{
+  "scenario_id": "hm-04-bad-py-import",
+  "demo_title": "악성 코드",
+  "demo_policy_profile": "allow_custom_code_scan",
+  "expected_overall_decision": "DENY",
+  "expected_overall_status": "BLOCK",
+  "expected_primary_stage": "VALIDATE_CODE_AST",
+  "expected_release_action": "DENY",
+  "expected_grade": "C",
+  "expected_reason_codes": [
+    "DANGEROUS_CALL"
+  ],
+  "notes": [
+    "This scenario is for AST/code-stage blocking, not config-stage blocking.",
+    "Under strict_default profile, config trigger may be blocked earlier."
+  ]
+}

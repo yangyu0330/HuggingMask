@@ -1,0 +1,17 @@
+{
+  "scenario_id": "hm-03-bad-pkl-reduce",
+  "demo_title": "악성 pickle",
+  "demo_policy_profile": "strict_default",
+  "expected_overall_decision": "DENY",
+  "expected_overall_status": "BLOCK",
+  "expected_primary_stage": "VALIDATE_PICKLE_PATH_A",
+  "expected_release_action": "DENY",
+  "expected_grade": "N/A",
+  "expected_reason_codes": [
+    "PICKLE_OPCODE_BLOCKED"
+  ],
+  "notes": [
+    "The only meaningful difference from hm-02-safe-pkl should be one execution opcode.",
+    "No real destructive behavior should be present in the payload."
+  ]
+}

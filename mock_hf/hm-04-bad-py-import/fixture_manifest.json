@@ -1,0 +1,22 @@
+{
+  "scenario_id": "hm-04-bad-py-import",
+  "demo_policy_profile": "allow_custom_code_scan",
+  "required_repo_files": [
+    "config.json",
+    "modeling_evil.py",
+    "model.safetensors"
+  ],
+  "files_present_in_repo": [
+    "config.json",
+    "modeling_evil.py"
+  ],
+  "artifacts_to_generate": [
+    {
+      "path": "model.safetensors",
+      "kind": "SAFETENSORS",
+      "source": "mock_hf/base_model_spec.json"
+    }
+  ],
+  "strict_default_behavior": "may_block_at_config_stage",
+  "ready_for_mock_hf_registration": false
+}
