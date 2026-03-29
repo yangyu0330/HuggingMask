@@ -1,0 +1,22 @@
+{
+  "scenario_id": "hm-03-bad-pkl-reduce",
+  "demo_policy_profile": "strict_default",
+  "required_repo_files": [
+    "config.json",
+    "pytorch_model.bin"
+  ],
+  "files_present_in_repo": [
+    "config.json",
+    "malicious_marker.py"
+  ],
+  "artifacts_to_generate": [
+    {
+      "path": "pytorch_model.bin",
+      "kind": "PICKLE",
+      "schema": "data_only_demo_state_dict_v1_plus_reduce",
+      "source": "mock_hf/base_model_spec.json + malicious_marker.DemoReducePayload"
+    }
+  ],
+  "expected_blocker": "REDUCE opcode",
+  "ready_for_mock_hf_registration": false
+}

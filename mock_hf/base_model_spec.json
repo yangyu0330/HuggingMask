@@ -1,0 +1,26 @@
+{
+  "model_name": "huggingmask_demo_base_v1",
+  "description": "Shared tiny base model for all 5 demo scenarios.",
+  "tensor_spec": {
+    "linear.weight": {
+      "dtype": "float32",
+      "shape": [2, 2],
+      "data": [0.1, 0.2, 0.3, 0.4]
+    },
+    "linear.bias": {
+      "dtype": "float32",
+      "shape": [2],
+      "data": [0.01, -0.02]
+    }
+  },
+  "config_spec": {
+    "model_type": "huggingmask_demo",
+    "architectures": ["SafeDemoModel"],
+    "hidden_size": 2,
+    "num_labels": 2
+  },
+  "notes": [
+    "All demo repos should reuse this same base weight structure.",
+    "Only one failure cause should differ per scenario."
+  ]
+}

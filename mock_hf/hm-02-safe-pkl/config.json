@@ -1,0 +1,6 @@
+{
+  "model_type": "huggingmask_demo",
+  "architectures": ["SafeDemoModel"],
+  "hidden_size": 2,
+  "num_labels": 2
+}

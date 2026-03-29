@@ -1,0 +1,17 @@
+{
+  "scenario_id": "hm-05-bad-config-automap",
+  "demo_title": "악성 config",
+  "demo_policy_profile": "strict_default",
+  "expected_overall_decision": "DENY",
+  "expected_overall_status": "BLOCK",
+  "expected_primary_stage": "VALIDATE_CONFIG",
+  "expected_release_action": "DENY",
+  "expected_grade": "N/A",
+  "expected_reason_codes": [
+    "CONFIG_TRIGGER_FIELD_FOUND"
+  ],
+  "notes": [
+    "modeling_safe.py should remain non-malicious.",
+    "The failure must be explained as a config trigger problem, not a code problem."
+  ]
+}

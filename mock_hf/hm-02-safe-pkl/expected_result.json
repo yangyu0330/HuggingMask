@@ -1,0 +1,18 @@
+{
+  "scenario_id": "hm-02-safe-pkl",
+  "demo_title": "정상 pickle",
+  "demo_policy_profile": "strict_default",
+  "expected_overall_decision": "APPROVE_WITH_TRANSFORM",
+  "expected_overall_status": "PASS",
+  "expected_primary_stage": "VALIDATE_PICKLE_PATH_A",
+  "expected_release_action": "APPROVE_AND_STORE",
+  "expected_grade": "N/A",
+  "expected_reason_codes": [
+    "PICKLE_OPCODE_ALLOWED_ONLY"
+  ],
+  "expected_generated_artifact": "model.safetensors",
+  "notes": [
+    "Release artifact should be transformed safetensors, not original pickle.",
+    "If Path B is used for comparison, A/B result should match."
+  ]
+}
