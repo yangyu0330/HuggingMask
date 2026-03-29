@@ -1,0 +1,9 @@
+services:
+  proxy:
+    build: .
+    container_name: huggingmask-proxy
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    command: uvicorn proxy.app.main:app --host 0.0.0.0 --port 8000 --reload
