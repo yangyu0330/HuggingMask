@@ -1,0 +1,121 @@
+[
+  {
+    "scenario_id": "hm-01-safe-st",
+    "profile": "strict_default",
+    "overall_decision": "APPROVE",
+    "overall_status": "PASS",
+    "primary_stage": "VALIDATE_SAFETENSORS",
+    "release_action": "APPROVE_AND_STORE",
+    "grade": "N/A",
+    "reason_codes": [
+      "SAFE_TENSORS_HASH_OK"
+    ],
+    "details": {
+      "sha256": "06b8c190e73dcce993c243dcc69c9bafcc5db7f0b890fe3f0b408f4b1d9cc848"
+    },
+    "expected_match": {
+      "overall_decision": true,
+      "overall_status": true,
+      "primary_stage": true,
+      "grade": true,
+      "reason_codes": true
+    }
+  },
+  {
+    "scenario_id": "hm-02-safe-pkl",
+    "profile": "strict_default",
+    "overall_decision": "APPROVE_WITH_TRANSFORM",
+    "overall_status": "PASS",
+    "primary_stage": "VALIDATE_PICKLE_PATH_A",
+    "release_action": "APPROVE_AND_STORE",
+    "grade": "N/A",
+    "reason_codes": [
+      "PICKLE_OPCODE_ALLOWED_ONLY"
+    ],
+    "details": {
+      "opcode_count": 60
+    },
+    "expected_match": {
+      "overall_decision": true,
+      "overall_status": true,
+      "primary_stage": true,
+      "grade": true,
+      "reason_codes": true
+    }
+  },
+  {
+    "scenario_id": "hm-03-bad-pkl-reduce",
+    "profile": "strict_default",
+    "overall_decision": "DENY",
+    "overall_status": "BLOCK",
+    "primary_stage": "VALIDATE_PICKLE_PATH_A",
+    "release_action": "DENY",
+    "grade": "N/A",
+    "reason_codes": [
+      "PICKLE_OPCODE_BLOCKED"
+    ],
+    "details": {
+      "blocked_opcode": "STACK_GLOBAL",
+      "pickle_path": "pytorch_model.bin"
+    },
+    "expected_match": {
+      "overall_decision": true,
+      "overall_status": true,
+      "primary_stage": true,
+      "grade": true,
+      "reason_codes": true
+    }
+  },
+  {
+    "scenario_id": "hm-04-bad-py-import",
+    "profile": "allow_custom_code_scan",
+    "overall_decision": "DENY",
+    "overall_status": "BLOCK",
+    "primary_stage": "VALIDATE_CODE_AST",
+    "release_action": "DENY",
+    "grade": "C",
+    "reason_codes": [
+      "DANGEROUS_CALL"
+    ],
+    "details": {
+      "dangerous_calls": [
+        "__import__"
+      ]
+    },
+    "expected_match": {
+      "overall_decision": true,
+      "overall_status": true,
+      "primary_stage": true,
+      "grade": true,
+      "reason_codes": true
+    }
+  },
+  {
+    "scenario_id": "hm-05-bad-config-automap",
+    "profile": "strict_default",
+    "overall_decision": "DENY",
+    "overall_status": "BLOCK",
+    "primary_stage": "VALIDATE_CONFIG",
+    "release_action": "DENY",
+    "grade": "N/A",
+    "reason_codes": [
+      "CONFIG_TRIGGER_FIELD_FOUND"
+    ],
+    "details": {
+      "trigger_fields_detected": [
+        "auto_map",
+        "custom_pipelines"
+      ],
+      "referenced_python_files": [
+        "modeling_safe.py"
+      ]
+    },
+    "expected_match": {
+      "overall_decision": true,
+      "overall_status": true,
+      "primary_stage": true,
+      "grade": true,
+      "reason_codes": true
+    }
+  }
+]
