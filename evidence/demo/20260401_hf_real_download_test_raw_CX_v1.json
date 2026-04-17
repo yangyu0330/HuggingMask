@@ -1,0 +1,86 @@
+[
+  {
+    "repo_id": "hf-internal-testing/tiny-random-gpt2",
+    "profile": "strict_default",
+    "overall_decision": "APPROVE",
+    "overall_status": "PASS",
+    "primary_stage": "VALIDATE_SAFETENSORS",
+    "release_action": "APPROVE_AND_STORE",
+    "grade": "N/A",
+    "reason_codes": [
+      "SAFE_TENSORS_HASH_OK"
+    ],
+    "details": {
+      "artifact": "model.safetensors",
+      "bytes": 453864
+    },
+    "downloaded_files": [
+      {
+        "path": "config.json",
+        "size": 807,
+        "error": null
+      },
+      {
+        "path": "model.safetensors",
+        "size": 453864,
+        "error": null
+      }
+    ]
+  },
+  {
+    "repo_id": "hf-internal-testing/tiny-random-BertModel",
+    "profile": "strict_default",
+    "overall_decision": "DENY",
+    "overall_status": "BLOCK",
+    "primary_stage": "VALIDATE_PICKLE_PATH_A",
+    "release_action": "DENY",
+    "grade": "N/A",
+    "reason_codes": [
+      "PICKLE_PARSE_ERROR"
+    ],
+    "details": {
+      "error": "'utf-8' codec can't decode byte 0x80 in position 63: invalid start byte",
+      "artifact": "pytorch_model.bin"
+    },
+    "downloaded_files": [
+      {
+        "path": "config.json",
+        "size": 631,
+        "error": null
+      },
+      {
+        "path": "pytorch_model.bin",
+        "size": 383481,
+        "error": null
+      }
+    ]
+  },
+  {
+    "repo_id": "jinaai/jina-embeddings-v2-base-en",
+    "profile": "strict_default",
+    "overall_decision": "DENY",
+    "overall_status": "BLOCK",
+    "primary_stage": "VALIDATE_CONFIG",
+    "release_action": "DENY",
+    "grade": "N/A",
+    "reason_codes": [
+      "CONFIG_TRIGGER_FIELD_FOUND"
+    ],
+    "details": {
+      "trigger_fields_detected": [
+        "auto_map"
+      ],
+      "referenced_python_files": [
+        "jinaai/jina-bert-implementation--configuration_bert.py",
+        "jinaai/jina-bert-implementation--modeling_bert.py"
+      ]
+    },
+    "downloaded_files": [
+      {
+        "path": "config.json",
+        "size": 1176,
+        "error": null
+      }
+    ]
+  }
+]

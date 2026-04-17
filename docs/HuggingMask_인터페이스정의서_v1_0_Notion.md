@@ -6,9 +6,9 @@ _Notion 업로드용 / 구현 기준 문서_
 - 문서명: HuggingMask 인터페이스 정의서
 - 버전: v1.0
 - 상태: Freeze Candidate
-- 적용 범위: Proxy(A), Validation Engine(B), Whitelist/Governance(C), Team Lead 통합 모듈
-- 인터페이스 동결 목표: Week 4 금요일
-- 변경 정책: Week 4 이후 **breaking change 금지**. 불가피한 변경은 팀장 승인 + 영향 모듈 담당자 동의가 있어야 함.
+- 적용 범위: 박용담 파일분류/JSON/config/tokenizer, 정은미 가중치검증경로, 양유상 코드검증경로, 김민우 적응형 화이트리스트 엔진, Proxy 후순위 진입점
+- 인터페이스 기준: 코드 제작 착수 전 고정
+- 변경 정책: 공통 JSON 계약 변경은 팀장 승인 + 영향 모듈 담당자 동의 후 진행
 - 비고: 이 문서는 구현 편의를 위해 기존 계획서/상세설계 문서의 요구사항을 **실행 가능한 JSON 계약 형태**로 재구성한 통합 문서다.
 
 ---
@@ -31,25 +31,26 @@ _Notion 업로드용 / 구현 기준 문서_
 
 ### 2.1 전체 흐름
 
-1. 개발자가 `from_pretrained()` 호출
-2. 요청이 HuggingFace 대신 Proxy로 들어옴
-3. Proxy가 파일을 수집하고 유형을 분류함
-4. Validation Engine이 파일 유형별 검증 경로를 실행함
-5. Code 검증 중 화이트리스트 조회가 필요하면 Whitelist Engine에 질의함
-6. 미등록 API는 Pending List에 등록됨
-7. 결과를 종합해 승인 / 차단 / 수동 리뷰 여부를 결정함
-8. 승인 시 내부 저장소, ML-BOM, 감사 로그, 캐시에 반영함
+1. 박용담이 fixture 또는 모델 저장소 파일 목록을 받아 파일을 분류하고 `ArtifactRef`를 만든다.
+2. 박용담이 `ValidationJobRequest`와 공통 JSON 계약을 검증한다.
+3. 박용담이 `config.json`과 `tokenizer_config.json`을 1차 검증한다.
+4. 정은미가 safetensors/pickle 등 가중치 검증 경로를 실행한다.
+5. 양유상이 Python 코드 검증 경로와 config가 참조한 `.py` 파일 검증을 실행한다.
+6. 양유상의 코드 검증 중 API 판정이 필요하면 김민우의 Whitelist Engine에 질의한다.
+7. 김민우가 미등록 API를 Pending List에 등록하거나 갱신한다.
+8. 박용담이 정은미/양유상/김민우 결과를 종합해 `ValidationJobResponse`를 만든다.
+9. Proxy는 후순위로 두며, 나중에 박용담 기준의 orchestrator를 호출하는 진입점으로 연결한다.
 
 ### 2.2 모듈 경계
 
 | 모듈 | 책임 | 입력 | 출력 | 담당 |
 |---|---|---|---|---|
-| Proxy | 요청 수신, 파일 분류, 캐시 확인, Validation Engine 호출, 승인 결과 전달 | 외부 모델 요청, 다운로드 파일 | ValidationJobRequest, 최종 응답 | A |
-| Validation Engine | safetensors / pickle / code / config 검증 | ValidationJobRequest | ValidationJobResponse, ValidationReport | B |
-| Config Integration | config 트리거 필드 검증, 참조 `.py` 라우팅 | config artifact | ConfigValidationResult, 추가 code job | 팀장 |
-| Whitelist Engine | API 허용 여부 확인, Pending List 등록, 리뷰 반영 | API 목록, 미등록 API, 리뷰 결정 | WhitelistCheckResponse, PendingApiRecord, ReviewDecisionResult | C |
-| Registry / Audit / ML-BOM | 승인 산출물 저장, ML-BOM 생성, 감사 로그 기록 | ApprovalPackage | RegistryRecord, MLBOM, AuditEvent | C |
-| Review Gate | B-2 / C / Pending API 수동 판단 | ReviewQueueEntry | ReviewDecisionResult | 팀장 + C |
+| Analyzer Core | 파일 분류, JSON 계약 검증, `ArtifactRef` 생성, 최종 응답 조립 | 파일 목록, 정책 정보, 정은미/양유상/김민우 결과 | ValidationJobRequest, ValidationJobResponse | 박용담 |
+| Config / Tokenizer Validator | `config.json`, `tokenizer_config.json` 1차 검증, 참조 `.py` 코드 검증 재라우팅 | config/tokenizer artifact | ConfigValidationResult, 추가 code job | 박용담 + 양유상 |
+| Weight Validator | safetensors / pickle Path A / pickle Path B 검증 | 가중치 artifact | ArtifactValidationResult | 정은미 |
+| Code Validator | 검증1(`CODE_AST_SCAN`), 검증2(`CODE_RESTRICTED_RUNTIME`), 검증3(`CODE_SANDBOX_RUNTIME`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
+| Whitelist Engine | API 허용 여부 확인, Pending List 등록/갱신, 리뷰 반영 | API 목록, 미등록 API, 리뷰 결정 | WhitelistCheckResponse, PendingApiRecord, ReviewDecisionResult | 김민우 |
+| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출 | 외부 요청 | ValidationJobResponse | 공통 |
 
 ### 2.3 내부 API 엔드포인트 계약 (v1.0)
 
@@ -57,14 +58,14 @@ _Notion 업로드용 / 구현 기준 문서_
 
 | 제공 모듈 | Method | Path | Request | Response | 비고 |
 |---|---|---|---|---|---|
-| Proxy | `POST` | `/internal/v1/validation/jobs` | `ValidationJobRequest` | `ValidationJobResponse` | Proxy -> Validation Engine |
-| Validation Engine | `POST` | `/internal/v1/whitelist/check` | `WhitelistCheckRequest` | `WhitelistCheckResponse[]` | AST 결과 API 목록 조회 |
-| Validation Engine | `POST` | `/internal/v1/pending/upsert` | `PendingApiUpsertRequest` | `PendingApiRecord` | 미등록 API 등록/갱신 |
+| Analyzer Core | `POST` | `/internal/v1/validation/jobs` | `ValidationJobRequest` | `ValidationJobResponse` | 후순위 Proxy가 호출 |
+| Code Validator | `POST` | `/internal/v1/whitelist/check` | `WhitelistCheckRequest` | `WhitelistCheckResponse[]` | AST 결과 API 목록 조회 |
+| Whitelist Engine | `POST` | `/internal/v1/pending/upsert` | `PendingApiUpsertRequest` | `PendingApiRecord` | 미등록 API 등록/갱신 |
 | Review Gate | `POST` | `/internal/v1/reviews/decide` | `ReviewDecisionRequest` | `ReviewDecisionResult` | 보안 담당자 판단 반영 |
-| Validation Engine | `POST` | `/internal/v1/reports` | `ValidationReport` | `{report_id, report_path}` | 검증 리포트 저장 |
+| Analyzer Core | `POST` | `/internal/v1/reports` | `ValidationReport` | `{report_id, report_path}` | 검증 리포트 저장 |
 | Governance | `POST` | `/internal/v1/mlbom` | `MLBOM` | `{mlbom_id}` | ML-BOM 저장 |
 | Governance | `POST` | `/internal/v1/audit/events` | `AuditEvent` | `{event_id, event_hash}` | append-only 감사 로그 |
-| Proxy | `POST` | `/internal/v1/approvals` | `ApprovalPackage` | `{release_ids, cache_keys}` | 승인 결과물 배포/캐시 반영 |
+| Proxy | `POST` | `/internal/v1/approvals` | `ApprovalPackage` | `{release_ids, cache_keys}` | 후순위 승인 결과물 배포/캐시 반영 |
 
 ### 2.4 전송/재시도 규칙
 
@@ -1313,7 +1314,7 @@ _Validation Engine → Whitelist Engine_
 
 ## 23. 구현 시 필수 결정 사항
 
-### 23.1 Proxy에서 반드시 넣어야 하는 값
+### 23.1 박용담이 반드시 넣어야 하는 값
 
 - `request_id`
 - `job_id`
@@ -1322,7 +1323,7 @@ _Validation Engine → Whitelist Engine_
 - `file_kind`
 - `temp_local_path`
 
-### 23.2 Validation Engine이 반드시 반환해야 하는 값
+### 23.2 정은미/양유상이 반드시 반환해야 하는 값
 
 - 파일별 `status`
 - 파일별 `grade`
@@ -1331,7 +1332,7 @@ _Validation Engine → Whitelist Engine_
 - 변환/재생성 결과물의 새 `artifact_id`
 - `report_id`
 
-### 23.3 Whitelist Engine이 반드시 보장해야 하는 값
+### 23.3 김민우가 반드시 보장해야 하는 값
 
 - `status` (`ALLOWED` / `BLOCKED` / `UNKNOWN` / `PENDING`)
 - `whitelist_version`
@@ -1352,10 +1353,11 @@ _Validation Engine → Whitelist Engine_
 
 | 담당 | 구현 항목 |
 |---|---|
-| 팀장 | 이 문서 유지, config ↔ code 연동, status 종합 규칙, 최종 인터페이스 동결 |
-| A | Proxy request 생성, artifact inventory, cache key/fingerprint, registry 연동 |
-| B | artifact별 validation detail 스키마 구현, grade 판정, 제한 런타임, 샌드박스 |
-| C | whitelist check/upsert, pending list 구조, review 적용, ML-BOM, audit log |
+| 팀장 | 이 문서 유지, 모듈 간 계약 충돌 조정, 최종 인터페이스 기준 관리 |
+| 박용담 | 파일분류, `config.json`, `tokenizer_config.json`, `ArtifactRef` 생성 기준, JSON 검증, 최종 응답 조립 |
+| 정은미 | 가중치검증경로, safetensors 검증, pickle Path A/Path B 검증 |
+| 양유상 | 코드검증경로, 검증1(`CODE_AST_SCAN`), 검증2(`CODE_RESTRICTED_RUNTIME`), 검증3(`CODE_SANDBOX_RUNTIME`), 참조 `.py` 코드 검증 |
+| 김민우 | 적응형 화이트리스트 엔진, whitelist check/upsert, pending list 구조, review 적용 |
 
 ---
 

@@ -60,7 +60,7 @@ Expected:
    Fix: start Docker Desktop, wait until engine is fully running, then retry `docker compose up --build`.
 
 2. Error: `ModuleNotFoundError` or package import errors while testing.
-   Fix: activate `.venv`, run `pip install -r requirements.txt` again, then rerun `pytest -q`.
+   Fix: activate `.venv`, run `pip install -r requirements.txt` again, then rerun `python -m pytest -q`.
 
 3. Error: `Bind for 0.0.0.0:8000 failed: port is already allocated`.
    Fix: stop the process/container using port `8000` or change mapping in `compose.yaml`.

@@ -59,7 +59,7 @@ docker compose up --build
 
 ## 7. 테스트 실행
 ```bash
-pytest -q
+python -m pytest -q
 ```
 
 최소 기준:

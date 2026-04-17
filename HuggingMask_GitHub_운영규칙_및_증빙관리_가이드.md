@@ -604,12 +604,12 @@ sandbox
 # 8. 개발 중부터 반드시 수집해야 하는 자료
 
 개발이 끝난 뒤에 스크린샷, 로그, 회의록을 모으려고 하면 늦다.  
-따라서 아래 폴더는 **Week 1부터 같이 채운다.**
+따라서 아래 폴더는 **구현 착수 시점부터 같이 채운다.**
 
 ## 8-1. 증빙 폴더 구조
 
 ```text
-evidence/week01~week10/   # 주차별 스크린샷, 로그, 데모 캡처
+evidence/worklog/          # 작업 단계별 스크린샷, 로그, 데모 캡처
 evidence/meetings/        # 회의록 PDF/MD, 참석자 기록
 evidence/tests/           # pytest 결과, 수동 테스트 표, 회귀 테스트 로그
 evidence/demo/            # 5개 시나리오 입력 파일, 실행 명령어, 출력 캡처
@@ -633,13 +633,13 @@ evidence/budget/          # 회의비, 재료비, 영수증 사본, 증빙 사�
 - known limitations / false positive 정리
 - 참고문헌 후보 목록
 
-특히 **Week 8부터는 보고서·논문에 쓸 그림과 표를 따로 표시**해 둔다.
+보고서·논문에 쓸 수 있는 그림과 표는 발견 즉시 따로 표시해 둔다.
 
 ---
 
-## 8-3. 10주차 종료 시 인계 패키지
+## 8-3. 구현 안정화 시 인계 패키지
 
-10주차 금요일까지 아래가 준비돼 있어야 한다.
+구현 안정화 단계까지 아래가 준비돼 있어야 한다.
 
 ```text
 docs/release_notes_v1.0.md
@@ -692,16 +692,7 @@ project-root/
 │  ├─ final_demo_script.md
 │  └─ final_acceptance_sheet.md
 ├─ evidence/
-│  ├─ week01/
-│  ├─ week02/
-│  ├─ week03/
-│  ├─ week04/
-│  ├─ week05/
-│  ├─ week06/
-│  ├─ week07/
-│  ├─ week08/
-│  ├─ week09/
-│  ├─ week10/
+│  ├─ worklog/
 │  ├─ meetings/
 │  ├─ tests/
 │  ├─ demo/
@@ -816,7 +807,7 @@ project-root/
 - **PR은 검수 절차다**
 - **모듈 경계를 지켜 Git 충돌을 줄인다**
 - **개발과 동시에 증빙 자료를 쌓는다**
-- **10주차 종료 시 코드가 아니라 인계 패키지까지 준비한다**
+- **코드뿐 아니라 인계 패키지까지 준비한다**
 
 이 규칙을 지키면,
 
