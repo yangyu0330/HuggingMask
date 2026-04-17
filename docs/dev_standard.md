@@ -10,7 +10,7 @@
 - Run baseline: `docker compose up --build`
 - Minimum success criteria:
   - `GET /health` returns `200`
-  - `pytest` has at least 1 passing test
+  - `python -m pytest` has at least 1 passing test
 
 ## 2) Team Local Environment Prerequisites
 Install:
@@ -49,4 +49,4 @@ Validation endpoints:
 - `http://127.0.0.1:8000/docs`
 
 Run test:
-- `pytest -q`
+- `python -m pytest -q`
