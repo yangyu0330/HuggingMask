@@ -1,0 +1,30 @@
+name: test_huggingmask
+services:
+  proxy:
+    build:
+      context: C:\Users\andyw\OneDrive - 중부대학교\바탕 화면\test_HuggingMask
+      dockerfile: Dockerfile
+    command:
+      - uvicorn
+      - proxy.app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --reload
+    container_name: huggingmask-proxy-test
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 8000
+        published: "8000"
+        protocol: tcp
+    volumes:
+      - type: bind
+        source: C:\Users\andyw\OneDrive - 중부대학교\바탕 화면\test_HuggingMask
+        target: /app
+        bind: {}
+networks:
+  default:
+    name: test_huggingmask_default

@@ -16,15 +16,15 @@ YYYYMMDD_주제_작성자_버전.ext
 
 예시:
 - `20260408_proxy-healthcheck_YS_v1.png`
-- `20260419_ast-risk-test_MW_v2.md`
+- `20260419_ast-risk-test_YS_v2.md`
 - `20260502_meeting-minutes_all_v1.md`
 
 ### 2.2 문서 상단 메타 정보 (MD 기준)
 ```md
 # 제목
 - 날짜: 2026-04-19
-- 작성자: 김민우
-- 관련 모듈: analyzer
+- 작성자: 양유상
+- 관련 모듈: analyzer/validators/code_validator
 - 관련 이슈/PR: #12, #18
 - 보고서 사용 위치: 3.2 위험 코드 탐지 실험
 ```
@@ -38,7 +38,7 @@ YYYYMMDD_주제_작성자_버전.ext
 
 | 폴더 | 반드시 넣을 내용 | 권장 형식 | 최소 개수(주차당) |
 |---|---|---|---|
-| `week01~week10` | 주차 핵심 산출물 요약, 스크린샷, 결정사항 | `.md`, `.png`, `.log` | 요약 1개 + 캡처 3개 |
+| `worklog` | 작업 단계별 핵심 산출물 요약, 스크린샷, 결정사항 | `.md`, `.png`, `.log` | 요약 1개 + 캡처 3개 |
 | `meetings` | 회의록, 참석자, 결정사항, 액션아이템 | `.md`, `.pdf` | 회의당 1개 |
 | `tests` | pytest 결과, 수동 테스트표, 실패/수정 내역 | `.md`, `.txt`, `.xml` | 테스트 실행당 1세트 |
 | `demo` | 시나리오 입력, 실행 명령, 결과 캡처/영상 | `.md`, `.png`, `.mp4` | 시나리오별 1세트 |
@@ -47,24 +47,24 @@ YYYYMMDD_주제_작성자_버전.ext
 
 ## 4) 폴더별 정리 템플릿 + 예시
 
-## 4.1 `week01~week10`
-주차별 대표 요약 파일 1개를 반드시 둡니다.
+## 4.1 `worklog`
+작업 단계별 대표 요약 파일 1개를 반드시 둡니다.
 
 파일 예시:
-`evidence/week04/20260426_week04_summary_YS_v1.md`
+`evidence/worklog/20260426_validation_contract_summary_YS_v1.md`
 
 ```md
-# Week04 요약
+# 구현 단계 요약
 - 기간: 2026-04-20 ~ 2026-04-26
-- 목표: 인터페이스 동결, AST+화이트리스트 연동
+- 목표: 인터페이스 기준 확정, 코드 검증+화이트리스트 연동
 
 ## 완료 항목
 - [x] 인터페이스 정의서 v1.0 확정
 - [x] 미등록 API Pending 등록 동작 확인
 
 ## 증거 링크
-- 테스트 로그: ../tests/20260425_ast_whitelist_test_MW_v1.md
-- 회의록: ../meetings/20260422_week04_meeting_all_v1.md
+- 테스트 로그: ../tests/20260425_whitelist_pending_test_MW_v1.md
+- 회의록: ../meetings/20260422_validation_meeting_all_v1.md
 - 데모 캡처: ../demo/20260426_scenario2_pass_YD_v1.png
 
 ## 이슈/리스크
@@ -75,10 +75,10 @@ YYYYMMDD_주제_작성자_버전.ext
 회의 1회당 1문서 원칙.
 
 파일 예시:
-`evidence/meetings/20260422_week04_meeting_all_v1.md`
+`evidence/meetings/20260422_validation_meeting_all_v1.md`
 
 ```md
-# Week04 정기회의
+# 구현 단계 정기회의
 - 일시: 2026-04-22 20:00~20:35
 - 참석자: 양유상, 박용담, 김민우, 정은미
 
@@ -91,8 +91,8 @@ YYYYMMDD_주제_작성자_버전.ext
 - whitelist 반영은 review_status=APPROVED 이후
 
 ## 액션 아이템
-- 양유상: 인터페이스 문서 v1.0 확정 (4/23)
-- 김민우: AST 탐지 로그 보강 (4/24)
+- 박용담: 인터페이스 문서 v1.0 확정 (4/23)
+- 양유상: AST 탐지 로그 보강 (4/24)
 ```
 
 ## 4.3 `tests`
@@ -107,7 +107,7 @@ YYYYMMDD_주제_작성자_버전.ext
 - 환경: Python 3.13, Docker compose
 
 ## 자동 테스트(pytest)
-- 명령: `pytest -q`
+- 명령: `python -m pytest -q`
 - 결과: 12 passed, 1 skipped
 - 원본 로그: `20260425_pytest_raw_MW_v1.txt`
 
@@ -122,7 +122,7 @@ YYYYMMDD_주제_작성자_버전.ext
 발표 시나리오별로 입력/명령/결과를 한 문서에 묶습니다.
 
 파일 예시:
-`evidence/demo/20260530_demo_scenario03_MW_v1.md`
+`evidence/demo/20260530_demo_scenario03_EM_v1.md`
 
 ~~~md
 # 데모 시나리오 03 - 악성 pickle 차단
@@ -139,7 +139,7 @@ python run_demo.py --scenario 03
 ## 결과
 - status: BLOCK
 - reason_code: PICKLE_OPCODE_BLOCKED
-- 캡처: `20260530_demo_s03_block_MW_v1.png`
+- 캡처: `20260530_demo_s03_block_EM_v1.png`
 ~~~
 
 ## 4.5 `perf`
@@ -187,8 +187,8 @@ python run_demo.py --scenario 03
 태그: [REPORT][PAPER]
 ```
 
-## 6) 주차 마감 체크리스트 (팀장 확인용)
-- [ ] `weekXX` 요약 파일 1개 이상 존재
+## 6) 작업 마감 체크리스트 (팀장 확인용)
+- [ ] 작업 요약 파일 1개 이상 존재
 - [ ] 회의록 1개 이상 존재
 - [ ] 테스트 결과(자동/수동) 최신본 존재
 - [ ] 데모 캡처 또는 실행 로그 존재
@@ -196,16 +196,16 @@ python run_demo.py --scenario 03
 - [ ] 필요 시 정산 증빙 첨부 완료
 
 ## 7) 권장 인덱스 파일
-Week 8부터 아래 파일을 추가 운영합니다.
+구현 안정화 단계부터 아래 파일을 추가 운영합니다.
 
 `evidence/evidence_index.md`
 
 구성 예시:
-- 주차별 대표 파일 링크
+- 작업 단계별 대표 파일 링크
 - 보고서용 그림/표 목록
 - 논문용 실험 결과 표 목록
 - 누락 항목(보완 필요) 목록
 
 ---
 
-이 문서 기준으로만 정리하면 10주차에 보고서/논문 작성 시 자료를 다시 뒤질 필요가 없도록 설계되어 있습니다.
+이 문서 기준으로만 정리하면 보고서/논문 작성 시 자료를 다시 뒤질 필요가 없도록 설계되어 있습니다.
