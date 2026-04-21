@@ -251,11 +251,13 @@ cache_key = sha256 + ":" + file_kind + ":" + policy_fingerprint
 | `PICKLE_PATH_B_SYSCALL_ANOMALY` | 샌드박스 이상 syscall 탐지 |
 | `PICKLE_PATH_AB_MISMATCH` | Path A/B 결과 불일치 |
 | `DANGEROUS_IMPORT` | 위험 import 탐지 |
-| `DANGEROUS_CALL` | eval/exec/open/__import__ 등 위험 호출 |
+| `DANGEROUS_CALL` | eval/exec/compile/__import__/os.system/subprocess 등 즉시 위험 호출 |
 | `DANGEROUS_API` | torch.load/pickle.load/numpy.load 등 위험 API |
 | `OBFUSCATION_PATTERN` | chr/ord/bytes.decode 등 난독화 |
 | `DYNAMIC_PATTERN` | getattr/type/조건부 import 등 동적 패턴 |
 | `UNREGISTERED_API` | 화이트리스트 미등록 API |
+| `CONTEXT_API_REVIEW` | 문맥 의존 API가 리뷰 필요 상태 |
+| `CONTEXT_API_BLOCKED` | 문맥상 위험 API로 판정 |
 | `GRADE_A_REGENERATED` | 등급 A 재생성 성공 |
 | `GRADE_B1_RUNTIME_OK` | B-1 제한 런타임 성공 |
 | `GRADE_B2_GATE_REQUIRED` | B-2 보안 담당자 게이트 필요 |
@@ -683,6 +685,7 @@ _Validation Engine → Proxy_
 |---|---|---|---|
 | `ast_scan` | object | Y | AST 분석 결과 |
 | `api_scan` | object | Y | API 화이트리스트 결과 |
+| `context_api_scan` | object | Y | 문맥 의존 API safe/review/block 판정 결과 |
 | `grade_result` | object | Y | A/B-1/B-2/C 판정 |
 | `runtime_check` | object | Y | 등급별 실행/샌드박스 결과 |
 | `review_queue_entry_id` | string/null | Y | 리뷰 큐 등록 시 ID |
@@ -693,10 +696,11 @@ _Validation Engine → Proxy_
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `imports` | array[string] | Y | import 목록 |
-| `dangerous_imports` | array[string] | Y | `os`, `subprocess`, `socket`, `requests` 등 |
-| `dangerous_calls` | array[string] | Y | `eval`, `exec`, `open`, `__import__` 등 |
+| `dangerous_imports` | array[string] | Y | `subprocess`, `socket`, `requests` 등 즉시 위험 import |
+| `dangerous_calls` | array[string] | Y | `eval`, `exec`, `compile`, `__import__`, `os.system` 등 |
 | `dynamic_patterns` | array[string] | Y | `getattr`, `type(3-arg)`, `conditional_import` |
 | `obfuscation_patterns` | array[string] | Y | `chr`, `ord`, `bytes.decode` 체인 |
+| `contextual_call_candidates` | array[string] | Y | `open`, `os.path`, `Path.read_text` 등 검증 2에서 문맥 분석할 후보 |
 | `has_forward_method` | boolean | Y | `forward()` 존재 여부 |
 | `inherits_pretrained_config` | boolean | Y | A 판정용 |
 | `inherits_nn_module` | boolean | Y | B 계열 판정용 |
@@ -708,11 +712,28 @@ _Validation Engine → Proxy_
 | `used_apis` | array[string] | Y | 전체 추출 API |
 | `allowed_apis` | array[string] | Y | 허용된 API |
 | `blocked_apis` | array[string] | Y | 위험 API |
+| `contextual_apis` | array[string] | Y | 문맥 분석으로 라우팅된 API |
 | `unregistered_apis` | array[string] | Y | 미등록 API |
 | `whitelist_version` | string | Y | 사용 화이트리스트 버전 |
 | `pending_api_refs` | array[string] | Y | pending 등록된 API 경로 |
 
-### 12.4 `grade_result`
+### 12.4 `context_api_scan`
+
+문맥 의존 API는 검증 1에서 후보만 추출하고, 검증 2 API 정책 검사 내부에서 `context_api_scan`으로 판정한다.
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `open_calls` | array[object] | Y | `open`, `Path.open`, `Path.read_text` 등 파일 읽기/쓰기 후보 |
+| `os_calls` | array[object] | Y | `os.path`, `os.getenv`, `os.environ`, `os.remove` 등 |
+| `path_helper_calls` | array[object] | Y | 경로 조립/조회 helper |
+| `env_access_calls` | array[object] | Y | 환경 변수 접근 |
+| `file_mutation_calls` | array[object] | Y | 파일 생성/수정/삭제/권한 변경 |
+| `network_calls` | array[object] | Y | `requests`, `urllib`, `httpx`, `socket` 등 네트워크 호출 |
+| `summary_decision` | string(enum) | Y | `safe`, `review`, `block` 중 가장 높은 위험도 |
+
+각 항목 객체는 최소 `api`, `category`, `decision`, `reason_code`, `evidence`를 포함한다. `decision=review`는 B-2/PENDING_REVIEW로, `decision=block`은 BLOCK으로 반영한다.
+
+### 12.5 `grade_result`
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
@@ -721,7 +742,7 @@ _Validation Engine → Proxy_
 | `review_action` | string(enum) | Y | `ReviewAction` |
 | `reason_codes` | array[string] | Y | 관련 reason code |
 
-### 12.5 `runtime_check`
+### 12.6 `runtime_check`
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
@@ -734,25 +755,28 @@ _Validation Engine → Proxy_
 | `logs_ref` | string/null | Y | 로그 위치 |
 | `status` | string(enum) | Y | `PASS`, `BLOCK`, `PENDING_REVIEW`, `ERROR`, `SKIPPED` |
 
-### 12.6 코드 등급별 고정 규칙
+### 12.7 코드 등급별 고정 규칙
 
 | 조건 | grade | status | review_action | runtime_mode |
 |---|---|---|---|---|
 | PretrainedConfig 상속 + 단순 속성 저장 + 실행 메서드 없음 | `A` | `PASS` | `AUTO_APPROVE_REGENERATED` | `REGENERATE` |
-| `nn.Module`/`PreTrainedModel` + forward 존재 + 허용 API만 사용 + 동적 패턴 없음 | `B-1` | `PASS` | `AUTO_APPROVE` | `RESTRICTED_RUNTIME` |
-| 정형 구조 + 미등록 API 존재 | `B-2` | `PENDING_REVIEW` | `SECURITY_OWNER_GATE` | `SANDBOX` |
+| `nn.Module`/`PreTrainedModel` + forward 존재 + 허용 API만 사용 + 동적 패턴 없음 + 문맥 의존 API 모두 safe + 제한 런타임 통과 | `B-1` | `PASS` | `AUTO_APPROVE` | `RESTRICTED_RUNTIME` |
+| 정형 구조 + 미등록 API 존재 또는 문맥 의존 API review | `B-2` | `PENDING_REVIEW` | `SECURITY_OWNER_GATE` | `SANDBOX` |
 | 동적/난독화/비정형 구조 | `C` | `PENDING_REVIEW` | `MANUAL_REVIEW_REQUIRED` | `SANDBOX` |
 | 위험 import / 위험 call / 위험 API | `C` | `BLOCK` | `BLOCK_IMMEDIATELY` | `NONE` |
 
-### 12.7 등급 판정 우선순위
+### 12.8 등급 판정 우선순위
 
 다음 순서를 **반드시 고정**한다.
 
-1. dangerous import / dangerous call / dangerous API → `BLOCK`
-2. 동적/난독화 패턴 탐지 → `C`
-3. 미등록 API 존재 → `B-2`
-4. `forward()` 존재 + 허용 API만 사용 → `B-1`
-5. `PretrainedConfig` 단순 설정 클래스 → `A`
+1. 호출 대상 해석 실패 + 동적/난독화 패턴 존재 -> `C/PENDING_REVIEW`, 위험 패턴이면 `BLOCK`
+2. `blocked_exact` 또는 `blocked_prefix` 매칭 -> `BLOCK`
+3. 네트워크/프로세스/역직렬화/native loading 계열 -> 기본 `BLOCK`
+4. `contextual_exact` 또는 `contextual_prefix` 매칭 -> context analyzer로 `safe/review/block` 판정
+5. `allowed_exact` 매칭 -> `ALLOWED`
+6. 그 외 -> `UNREGISTERED`, `B-2/PENDING_REVIEW`
+
+등급 확정 시 `context_api_scan.summary_decision=review`는 B-2/PENDING_REVIEW로, `block`은 BLOCK으로 반영한다. `open`, `os.path`, `Path`는 이름만으로 `DANGEROUS_CALL`에 넣지 않고 문맥 분석 결과로 판정한다.
 
 ### 예시
 
@@ -1297,6 +1321,8 @@ _Validation Engine → Whitelist Engine_
 | `NEW` | safetensors 검증 성공 | `PASS` |
 | `NEW` | pickle Path A 금지 opcode | `BLOCK` |
 | `NEW` | dangerous import/call/api | `BLOCK` |
+| `NEW` | 문맥 의존 API context 판정 block | `BLOCK` |
+| `NEW` | 문맥 의존 API context 판정 review | `PENDING_REVIEW` |
 | `NEW` | 미등록 API | `PENDING_REVIEW` |
 | `NEW` | 동적/난독화 패턴 | `PENDING_REVIEW` |
 | `NEW` | 인프라 오류 | `ERROR` |
