@@ -1,0 +1,15 @@
+{
+  "scenario_id": "cv_08_danger_torch_load",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_torch_load.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_torch_load.py",
+  "expected": {
+    "status": "BLOCK",
+    "grade": "C",
+    "review_action": "BLOCK_IMMEDIATELY",
+    "route_kind": "CODE_AST_SCAN"
+  }
+}

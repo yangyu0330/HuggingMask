@@ -1,0 +1,27 @@
+{
+  "scenario_id": "cv_03_config_auto_map_block",
+  "validator": "config",
+  "artifact": {
+    "repo_path": "config.json",
+    "file_kind": "CONFIG_JSON"
+  },
+  "source_file": "config.json",
+  "source_loader_files": [
+    "modeling_eval.py"
+  ],
+  "expected": {
+    "status": "BLOCK",
+    "review_action": "BLOCK_IMMEDIATELY",
+    "route_kind": "CONFIG_SCHEMA_VALIDATION",
+    "effective_status": "BLOCK",
+    "trigger_fields_contains": [
+      "auto_map"
+    ],
+    "referenced_files_contains": [
+      "modeling_eval.py"
+    ],
+    "linked_code_statuses_contains": [
+      "BLOCK"
+    ]
+  }
+}

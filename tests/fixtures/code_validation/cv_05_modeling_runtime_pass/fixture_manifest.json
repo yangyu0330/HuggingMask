@@ -1,0 +1,16 @@
+{
+  "scenario_id": "cv_05_modeling_runtime_pass",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_safe.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_safe.py",
+  "runtime_check_file": "runtime_check.json",
+  "expected": {
+    "status": "PASS",
+    "grade": "B-1",
+    "review_action": "AUTO_APPROVE",
+    "route_kind": "CODE_RESTRICTED_RUNTIME"
+  }
+}

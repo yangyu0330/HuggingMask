@@ -1,0 +1,15 @@
+{
+  "scenario_id": "cv_01_simple_config",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "configuration_demo.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "configuration_demo.py",
+  "expected": {
+    "status": "PASS",
+    "grade": "A",
+    "review_action": "AUTO_APPROVE_REGENERATED",
+    "route_kind": "CODE_AST_SCAN"
+  }
+}

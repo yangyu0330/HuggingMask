@@ -1,0 +1,15 @@
+{
+  "scenario_id": "cv_07_danger_eval",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_eval.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_eval.py",
+  "expected": {
+    "status": "BLOCK",
+    "grade": "C",
+    "review_action": "BLOCK_IMMEDIATELY",
+    "route_kind": "CODE_AST_SCAN"
+  }
+}
