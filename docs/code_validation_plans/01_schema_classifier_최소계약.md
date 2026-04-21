@@ -4,6 +4,11 @@
 
 모든 validator가 같은 객체를 입력받고 같은 형태의 결과를 반환하도록 공통 schema와 파일 분류기의 최소 계약을 고정한다. 이 단계가 끝나야 코드검증, config 라우팅, orchestrator 통합 단계가 서로 다른 결과 포맷을 만들지 않는다. 단, `analyzer/schemas.py`와 `analyzer/classifier.py`는 Analyzer Core 정식 구현 전까지 코드검증 테스트용 최소 dataclass/helper로 한정한다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 완료. schema 최소 계약과 file classifier가 구현되어 이후 validator, config routing, orchestrator adapter의 공통 입출력으로 사용된다.
+- 경계: `analyzer/schemas.py`, `analyzer/classifier.py`는 Analyzer Core 정식 구현 전의 코드검증 테스트용 최소 dataclass/helper 계약이다.
+
 ## 담당 범위
 
 코드검증 구현자가 직접 다루는 범위는 schema를 소비하고 테스트하는 최소 계약이다.

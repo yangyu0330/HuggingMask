@@ -4,6 +4,12 @@
 
 미등록 API와 B-2/C 결과를 나중에 whitelist/review 담당 모듈이 처리할 수 있도록 최소 연결 구조를 정한다. 선행 코드검증은 `pending_api_refs`와 review finding을 `details`에 안정적으로 남기되, `whitelist/pending_store.py`, `tests/test_pending_store.py` 같은 운영 저장소와 승인 workflow는 직접 구현하지 않는다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 부분 완료. 선행 코드검증은 미등록 API와 리뷰 필요 근거를 `pending_api_refs` 및 `review_findings`로 남긴다.
+- 미구현/후속: whitelist DB, persistent pending_store, review queue, 승인 workflow는 아직 구현하지 않았다.
+- 경계: pending API는 운영 저장소에 저장되지 않고 `ArtifactValidationResult.details`에 연결용 증빙으로만 남는다.
+
 ## 담당 범위
 
 코드검증이 직접 구현하는 최소 범위:

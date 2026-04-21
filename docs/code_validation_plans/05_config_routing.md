@@ -4,6 +4,11 @@
 
 `config.json`과 `tokenizer_config.json`에서 코드 실행 trigger field를 탐지하고, 참조된 `.py` 파일을 코드검증 경로로 강제 연결한다. config 자체의 상태는 참조 코드 결과를 반영해 결정한다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 완료. config trigger field 탐지와 참조 `.py` code routing이 구현되어 code validator 결과를 config 상태에 반영한다.
+- 경계: config validator는 원본 Python code를 실행하지 않고, 코드검증 로직을 복사하지 않는다.
+
 ## 담당 범위
 
 코드검증과 config validator의 접점만 직접 다룬다.

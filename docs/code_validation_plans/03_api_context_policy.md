@@ -4,6 +4,11 @@
 
 AST에서 추출한 호출을 API 단위로 해석하고, 정책 순서에 따라 `ALLOWED`, `BLOCKED`, `UNREGISTERED`, `CONTEXTUAL`로 분류한다. 문맥 의존 API 분석은 독립 단계가 아니라 검증 2 `API_POLICY_SCAN` 내부 하위 단계이며, context analyzer로 보내 `safe/review/block`을 판정한다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 완료. API 호출 해석, 정책 분류, 문맥 의존 API 분석이 구현되어 `api_scan`, `context_api_scan`, `pending_api_refs` 후보를 만든다.
+- 경계: 정식 whitelist DB는 없으며, 선행 구현용 protocol/in-memory policy로만 연결한다. pending API는 persistent store가 아니라 `pending_api_refs`와 `review_findings` 입력으로 남긴다.
+
 ## 담당 범위
 
 코드검증이 직접 구현한다.

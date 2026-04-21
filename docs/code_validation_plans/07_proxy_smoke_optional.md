@@ -4,6 +4,11 @@
 
 analyzer orchestrator가 안정화된 뒤 FastAPI proxy에서 내부 검증 endpoint를 smoke 수준으로 연결한다. 이 단계는 선택 사항이며, 코드검증 정책 구현보다 후순위다. 최종 proxy 구현 책임이 아니라 코드검증 결과 연결 여부를 확인하는 최소 smoke endpoint로만 제한한다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 미구현/후속. 현재 완료 범위에는 proxy endpoint 연결이 포함되지 않는다.
+- 경계: proxy endpoint가 추가되더라도 검증 정책은 analyzer/code validator에 남고, proxy는 orchestrator 호출용 얇은 진입점으로만 둔다.
+
 ## 담당 범위
 
 코드검증 구현자가 직접 소유하지 않는 proxy 영역과의 얇은 연결만 다룬다.

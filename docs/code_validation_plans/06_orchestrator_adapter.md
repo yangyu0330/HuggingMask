@@ -4,6 +4,11 @@
 
 schema, file classifier, config routing, code validator 결과를 연결해 analyzer 단위에서 최소 `ValidationJobResponse` 형태를 만들 수 있게 한다. 이 단계는 최종 Analyzer Core 조립 책임이 아니라 proxy 없이 코드검증 흐름을 end-to-end로 테스트하는 adapter 계층이다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 완료(최소 연결). orchestrator adapter가 schema, classifier, config routing, code validator 결과를 analyzer 단위에서 연결한다.
+- 경계: 이 orchestrator는 최종 Analyzer Core 구현이 아니라 코드검증 결과 연결용 최소 adapter다. proxy endpoint는 아직 구현하지 않았다.
+
 ## 담당 범위
 
 코드검증 선행 구현에서는 analyzer 내부 연결과 smoke/integration test에 필요한 최소 조립까지만 담당한다.

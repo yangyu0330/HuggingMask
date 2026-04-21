@@ -4,6 +4,11 @@
 
 역할 분류, AST scan, API scan, context analyzer, 제한 런타임 gate 결과를 합쳐 코드 파일별 최종 등급과 상태를 결정한다. 이 단계는 검증 3 `GRADE_DECISION`이며, 코드검증이 반환할 `ArtifactValidationResult`를 완성한다.
 
+## 구현 반영 상태 (2026-04-21)
+
+- 상태: 완료. code validator 통합과 A/B-1/B-2/C 등급 판정이 구현되어 `ArtifactValidationResult`를 반환한다.
+- 경계: `runtime_check`는 테스트 stub 또는 외부 입력으로만 반영한다. runtime/gVisor/Docker 실제 실행은 아직 구현하지 않았다.
+
 ## 담당 범위
 
 코드검증이 직접 구현한다.
