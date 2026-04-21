@@ -2,7 +2,7 @@
 
 ## 목적
 
-AST에서 추출한 호출을 API 단위로 해석하고, 정책 순서에 따라 `ALLOWED`, `BLOCKED`, `UNREGISTERED`, `CONTEXTUAL`로 분류한다. 문맥 의존 API는 검증 2 내부에서 context analyzer로 보내 `safe/review/block`을 판정한다.
+AST에서 추출한 호출을 API 단위로 해석하고, 정책 순서에 따라 `ALLOWED`, `BLOCKED`, `UNREGISTERED`, `CONTEXTUAL`로 분류한다. 문맥 의존 API 분석은 독립 단계가 아니라 검증 2 `API_POLICY_SCAN` 내부 하위 단계이며, context analyzer로 보내 `safe/review/block`을 판정한다.
 
 ## 담당 범위
 
@@ -98,6 +98,7 @@ context analyzer의 개별 결과 필드:
 - `torch.load`, `pickle.load`, `numpy.load`는 whitelist 질의 전에 `BLOCK` 가능하다.
 - 문맥 의존 API의 실제 판정은 이 검증 2 내부에서 한다.
 - 문맥 의존 API 분석은 B-2로 보낸 뒤 하는 검사가 아니라 B-1 후보 유지 / B-2 전환 / BLOCK을 가르는 하위 분석이다.
+- `open`, `os.path`, `Path`는 이름만으로 `DANGEROUS_CALL`에 넣지 않고 `CONTEXTUAL`로 라우팅한다.
 - context analyzer 결과가 `safe`이면 B-1 후보를 유지할 수 있다.
 - context analyzer 결과가 `review`이면 B-2/PENDING_REVIEW 후보로 올린다.
 - context analyzer 결과가 `block`이면 즉시 `BLOCK` 후보로 올린다.

@@ -2,7 +2,7 @@
 
 ## 목적
 
-모든 validator가 같은 객체를 입력받고 같은 형태의 결과를 반환하도록 공통 schema와 파일 분류기의 최소 계약을 고정한다. 이 단계가 끝나야 코드검증, config 라우팅, orchestrator 통합 단계가 서로 다른 결과 포맷을 만들지 않는다.
+모든 validator가 같은 객체를 입력받고 같은 형태의 결과를 반환하도록 공통 schema와 파일 분류기의 최소 계약을 고정한다. 이 단계가 끝나야 코드검증, config 라우팅, orchestrator 통합 단계가 서로 다른 결과 포맷을 만들지 않는다. 단, `analyzer/schemas.py`와 `analyzer/classifier.py`는 Analyzer Core 정식 구현 전까지 코드검증 테스트용 최소 dataclass/helper로 한정한다.
 
 ## 담당 범위
 
@@ -13,9 +13,11 @@
 - `FileKind.PYTHON`, `CONFIG_JSON`, `TOKENIZER_CONFIG_JSON` 분류 결과를 코드검증 라우팅 입력으로 사용
 - `CodeGrade`, `ValidationStatus`, `ReviewAction`, `RouteKind` enum 값이 인터페이스 정의서와 일치하는지 확인
 - 파일 경로는 저장소 기준 POSIX 상대경로로 다룬다는 전제 확인
+- Analyzer Core 정식 schema/classifier가 나오면 이 단계의 최소 helper는 그 계약에 맞춰 교체 또는 흡수
 
 ## 비범위
 
+- Analyzer Core의 최종 공통 schema/classifier 소유권 확정
 - schema 전체를 Pydantic으로 교체하는 작업
 - 외부 REST endpoint request validation
 - proxy 인증/권한 검증
@@ -66,6 +68,7 @@
 ## 구현 규칙
 
 - 초기 구현은 표준 라이브러리 `dataclasses`, `Enum`, `asdict` 기반을 우선한다.
+- 이 파일들은 코드검증 테스트를 위한 최소 계약이며, Analyzer Core 최종 책임을 대체하지 않는다.
 - enum 값은 인터페이스 정의서의 문자열과 정확히 일치해야 한다.
 - 필수 배열은 비어 있어도 필드 자체를 생략하지 않는다.
 - 없음은 빈 문자열이 아니라 `None`/JSON `null`로 표현한다.

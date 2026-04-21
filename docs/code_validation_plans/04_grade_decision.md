@@ -2,7 +2,7 @@
 
 ## 목적
 
-역할 분류, AST scan, API scan, context analyzer, 제한 런타임 gate 결과를 합쳐 코드 파일별 최종 등급과 상태를 결정한다. 이 단계는 코드검증이 반환할 `ArtifactValidationResult`를 완성한다.
+역할 분류, AST scan, API scan, context analyzer, 제한 런타임 gate 결과를 합쳐 코드 파일별 최종 등급과 상태를 결정한다. 이 단계는 검증 3 `GRADE_DECISION`이며, 코드검증이 반환할 `ArtifactValidationResult`를 완성한다.
 
 ## 담당 범위
 
@@ -83,6 +83,7 @@
 - unregistered API는 `B-2/PENDING_REVIEW/SECURITY_OWNER_GATE`로 매핑한다.
 - 모델 실행형 `B-1/PASS`는 allowed API만 사용하고 context 결과가 모두 `safe`이며 runtime gate가 통과한 경우에만 허용한다.
 - 제한 런타임은 B-1 후보를 최종 `PASS`시키기 위한 gate다.
+- 1차 구현에서는 제한 런타임을 실제 실행하지 않고 외부에서 주입된 `runtime_check` 입력과 테스트 stub만 반영한다.
 - runtime gate가 미구현, skipped, fixture 부족이면 `B-1/PASS`가 아니라 `B-2/PENDING_REVIEW` 또는 명시적 B-1 candidate detail로 남긴다.
 - gVisor/Docker 샌드박스는 B-2/C 후보의 증거 수집과 리뷰 보조용이지 자동 승인 증명이 아니다.
 - A 등급 config는 원본 `configuration_*.py`를 import하거나 `to_dict()`를 호출하지 않는다.

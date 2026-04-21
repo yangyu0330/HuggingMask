@@ -2,7 +2,7 @@
 
 ## 목적
 
-미등록 API와 B-2/C 결과를 나중에 whitelist/review 담당 모듈이 처리할 수 있도록 최소 연결 구조를 정한다. 선행 코드검증은 pending/review 데이터를 `details`에 안정적으로 남기되, 정식 저장소와 승인 workflow는 직접 구현하지 않는다.
+미등록 API와 B-2/C 결과를 나중에 whitelist/review 담당 모듈이 처리할 수 있도록 최소 연결 구조를 정한다. 선행 코드검증은 `pending_api_refs`와 review finding을 `details`에 안정적으로 남기되, `whitelist/pending_store.py`, `tests/test_pending_store.py` 같은 운영 저장소와 승인 workflow는 직접 구현하지 않는다.
 
 ## 담당 범위
 
@@ -75,7 +75,7 @@
 - `tests/test_code_api.py`
 - `tests/test_code_validator.py`
 
-후속 통합 단계에서 생성/수정할 파일:
+whitelist/review 담당 모듈 확정 후 후속 통합 단계에서 생성/수정할 파일:
 
 - `whitelist/pending_store.py`
 - `tests/test_pending_store.py`

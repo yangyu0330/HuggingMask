@@ -2,7 +2,7 @@
 
 ## 목적
 
-Python 파일을 실행하지 않고 역할을 분류하고, AST만으로 위험 후보와 API 호출 후보를 추출한다. 이 단계는 검증 1 `CODE_AST_SCAN`에 해당하며, 이후 API 정책 검사와 등급 판정의 입력을 만든다.
+Python 파일을 실행하지 않고 역할을 분류하고, AST만으로 위험 후보와 API 호출 후보를 추출한다. 이 단계는 검증 1: AST 후보 추출(`CODE_AST_SCAN`)에 해당하며, 이후 API 정책 검사와 등급 판정의 입력을 만든다.
 
 ## 담당 범위
 
@@ -132,4 +132,4 @@ AST scan 케이스:
 
 ## 다음 단계 연결
 
-단계 3은 `raw_api_calls`, import alias 정보, `contextual_api_candidates`, 위험 후보를 받아 API 정책 검사를 수행한다. 이 단계에서 후보로만 남긴 문맥 의존 API는 단계 3의 context analyzer 디스패처에서 실제 판정된다.
+다음 구현 단계는 `raw_api_calls`, import alias 정보, `contextual_api_candidates`, 위험 후보를 받아 검증 2 `API_POLICY_SCAN`을 수행한다. 이 단계에서 후보로만 남긴 문맥 의존 API는 검증 2 내부의 context analyzer 디스패처에서 실제 판정된다.

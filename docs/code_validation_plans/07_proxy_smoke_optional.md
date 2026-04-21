@@ -2,7 +2,7 @@
 
 ## 목적
 
-analyzer orchestrator가 안정화된 뒤 FastAPI proxy에서 내부 검증 endpoint를 smoke 수준으로 연결한다. 이 단계는 선택 사항이며, 코드검증 정책 구현보다 후순위다.
+analyzer orchestrator가 안정화된 뒤 FastAPI proxy에서 내부 검증 endpoint를 smoke 수준으로 연결한다. 이 단계는 선택 사항이며, 코드검증 정책 구현보다 후순위다. 최종 proxy 구현 책임이 아니라 코드검증 결과 연결 여부를 확인하는 최소 smoke endpoint로만 제한한다.
 
 ## 담당 범위
 
@@ -55,6 +55,7 @@ analyzer orchestrator가 안정화된 뒤 FastAPI proxy에서 내부 검증 endp
 - proxy는 검증 정책을 소유하지 않는다.
 - proxy는 schema validate 후 analyzer orchestrator를 호출한다.
 - code validator, config validator, whitelist adapter를 proxy 내부에 직접 구현하지 않는다.
+- proxy 내부에 검증 로직, whitelist 판단, pending store 갱신 로직을 넣지 않는다.
 - request/response enum 문자열은 인터페이스 정의서를 따른다.
 - proxy smoke는 analyzer 단위 테스트를 대체하지 않는다.
 - 내부 endpoint는 후순위이며, 단계 1~6이 통과하지 않으면 시작하지 않는다.

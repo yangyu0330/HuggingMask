@@ -2,11 +2,11 @@
 
 ## 목적
 
-schema, file classifier, config routing, code validator 결과를 연결해 analyzer 단위에서 `ValidationJobResponse`를 조립할 수 있게 한다. 이 단계는 proxy 없이도 코드검증 흐름을 end-to-end로 테스트하는 adapter 계층이다.
+schema, file classifier, config routing, code validator 결과를 연결해 analyzer 단위에서 최소 `ValidationJobResponse` 형태를 만들 수 있게 한다. 이 단계는 최종 Analyzer Core 조립 책임이 아니라 proxy 없이 코드검증 흐름을 end-to-end로 테스트하는 adapter 계층이다.
 
 ## 담당 범위
 
-코드검증 선행 구현에서는 analyzer 내부 연결까지만 담당한다.
+코드검증 선행 구현에서는 analyzer 내부 연결과 smoke/integration test에 필요한 최소 조립까지만 담당한다.
 
 - `ValidationJobRequest` artifact별 validator dispatch
 - `PYTHON` artifact를 code validator로 전달
@@ -14,7 +14,7 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 - config가 참조한 `.py`를 code validator로 재라우팅
 - `stop_on_first_block` 처리
 - artifact별 결과 병합
-- job-level `overall_status`, `overall_decision` 계산에 필요한 최소 로직
+- job-level `overall_status`, `overall_decision` 계산에 필요한 최소 adapter 로직
 - approved/blocked/pending artifact id 목록 계산
 
 ## 비범위
@@ -61,6 +61,7 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 ## 구현 규칙
 
 - orchestrator는 각 validator의 결과를 조립하되, code validator 내부 정책을 복사하지 않는다.
+- 이 adapter는 박용담 Analyzer Core의 최종 `ValidationJobResponse` 조립 정책을 대체하지 않는다.
 - code validator는 파일별 `ArtifactValidationResult`만 반환한다.
 - job-level 상태 계산은 인터페이스 정의서의 상태 전이 규칙을 따른다.
 - 하나라도 `BLOCK`이면 `overall_status = BLOCK`, `overall_decision = DENY`다.

@@ -48,9 +48,9 @@ _Notion 업로드용 / 구현 기준 문서_
 | Analyzer Core | 파일 분류, JSON 계약 검증, `ArtifactRef` 생성, 최종 응답 조립 | 파일 목록, 정책 정보, 정은미/양유상/김민우 결과 | ValidationJobRequest, ValidationJobResponse | 박용담 |
 | Config / Tokenizer Validator | `config.json`, `tokenizer_config.json` 1차 검증, 참조 `.py` 코드 검증 재라우팅 | config/tokenizer artifact | ConfigValidationResult, 추가 code job | 박용담 + 양유상 |
 | Weight Validator | safetensors / pickle Path A / pickle Path B 검증 | 가중치 artifact | ArtifactValidationResult | 정은미 |
-| Code Validator | 검증1(`CODE_AST_SCAN`), 검증2(`CODE_RESTRICTED_RUNTIME`), 검증3(`CODE_SANDBOX_RUNTIME`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
+| Code Validator | 검증1(AST 후보 추출), 검증2(`API_POLICY_SCAN` + contextual safe/review/block), 검증3(`GRADE_DECISION`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
 | Whitelist Engine | API 허용 여부 확인, Pending List 등록/갱신, 리뷰 반영 | API 목록, 미등록 API, 리뷰 결정 | WhitelistCheckResponse, PendingApiRecord, ReviewDecisionResult | 김민우 |
-| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출 | 외부 요청 | ValidationJobResponse | 공통 |
+| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출. proxy 내부에는 검증 로직을 두지 않음 | 외부 요청 | ValidationJobResponse | 공통 |
 
 ### 2.3 내부 API 엔드포인트 계약 (v1.0)
 
@@ -715,7 +715,7 @@ _Validation Engine → Proxy_
 | `contextual_apis` | array[string] | Y | 문맥 분석으로 라우팅된 API |
 | `unregistered_apis` | array[string] | Y | 미등록 API |
 | `whitelist_version` | string | Y | 사용 화이트리스트 버전 |
-| `pending_api_refs` | array[string] | Y | pending 등록된 API 경로 |
+| `pending_api_refs` | array[string] | Y | pending 등록 후보 API 경로 |
 
 ### 12.4 `context_api_scan`
 
@@ -743,6 +743,8 @@ _Validation Engine → Proxy_
 | `reason_codes` | array[string] | Y | 관련 reason code |
 
 ### 12.6 `runtime_check`
+
+1차 코드검증 구현에서는 제한 런타임/gVisor를 실제 실행하지 않고, `runtime_check` 입력과 테스트 stub로만 gate 결과를 표현할 수 있다. 제한 런타임은 B-1 후보 gate이고, gVisor/Docker는 B-2/C 증거 수집과 리뷰 보조용이며 자동 승인 증명이 아니다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
