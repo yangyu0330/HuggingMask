@@ -46,21 +46,22 @@ class TestAllowed:
         req = check_request_factory(["torch.nn.Linear"])
         resp = engine.check_batch(req, db_session)
 
-        assert len(resp.results) == 1
-        r = resp.results[0]
+        assert len(resp) == 1
+        r = resp[0]
         assert r.status == WhitelistStatus.ALLOWED
         assert r.source == WhitelistSource.INITIAL
         assert r.review_required is False
         assert r.whitelist_version == WHITELIST_VERSION
 
-    def test_response_envelope_propagates_request_ids(
+    def test_whitelist_version_in_every_response(
         self, db_session, engine, check_request_factory,
     ):
-        req = check_request_factory(["torch.nn.Linear"])
+        """인터페이스 14.2 — 각 WhitelistCheckResponse에 whitelist_version 필수"""
+        req = check_request_factory(["torch.nn.Linear", "torch.load", "unknown.x"])
         resp = engine.check_batch(req, db_session)
-        assert resp.request_id == req.request_id
-        assert resp.job_id == req.job_id
-        assert resp.whitelist_version == WHITELIST_VERSION
+        assert len(resp) == 3
+        for r in resp:
+            assert r.whitelist_version == WHITELIST_VERSION
 
 
 # ─────────────────────────────────────────────
@@ -78,7 +79,7 @@ class TestBlocked:
     def test_permanently_blocked(self, db_session, engine, check_request_factory, api):
         req = check_request_factory([api])
         resp = engine.check_batch(req, db_session)
-        r = resp.results[0]
+        r = resp[0]
         assert r.status == WhitelistStatus.BLOCKED
         assert r.source == WhitelistSource.INITIAL
         assert "위험" in r.reason
@@ -88,7 +89,7 @@ class TestBlocked:
         _seed_approved(db_session, "torch.load", "torch")
         req = check_request_factory(["torch.load"])
         resp = engine.check_batch(req, db_session)
-        assert resp.results[0].status == WhitelistStatus.BLOCKED
+        assert resp[0].status == WhitelistStatus.BLOCKED
 
     def test_db_blocked_entry(self, db_session, engine, check_request_factory):
         """수동 거부 결과(is_blocked=True)도 BLOCKED 반환"""
@@ -102,8 +103,8 @@ class TestBlocked:
 
         req = check_request_factory(["torch.dangerous_custom"])
         resp = engine.check_batch(req, db_session)
-        assert resp.results[0].status == WhitelistStatus.BLOCKED
-        assert resp.results[0].source == WhitelistSource.MANUAL_REVIEW
+        assert resp[0].status == WhitelistStatus.BLOCKED
+        assert resp[0].source == WhitelistSource.MANUAL_REVIEW
 
 
 # ─────────────────────────────────────────────
@@ -119,7 +120,7 @@ class TestPending:
         req = check_request_factory(["torch.nn.NewLayer"])
         resp = engine.check_batch(req, db_session)
 
-        r = resp.results[0]
+        r = resp[0]
         assert r.status == WhitelistStatus.PENDING
         assert r.matched_rule == "torch.nn.*"
         assert r.review_required is True
@@ -196,7 +197,7 @@ class TestUnknown:
     def test_unknown_namespace(self, db_session, engine, check_request_factory):
         req = check_request_factory(["my_custom_lib.SomeClass"])
         resp = engine.check_batch(req, db_session)
-        r = resp.results[0]
+        r = resp[0]
         assert r.status == WhitelistStatus.UNKNOWN
         assert r.matched_rule is None
         assert r.review_required is True
@@ -227,7 +228,7 @@ class TestRiskKeywordEscalation:
         resp = engine.check_batch(req, db_session)
 
         # 응답 status는 PENDING (미등록이지만 namespace 매칭 됨)
-        assert resp.results[0].status == WhitelistStatus.PENDING
+        assert resp[0].status == WhitelistStatus.PENDING
 
         # auto_classification은 MANUAL로 격상되어야 함
         p = get_pending(db_session, "torch.nn.Module.load_state_dict")
@@ -258,7 +259,7 @@ class TestAutoApproveIsRecommendationOnly:
         # 다음 check 시에도 여전히 PENDING이지 ALLOWED 아님
         req2 = check_request_factory(["torch.nn.SomeBrandNewLayer"])
         resp = engine.check_batch(req2, db_session)
-        assert resp.results[0].status == WhitelistStatus.PENDING
+        assert resp[0].status == WhitelistStatus.PENDING
 
 
 # ─────────────────────────────────────────────
@@ -277,7 +278,7 @@ class TestDeterminism:
                 .where(ApprovedApi.api_path == "torch.nn.Linear")
             ).scalar_one_or_none() else None
             resp = engine.check_batch(req, db_session)
-            statuses.add(resp.results[0].status)
+            statuses.add(resp[0].status)
         assert len(statuses) == 1
 
     def test_order_independence(self, db_session, engine, check_request_factory):
@@ -289,7 +290,7 @@ class TestDeterminism:
 
         baseline = {}
         req = check_request_factory(apis.copy())
-        for r in engine.check_batch(req, db_session).results:
+        for r in engine.check_batch(req, db_session):
             baseline[r.api_path] = r.status
 
         for _ in range(10):
@@ -297,7 +298,7 @@ class TestDeterminism:
             random.shuffle(shuffled)
             req = check_request_factory(shuffled)
             resp = engine.check_batch(req, db_session)
-            for r in resp.results:
+            for r in resp:
                 assert r.status == baseline[r.api_path]
 
 
@@ -316,7 +317,7 @@ class TestSpecExample:
             "torch.nn.functional.scaled_dot_product_attention",  # 시드 안 함
         ])
         resp = engine.check_batch(req, db_session)
-        by_path = {r.api_path: r for r in resp.results}
+        by_path = {r.api_path: r for r in resp}
 
         assert by_path["torch.nn.Linear"].status == WhitelistStatus.ALLOWED
         assert by_path["torch.load"].status == WhitelistStatus.BLOCKED

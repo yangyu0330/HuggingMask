@@ -28,10 +28,11 @@ from whitelist.feedback import (
 from whitelist.models import (
     FeedbackReportRequest, FeedbackReportResponse,
     PendingApiRecord, PendingApiUpsertRequest, ReviewStatus,
-    WhitelistCheckBatchResponse, WhitelistCheckRequest,
+    WhitelistCheckRequest, WhitelistCheckResponse,
 )
 from whitelist.pending_store import (
-    count_pending, get_pending, list_pending, to_record, upsert_pending,
+    count_pending, get_pending, list_pending, to_record,
+    upsert_pending, upsert_pending_record,
 )
 from whitelist.rules import WHITELIST_VERSION
 from whitelist.tables import ApprovedApi, AuditLog, FeedbackReport, PendingApi
@@ -46,11 +47,14 @@ router = APIRouter(prefix="/internal/v1", tags=["whitelist"])
 # 14. Whitelist check
 # ─────────────────────────────────────────────
 
-@router.post("/whitelist/check", response_model=WhitelistCheckBatchResponse)
+@router.post("/whitelist/check", response_model=list[WhitelistCheckResponse])
 def check_whitelist(
     req: WhitelistCheckRequest, db: Session = Depends(get_db),
-) -> WhitelistCheckBatchResponse:
-    """코드 검증자(양유상)가 호출. per-API status 반환 + 미등록은 pending 등록."""
+) -> list[WhitelistCheckResponse]:
+    """코드 검증자(양유상)가 호출. per-API status 반환 + 미등록은 pending 등록.
+
+    인터페이스 정의서 14.2 — 응답은 배열. wrapper 없음.
+    """
     return get_engine().check_batch(req, db)
 
 
@@ -62,22 +66,17 @@ def check_whitelist(
 def upsert_pending_api(
     req: PendingApiUpsertRequest, db: Session = Depends(get_db),
 ) -> PendingApiRecord:
-    """외부(analyzer 등)에서 pending 레코드를 직접 upsert. 검증 흐름 외 경로."""
-    r = req.record
-    pending = upsert_pending(
-        db,
-        api_path=r.api_path,
-        auto_classification=r.auto_classification,
-        job_id=req.job_id,
-        model_repo_id=r.model_list[0] if r.model_list else "",
-        risk_keywords=r.risk_keywords,
-        matched_namespace_rule=r.matched_namespace_rule,
-        documentation_url=r.documentation_url,
-        sample_callsite=r.sample_callsites[0] if r.sample_callsites else None,
-        verified_org_count=r.verified_org_count,
-        verified_org_list=r.verified_org_list,
-        in_official_docs=r.in_official_docs,
-    )
+    """외부(analyzer 등)에서 PendingApiRecord 전체를 upsert.
+
+    정책 (양유상 PR #9 리뷰):
+      - record 전체를 손실 없이 반영 (first_seen_at, seen_count, model_list 등 전부)
+      - created_from_job_id는 record 값 사용 (req.job_id는 감사/로깅용)
+      - review_status는 PENDING만 허용 (보안 게이트 원칙) — 그 외 400
+    """
+    try:
+        pending = upsert_pending_record(db, req.record)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     db.commit()
     return to_record(pending)
 

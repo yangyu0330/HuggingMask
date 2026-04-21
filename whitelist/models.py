@@ -102,13 +102,9 @@ class WhitelistCheckResponse(BaseModel):
     reason: str
 
 
-class WhitelistCheckBatchResponse(BaseModel):
-    """14.2절은 배열 응답이지만, FastAPI 응답 모델 명시를 위해 wrapper 제공"""
-    schema_version: str = "1.0"
-    request_id: str
-    job_id: str
-    whitelist_version: str
-    results: list[WhitelistCheckResponse]
+# NOTE: 인터페이스 정의서 14.2는 응답이 배열(`WhitelistCheckResponse[]`)로 정의된다.
+# request_id/job_id 추적은 응답 body가 아닌 audit log + 헤더로 처리한다.
+# (양유상 PR #9 리뷰: 2026-04-21)
 
 
 # ─────────────────────────────────────────────

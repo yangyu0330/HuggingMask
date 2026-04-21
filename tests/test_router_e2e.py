@@ -91,8 +91,13 @@ class TestSpecExample:
         assert r.status_code == 200
         body = r.json()
 
-        assert body["whitelist_version"].startswith("wl-")
-        results = {x["api_path"]: x for x in body["results"]}
+        # 14.2절 — 응답은 배열 (wrapper 없음)
+        assert isinstance(body, list)
+        assert len(body) == 3
+        # 각 항목에 whitelist_version 포함
+        assert all(item["whitelist_version"].startswith("wl-") for item in body)
+
+        results = {x["api_path"]: x for x in body}
 
         # 시드에 포함되어 있으니 ALLOWED
         assert results["torch.nn.Linear"]["status"] == "ALLOWED"
@@ -114,7 +119,7 @@ class TestPendingFlow:
         }
         r = client.post("/internal/v1/whitelist/check", json=payload)
         assert r.status_code == 200
-        assert r.json()["results"][0]["status"] == "PENDING"
+        assert r.json()[0]["status"] == "PENDING"
 
         # GET /pending에서 보여야 함
         r2 = client.get("/internal/v1/pending")
@@ -151,8 +156,8 @@ class TestReviewFlow:
             **payload, "request_id": str(uuid.uuid4()),
             "job_id": str(uuid.uuid4()),
         })
-        assert r2.json()["results"][0]["status"] == "ALLOWED"
-        assert r2.json()["results"][0]["source"] == "MANUAL_REVIEW"
+        assert r2.json()[0]["status"] == "ALLOWED"
+        assert r2.json()[0]["source"] == "MANUAL_REVIEW"
 
 
 class TestFeedbackFlow:

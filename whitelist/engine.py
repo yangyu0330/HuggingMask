@@ -22,7 +22,7 @@ from whitelist.audit import append_audit
 from whitelist.models import (
     ModelRef, PendingClassification,
     WhitelistCheckRequest, WhitelistCheckResponse,
-    WhitelistCheckBatchResponse, WhitelistSource, WhitelistStatus,
+    WhitelistSource, WhitelistStatus,
 )
 from whitelist.pending_store import upsert_pending
 from whitelist.rules import (
@@ -115,10 +115,13 @@ class WhitelistEngine:
         self,
         request: WhitelistCheckRequest,
         db: Session,
-    ) -> WhitelistCheckBatchResponse:
+    ) -> list[WhitelistCheckResponse]:
         """API 목록을 일괄 판정하고 응답 배열 반환.
 
-        side effect: UNKNOWN 분류 결과는 자동으로 pending_store에 upsert된다.
+        인터페이스 정의서 14.2 — 응답은 wrapper 없이 배열.
+        request_id/job_id 추적은 audit log에 남는다.
+
+        side effect: UNKNOWN/PENDING 분류 결과는 자동으로 pending_store에 upsert된다.
         """
         results: list[WhitelistCheckResponse] = []
         for api_path in request.apis:
@@ -129,14 +132,7 @@ class WhitelistEngine:
                 model=request.model,
             ))
         db.commit()
-
-        return WhitelistCheckBatchResponse(
-            schema_version=request.schema_version,
-            request_id=request.request_id,
-            job_id=request.job_id,
-            whitelist_version=self._version,
-            results=results,
-        )
+        return results
 
     def check_single(
         self,
