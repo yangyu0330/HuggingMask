@@ -84,6 +84,8 @@ def validate_python_artifact(
             "grade_result": _grade_result_to_dict(decision),
             "runtime_check": runtime_detail,
             "pending_api_refs": [],
+            "review_queue_entry_id": None,
+            "effective_output_artifact_id": None,
         }
         result = ArtifactValidationResult(
             artifact=artifact,
@@ -139,6 +141,8 @@ def validate_python_artifact(
         "grade_result": _grade_result_to_dict(decision),
         "runtime_check": runtime_detail,
         "pending_api_refs": list(api_scan.pending_api_refs),
+        "review_queue_entry_id": None,
+        "effective_output_artifact_id": None,
     }
 
     result = ArtifactValidationResult(
@@ -507,8 +511,10 @@ def _configuration_metadata(ast_scan: AstScanResult) -> dict[str, Any]:
 
 
 def _grade_result_to_dict(decision: _GradeDecision) -> dict[str, Any]:
+    grade_reason = "; ".join(decision.grade_reasons) if decision.grade_reasons else "policy decision"
     return {
         "grade": decision.grade.value,
+        "grade_reason": grade_reason,
         "status": decision.status.value,
         "review_action": decision.review_action.value,
         "runtime_mode": decision.runtime_mode,

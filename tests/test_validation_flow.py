@@ -363,4 +363,34 @@ def test_loader_error_is_reported_as_error_status() -> None:
     )
 
     assert response.overall_status is ValidationStatus.ERROR
+    assert response.release_action == "ERROR"
     assert response.artifact_results[0].status is ValidationStatus.ERROR
+
+
+def test_error_has_priority_over_pending_review_in_overall_status() -> None:
+    policy = _make_policy()
+    pending_source = (
+        "import torch\n"
+        "class DemoModel:\n"
+        "    def forward(self, x):\n"
+        "        return torch.special.expit(x)\n"
+    )
+    pending_artifact = _make_artifact("modeling_pending.py", FileKind.PYTHON, pending_source)
+    missing_artifact = _make_artifact("modeling_missing.py", FileKind.PYTHON, "def f(x):\n    return x\n")
+    request = build_minimal_request(
+        request_id="req-mixed-error-pending",
+        job_id="job-mixed-error-pending",
+        policy=policy,
+        artifacts=[pending_artifact, missing_artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={"modeling_pending.py": pending_source},
+    )
+
+    assert response.overall_status is ValidationStatus.ERROR
+    assert response.release_action == "ERROR"
+    statuses = {item.artifact.repo_path: item.status for item in response.artifact_results}
+    assert statuses["modeling_pending.py"] is ValidationStatus.PENDING_REVIEW
+    assert statuses["modeling_missing.py"] is ValidationStatus.ERROR

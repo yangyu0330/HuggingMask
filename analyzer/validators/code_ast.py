@@ -18,6 +18,7 @@ _DANGEROUS_PREFIX_CALLS = ("subprocess.", "os.exec", "os.spawn")
 _DYNAMIC_CALL_LEAVES = {"getattr", "setattr", "delattr", "globals", "locals"}
 _OBFUSCATION_CALL_LEAVES = {"chr", "ord"}
 _CONFIG_BASE_SUFFIXES = ("PretrainedConfig",)
+_MODELING_BASE_SUFFIXES = ("Module", "PreTrainedModel")
 _CONFIG_EXECUTION_METHODS = {"forward", "generate", "__call__"}
 _CONFIG_DISALLOWED_CALL_ROOTS = {"importlib"}
 
@@ -48,6 +49,8 @@ class AstScanResult:
     parse_error: str | None = None
 
     def to_dict(self) -> dict[str, object]:
+        inherits_pretrained_config = bool(self.configuration_metadata.get("inherits_pretrained_config") is True)
+        inherits_nn_module = any(base.endswith(_MODELING_BASE_SUFFIXES) for base in self.base_classes)
         return {
             "repo_path": self.repo_path,
             "imports": list(self.imports),
@@ -62,6 +65,10 @@ class AstScanResult:
             "dynamic_patterns": list(self.dynamic_patterns),
             "obfuscation_patterns": list(self.obfuscation_patterns),
             "contextual_api_candidates": list(self.contextual_api_candidates),
+            "contextual_call_candidates": list(self.contextual_api_candidates),
+            "has_forward_method": bool(self.method_flags.get("has_forward")),
+            "inherits_pretrained_config": inherits_pretrained_config,
+            "inherits_nn_module": inherits_nn_module,
             "configuration_metadata": dict(self.configuration_metadata),
             "parse_error": self.parse_error,
         }

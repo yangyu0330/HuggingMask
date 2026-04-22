@@ -142,6 +142,8 @@ def test_contextual_api_candidates_are_extracted_without_decision() -> None:
     assert "open" not in result.dangerous_calls
     assert "os.path.join" not in result.dangerous_calls
     assert "Path.open" not in result.dangerous_calls
+    payload = result.to_dict()
+    assert payload["contextual_call_candidates"] == payload["contextual_api_candidates"]
 
 
 def test_configuration_metadata_for_regenerable_config_is_extracted() -> None:
@@ -214,3 +216,6 @@ def test_result_payload_is_json_serializable() -> None:
     json.loads(json.dumps(payload))
     assert payload["functions"] == ["f"]
     assert payload["repo_path"] == "simple.py"
+    assert payload["has_forward_method"] is False
+    assert payload["inherits_pretrained_config"] is False
+    assert payload["inherits_nn_module"] is False

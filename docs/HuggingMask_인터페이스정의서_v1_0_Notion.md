@@ -489,7 +489,7 @@ _Validation Engine → Proxy_
 | `job_id` | string | Y | 검증 ID |
 | `overall_decision` | string(enum) | Y | `OverallDecision` |
 | `overall_status` | string(enum) | Y | `PASS`, `BLOCK`, `PENDING_REVIEW`, `ERROR` |
-| `release_action` | string | Y | `CACHE_RETURN`, `APPROVE_AND_STORE`, `DENY`, `REVIEW_QUEUE` |
+| `release_action` | string | Y | `CACHE_RETURN`, `APPROVE_AND_STORE`, `DENY`, `REVIEW_QUEUE`, `ERROR` |
 | `artifact_results` | array[`ArtifactValidationResult`] | Y | 파일별 결과 |
 | `approved_artifact_ids` | array[string] | Y | 승인 artifact |
 | `blocked_artifact_ids` | array[string] | Y | 차단 artifact |
@@ -503,9 +503,9 @@ _Validation Engine → Proxy_
 ### overall status 계산 규칙
 
 1. `artifact_results` 중 하나라도 `BLOCK`이면 전체는 `BLOCK`
-2. `BLOCK`이 없고 하나라도 `PENDING_REVIEW`면 전체는 `PENDING_REVIEW`
-3. 모든 artifact가 `PASS`면 전체는 `PASS`
-4. 인프라 실패가 있고 안전한 fallback이 없으면 `ERROR`
+2. `BLOCK`이 없고 하나라도 `ERROR`면 전체는 `ERROR`
+3. `BLOCK`/`ERROR`이 없고 하나라도 `PENDING_REVIEW`면 전체는 `PENDING_REVIEW`
+4. 모든 artifact가 `PASS`면 전체는 `PASS`
 
 ---
 
@@ -859,6 +859,8 @@ _Validation Engine → Proxy_
 | schema invalid | `BLOCK` |
 | trigger field 없음 + schema valid | `PASS` |
 | trigger field 있음 + 참조 코드 모두 PASS | `PASS` |
+| trigger field 있음 + 참조 코드 없음 | `PENDING_REVIEW` |
+| trigger field 있음 + 참조 코드 로드 실패(MISSING/ERROR) | `PENDING_REVIEW` |
 | trigger field 있음 + 참조 코드 중 PENDING_REVIEW 존재 | `PENDING_REVIEW` |
 | trigger field 있음 + 참조 코드 중 BLOCK 존재 | `BLOCK` |
 
@@ -1334,9 +1336,9 @@ _Validation Engine → Whitelist Engine_
 | artifact 조합 | overall_status |
 |---|---|
 | 하나라도 `BLOCK` | `BLOCK` |
-| `BLOCK`는 없고 하나라도 `PENDING_REVIEW` | `PENDING_REVIEW` |
+| `BLOCK`는 없고 하나라도 `ERROR` | `ERROR` |
+| `BLOCK`/`ERROR`는 없고 하나라도 `PENDING_REVIEW` | `PENDING_REVIEW` |
 | 전부 `PASS` | `PASS` |
-| `PASS`/`PENDING_REVIEW`/`BLOCK` 결정 불가 + 인프라 실패 | `ERROR` |
 
 ---
 

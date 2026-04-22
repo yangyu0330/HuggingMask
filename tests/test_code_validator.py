@@ -364,5 +364,8 @@ def test_result_details_include_required_keys_and_are_json_serializable() -> Non
         "grade_result",
         "runtime_check",
         "pending_api_refs",
+        "review_queue_entry_id",
+        "effective_output_artifact_id",
     }.issubset(details.keys())
+    assert isinstance(details["grade_result"]["grade_reason"], str)
     json.loads(json.dumps(result.to_dict()))

@@ -70,9 +70,10 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 - code validator는 파일별 `ArtifactValidationResult`만 반환한다.
 - job-level 상태 계산은 인터페이스 정의서의 상태 전이 규칙을 따른다.
 - 하나라도 `BLOCK`이면 `overall_status = BLOCK`, `overall_decision = DENY`다.
-- `BLOCK`이 없고 하나라도 `PENDING_REVIEW`이면 `overall_status = PENDING_REVIEW`, `overall_decision = REVIEW_REQUIRED`다.
+- `BLOCK`이 없고 하나라도 `ERROR`면 `overall_status = ERROR`, `overall_decision = ERROR`다.
+- `BLOCK`/`ERROR`가 없고 하나라도 `PENDING_REVIEW`이면 `overall_status = PENDING_REVIEW`, `overall_decision = REVIEW_REQUIRED`다.
 - 전부 `PASS`이면 `overall_status = PASS`, `overall_decision = APPROVE` 또는 재생성 포함 시 `APPROVE_WITH_TRANSFORM`이다.
-- 인프라 오류가 있으면 결정 불가 상태를 `ERROR`로 올릴 수 있다.
+- `release_action`은 상태에 맞춰 `DENY`, `ERROR`, `REVIEW_QUEUE`, `APPROVE_AND_STORE`를 반환한다.
 - `PENDING_REVIEW` artifact는 release 대상이 아니다.
 - A 등급 재생성 결과가 있는 경우 원본이 아니라 `effective_output_artifact_id`를 승인 대상으로 사용한다.
 - proxy에는 검증 로직을 넣지 않고, 이후 proxy는 이 orchestrator만 호출한다.
@@ -87,7 +88,8 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 
 - 모든 artifact `PASS` -> overall `PASS`
 - 하나라도 `BLOCK` -> overall `BLOCK`/`DENY`
-- `BLOCK` 없음 + `PENDING_REVIEW` 존재 -> overall `PENDING_REVIEW`/`REVIEW_REQUIRED`
+- `BLOCK` 없음 + `ERROR` 존재 -> overall `ERROR`/`ERROR`
+- `BLOCK`/`ERROR` 없음 + `PENDING_REVIEW` 존재 -> overall `PENDING_REVIEW`/`REVIEW_REQUIRED`
 - config `auto_map`이 참조한 `.py`가 code validator로 연결됨
 - 참조 code `BLOCK`이면 config와 overall이 `BLOCK`
 - 참조 code `PENDING_REVIEW`이면 config와 overall이 `PENDING_REVIEW`
