@@ -144,6 +144,61 @@ def test_contextual_api_candidates_are_extracted_without_decision() -> None:
     assert "Path.open" not in result.dangerous_calls
 
 
+def test_configuration_metadata_for_regenerable_config_is_extracted() -> None:
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "class DemoConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    attribute_map = {'hidden_size': 'hidden_size'}\n"
+        "    def __init__(self, hidden_size=128, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+        "        self.hidden_size = hidden_size\n"
+    )
+    result = extract_ast_candidates("configuration_demo.py", source)
+    metadata = result.configuration_metadata
+
+    assert metadata["class_name"] == "DemoConfig"
+    assert metadata["base_classes"] == ["transformers.PretrainedConfig"]
+    assert metadata["model_type"] == "demo"
+    assert metadata["init_parameters"] == ["hidden_size", "kwargs"]
+    assert "hidden_size" in metadata["assigned_attributes"]
+    assert metadata["attribute_map"] == {"hidden_size": "hidden_size"}
+    assert metadata["config_regenerable"] is True
+    assert metadata["config_regeneration_block_reasons"] == []
+
+
+def test_configuration_metadata_blocks_top_level_and_helper_call_shapes() -> None:
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "def helper(v):\n"
+        "    return v\n"
+        "BOOTSTRAP = helper(1)\n"
+        "class DemoConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, hidden_size=128, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+        "        self.hidden_size = helper(hidden_size)\n"
+    )
+    result = extract_ast_candidates("configuration_bad_shape.py", source)
+    reasons = result.configuration_metadata["config_regeneration_block_reasons"]
+
+    assert result.configuration_metadata["config_regenerable"] is False
+    assert any(reason.startswith("top_level_executable_statement:") for reason in reasons)
+    assert any(reason.startswith("init_disallowed_call:helper") for reason in reasons)
+
+
+def test_super_init_call_is_not_counted_as_raw_api() -> None:
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "class DemoConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+    )
+    result = extract_ast_candidates("configuration_demo.py", source)
+    assert "super.__init__" not in result.raw_api_calls
+
+
 def test_parse_error_is_reported() -> None:
     result = extract_ast_candidates("broken.py", "def broken(:\n")
     assert result.parse_error is not None
@@ -159,4 +214,3 @@ def test_result_payload_is_json_serializable() -> None:
     json.loads(json.dumps(payload))
     assert payload["functions"] == ["f"]
     assert payload["repo_path"] == "simple.py"
-

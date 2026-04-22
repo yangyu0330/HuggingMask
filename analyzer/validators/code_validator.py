@@ -78,6 +78,7 @@ def validate_python_artifact(
         details = {
             "role_classification": {},
             "ast_scan": {},
+            "configuration_metadata": {},
             "api_scan": {},
             "context_api_scan": {"summary_decision": "safe"},
             "grade_result": _grade_result_to_dict(decision),
@@ -132,6 +133,7 @@ def validate_python_artifact(
     details = {
         "role_classification": role.to_dict(),
         "ast_scan": ast_scan.to_dict(),
+        "configuration_metadata": _configuration_metadata(ast_scan),
         "api_scan": api_scan.to_dict(),
         "context_api_scan": context_scan.to_dict(),
         "grade_result": _grade_result_to_dict(decision),
@@ -254,6 +256,17 @@ def _decide_grade(
         )
 
     # 7. 정형 modeling + allowed API + context safe + runtime_check passed -> B-1/PASS/AUTO_APPROVE
+    if role.role is PythonFileRole.CONFIGURATION:
+        return _GradeDecision(
+            grade=CodeGrade.B2,
+            status=ValidationStatus.PENDING_REVIEW,
+            review_action=ReviewAction.SECURITY_OWNER_GATE,
+            runtime_mode=_RUNTIME_MODE_SANDBOX,
+            reason_codes=["GRADE_B2_GATE_REQUIRED"],
+            grade_reasons=["configuration_not_regenerable_requires_review"],
+            requires_security_review=True,
+        )
+
     if _is_b1_candidate(role, ast_scan, api_scan, context_scan):
         if _runtime_gate_passed(runtime_check):
             return _GradeDecision(
@@ -307,6 +320,9 @@ def _is_grade_a_candidate(
     context_scan: ContextApiScanResult,
 ) -> bool:
     if role.role is not PythonFileRole.CONFIGURATION:
+        return False
+    config_meta = _configuration_metadata(ast_scan)
+    if not bool(config_meta.get("config_regenerable", False)):
         return False
     if ast_scan.parse_error is not None:
         return False
@@ -481,6 +497,13 @@ def _reason_message(code: str) -> str:
         "GRADE_B2_GATE_REQUIRED": "B-2 security owner gate required",
         "GRADE_C_MANUAL_REVIEW": "manual review required for C-grade candidate",
     }.get(code, "policy decision")
+
+
+def _configuration_metadata(ast_scan: AstScanResult) -> dict[str, Any]:
+    raw = getattr(ast_scan, "configuration_metadata", None)
+    if not isinstance(raw, dict):
+        return {}
+    return dict(raw)
 
 
 def _grade_result_to_dict(decision: _GradeDecision) -> dict[str, Any]:

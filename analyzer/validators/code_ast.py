@@ -17,6 +17,9 @@ _DANGEROUS_EXACT_CALLS = {"os.system", "os.popen", "torch.load", "pickle.load", 
 _DANGEROUS_PREFIX_CALLS = ("subprocess.", "os.exec", "os.spawn")
 _DYNAMIC_CALL_LEAVES = {"getattr", "setattr", "delattr", "globals", "locals"}
 _OBFUSCATION_CALL_LEAVES = {"chr", "ord"}
+_CONFIG_BASE_SUFFIXES = ("PretrainedConfig",)
+_CONFIG_EXECUTION_METHODS = {"forward", "generate", "__call__"}
+_CONFIG_DISALLOWED_CALL_ROOTS = {"importlib"}
 
 
 @dataclass
@@ -41,6 +44,7 @@ class AstScanResult:
     dynamic_patterns: list[str] = field(default_factory=list)
     obfuscation_patterns: list[str] = field(default_factory=list)
     contextual_api_candidates: list[str] = field(default_factory=list)
+    configuration_metadata: dict[str, object] = field(default_factory=dict)
     parse_error: str | None = None
 
     def to_dict(self) -> dict[str, object]:
@@ -58,6 +62,7 @@ class AstScanResult:
             "dynamic_patterns": list(self.dynamic_patterns),
             "obfuscation_patterns": list(self.obfuscation_patterns),
             "contextual_api_candidates": list(self.contextual_api_candidates),
+            "configuration_metadata": dict(self.configuration_metadata),
             "parse_error": self.parse_error,
         }
 
@@ -118,8 +123,12 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        if _is_super_init_call(node):
+            continue
         raw_name = _call_name(node.func)
         if not raw_name:
+            continue
+        if raw_name == "super":
             continue
 
         raw_api_calls.add(raw_name)
@@ -161,6 +170,11 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
     result.dynamic_patterns = sorted(dynamic_patterns)
     result.obfuscation_patterns = sorted(obfuscation_patterns)
     result.contextual_api_candidates = sorted(contextual_candidates)
+    result.configuration_metadata = _extract_configuration_metadata(
+        tree=tree,
+        alias_map=alias_map,
+        repo_path=repo_path,
+    )
 
     return result
 
@@ -265,3 +279,351 @@ def _contextual_candidate_name(raw_name: str, resolved_name: str) -> str | None:
     if resolved_name == "os.environ.get":
         return "os.environ.get"
     return None
+
+
+def _extract_configuration_metadata(
+    *,
+    tree: ast.Module,
+    alias_map: dict[str, str],
+    repo_path: str,
+) -> dict[str, object]:
+    class_defs = [stmt for stmt in tree.body if isinstance(stmt, ast.ClassDef)]
+    file_hint = _is_configuration_file_hint(repo_path)
+    selected = _select_configuration_candidate(class_defs, alias_map=alias_map, file_hint=file_hint)
+    top_level_reasons = _top_level_block_reasons(tree)
+
+    metadata: dict[str, object] = {
+        "class_name": None,
+        "base_classes": [],
+        "model_type": None,
+        "init_parameters": [],
+        "assigned_attributes": [],
+        "attribute_map": None,
+        "inherits_pretrained_config": False,
+        "config_regenerable": False,
+        "config_regeneration_block_reasons": [],
+    }
+
+    reasons: list[str] = list(top_level_reasons)
+    if selected is None:
+        reasons.append("no_config_class_candidate")
+        metadata["config_regeneration_block_reasons"] = _dedupe(reasons)
+        return metadata
+
+    class_node, base_classes = selected
+    metadata["class_name"] = class_node.name
+    metadata["base_classes"] = list(base_classes)
+    metadata["inherits_pretrained_config"] = any(base.endswith(_CONFIG_BASE_SUFFIXES) for base in base_classes)
+
+    model_type, has_model_type = _extract_class_attribute_value(class_node, "model_type")
+    metadata["model_type"] = model_type if has_model_type else None
+    if not metadata["inherits_pretrained_config"]:
+        reasons.append("class_not_inheriting_pretrained_config")
+    if not has_model_type:
+        reasons.append("missing_model_type_class_attribute")
+
+    attribute_map, has_attribute_map = _extract_class_attribute_value(class_node, "attribute_map")
+    if has_attribute_map:
+        metadata["attribute_map"] = attribute_map
+
+    methods = {
+        child.name: child
+        for child in class_node.body
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    execution_methods = sorted(method_name for method_name in methods if method_name in _CONFIG_EXECUTION_METHODS)
+    if execution_methods:
+        reasons.append(f"execution_methods_present:{','.join(execution_methods)}")
+
+    init_node = methods.get("__init__")
+    if init_node is None:
+        reasons.append("missing_init_method")
+        metadata["config_regeneration_block_reasons"] = _dedupe(reasons)
+        return metadata
+
+    init_parameters = _function_parameter_names(init_node)
+    metadata["init_parameters"] = list(init_parameters)
+    init_ok, init_reasons, assigned_attrs = _analyze_init_method(
+        init_node,
+        init_parameters=init_parameters,
+        alias_map=alias_map,
+    )
+    metadata["assigned_attributes"] = sorted(assigned_attrs)
+    if not init_ok:
+        reasons.extend(init_reasons)
+
+    deduped_reasons = _dedupe(reasons)
+    metadata["config_regeneration_block_reasons"] = deduped_reasons
+    metadata["config_regenerable"] = not deduped_reasons
+    return metadata
+
+
+def _select_configuration_candidate(
+    class_defs: list[ast.ClassDef],
+    *,
+    alias_map: dict[str, str],
+    file_hint: bool,
+) -> tuple[ast.ClassDef, list[str]] | None:
+    if not class_defs:
+        return None
+
+    analyzed: list[tuple[ast.ClassDef, list[str]]] = []
+    for class_node in class_defs:
+        base_classes = [
+            _resolve_alias(_dotted_name(base), alias_map)
+            for base in class_node.bases
+            if _dotted_name(base)
+        ]
+        analyzed.append((class_node, base_classes))
+
+    for class_node, base_classes in analyzed:
+        if any(base.endswith(_CONFIG_BASE_SUFFIXES) for base in base_classes):
+            return class_node, base_classes
+
+    if file_hint:
+        return analyzed[0]
+    return None
+
+
+def _is_configuration_file_hint(repo_path: str) -> bool:
+    normalized = str(repo_path).replace("\\", "/")
+    file_name = normalized.rsplit("/", 1)[-1].lower()
+    return file_name.startswith("configuration_") or file_name == "generation_config.py"
+
+
+def _top_level_block_reasons(tree: ast.Module) -> list[str]:
+    reasons: list[str] = []
+    for index, stmt in enumerate(tree.body):
+        if index == 0 and _is_docstring_expr(stmt):
+            continue
+        if isinstance(stmt, (ast.Import, ast.ImportFrom, ast.ClassDef, ast.Pass)):
+            continue
+        if isinstance(stmt, ast.Assign):
+            if _is_constant_assignment(stmt.targets, stmt.value):
+                continue
+            reasons.append("top_level_non_constant_assignment")
+            continue
+        if isinstance(stmt, ast.AnnAssign):
+            if _is_constant_assignment([stmt.target], stmt.value):
+                continue
+            reasons.append("top_level_non_constant_assignment")
+            continue
+        reasons.append(f"top_level_executable_statement:{type(stmt).__name__}")
+    return _dedupe(reasons)
+
+
+def _is_docstring_expr(stmt: ast.stmt) -> bool:
+    return (
+        isinstance(stmt, ast.Expr)
+        and isinstance(stmt.value, ast.Constant)
+        and isinstance(stmt.value.value, str)
+    )
+
+
+def _is_constant_assignment(targets: list[ast.expr], value: ast.expr | None) -> bool:
+    if value is None:
+        return False
+    if not all(isinstance(target, ast.Name) for target in targets):
+        return False
+    return _is_simple_literal(value)
+
+
+def _is_simple_literal(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant):
+        return True
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        return _is_simple_literal(node.operand)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return all(_is_simple_literal(item) for item in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(
+            (key is None or _is_simple_literal(key))
+            and (value is None or _is_simple_literal(value))
+            for key, value in zip(node.keys, node.values, strict=False)
+        )
+    return False
+
+
+def _extract_class_attribute_value(class_node: ast.ClassDef, attr_name: str) -> tuple[object | None, bool]:
+    for child in class_node.body:
+        if isinstance(child, ast.Assign):
+            if len(child.targets) != 1 or not isinstance(child.targets[0], ast.Name):
+                continue
+            if child.targets[0].id != attr_name:
+                continue
+            value, parsed = _parse_literal_value(child.value)
+            return (value if parsed else _node_repr(child.value)), True
+        if isinstance(child, ast.AnnAssign):
+            if not isinstance(child.target, ast.Name) or child.target.id != attr_name:
+                continue
+            if child.value is None:
+                return None, True
+            value, parsed = _parse_literal_value(child.value)
+            return (value if parsed else _node_repr(child.value)), True
+    return None, False
+
+
+def _function_parameter_names(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    names: list[str] = []
+    positional = list(node.args.posonlyargs) + list(node.args.args)
+    for index, arg in enumerate(positional):
+        if index == 0 and arg.arg == "self":
+            continue
+        names.append(arg.arg)
+    for arg in node.args.kwonlyargs:
+        names.append(arg.arg)
+    if node.args.vararg is not None:
+        names.append(node.args.vararg.arg)
+    if node.args.kwarg is not None:
+        names.append(node.args.kwarg.arg)
+    return names
+
+
+def _analyze_init_method(
+    init_node: ast.FunctionDef | ast.AsyncFunctionDef,
+    *,
+    init_parameters: list[str],
+    alias_map: dict[str, str],
+) -> tuple[bool, list[str], set[str]]:
+    reasons: list[str] = []
+    assigned_attrs: set[str] = set()
+    allowed_param_names = set(init_parameters)
+
+    for stmt in init_node.body:
+        if _is_docstring_expr(stmt):
+            continue
+        if isinstance(stmt, ast.Pass):
+            continue
+        if _is_super_init_statement(stmt, allowed_param_names):
+            continue
+        if _is_self_assignment_statement(stmt, allowed_param_names, assigned_attrs):
+            continue
+        reasons.append(f"init_unsupported_statement:{type(stmt).__name__}")
+
+    for node in ast.walk(init_node):
+        if not isinstance(node, ast.Call):
+            continue
+        if _is_super_init_call(node, allowed_param_names):
+            continue
+        call_name = _call_name(node.func)
+        if call_name == "super":
+            continue
+        resolved = _resolve_alias(call_name, alias_map)
+        if not resolved:
+            reasons.append("init_disallowed_call:<unknown>")
+            continue
+        reasons.append(f"init_disallowed_call:{resolved}")
+        root = resolved.split(".", 1)[0]
+        if root in _CONFIG_DISALLOWED_CALL_ROOTS:
+            reasons.append("init_disallowed_dynamic_import")
+
+    return (len(reasons) == 0), _dedupe(reasons), assigned_attrs
+
+
+def _is_super_init_statement(stmt: ast.stmt, allowed_param_names: set[str]) -> bool:
+    if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+        return False
+    return _is_super_init_call(stmt.value, allowed_param_names)
+
+
+def _is_super_init_call(node: ast.Call, allowed_param_names: set[str] | None = None) -> bool:
+    if not isinstance(node.func, ast.Attribute):
+        return False
+    if node.func.attr != "__init__":
+        return False
+    parent = node.func.value
+    if not isinstance(parent, ast.Call):
+        return False
+    if not isinstance(parent.func, ast.Name) or parent.func.id != "super":
+        return False
+    if parent.args or parent.keywords:
+        return False
+    if node.args:
+        return False
+    if not node.keywords:
+        return True
+    for keyword in node.keywords:
+        if keyword.arg is not None:
+            return False
+        if not isinstance(keyword.value, ast.Name):
+            return False
+        if allowed_param_names is not None and keyword.value.id not in allowed_param_names:
+            return False
+    return True
+
+
+def _is_self_assignment_statement(
+    stmt: ast.stmt,
+    allowed_param_names: set[str],
+    assigned_attrs: set[str],
+) -> bool:
+    if isinstance(stmt, ast.Assign):
+        targets = stmt.targets
+        value = stmt.value
+    elif isinstance(stmt, ast.AnnAssign):
+        targets = [stmt.target]
+        value = stmt.value
+    else:
+        return False
+
+    if value is None:
+        return False
+    if not all(_is_self_attribute(target) for target in targets):
+        return False
+    if not _is_allowed_init_value(value, allowed_param_names):
+        return False
+
+    for target in targets:
+        if isinstance(target, ast.Attribute):
+            assigned_attrs.add(target.attr)
+    return True
+
+
+def _is_self_attribute(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "self"
+    )
+
+
+def _is_allowed_init_value(node: ast.AST, allowed_param_names: set[str]) -> bool:
+    if _is_simple_literal(node):
+        return True
+    if isinstance(node, ast.Name):
+        return node.id in allowed_param_names
+    if isinstance(node, (ast.List, ast.Tuple)):
+        return all(_is_allowed_init_value(item, allowed_param_names) for item in node.elts)
+    if isinstance(node, ast.Dict):
+        return all(
+            (key is None or _is_allowed_init_value(key, allowed_param_names))
+            and (value is None or _is_allowed_init_value(value, allowed_param_names))
+            for key, value in zip(node.keys, node.values, strict=False)
+        )
+    return False
+
+
+def _parse_literal_value(node: ast.AST) -> tuple[object | None, bool]:
+    try:
+        return ast.literal_eval(node), True
+    except (ValueError, TypeError, SyntaxError):
+        return None, False
+
+
+def _node_repr(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return _dotted_name(node)
+    return type(node).__name__
+
+
+def _dedupe(items: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        ordered.append(item)
+    return ordered

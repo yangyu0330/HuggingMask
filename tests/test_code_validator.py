@@ -46,9 +46,12 @@ def _make_artifact(repo_path: str) -> ArtifactRef:
 def test_simple_configuration_is_grade_a_pass() -> None:
     artifact = _make_artifact("configuration_demo.py")
     source = (
-        "class DemoConfig:\n"
+        "from transformers import PretrainedConfig\n"
+        "class DemoConfig(PretrainedConfig):\n"
         "    model_type = 'demo'\n"
-        "    def __init__(self, hidden_size=128):\n"
+        "    attribute_map = {'hidden_size': 'hidden_size'}\n"
+        "    def __init__(self, hidden_size=128, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
         "        self.hidden_size = hidden_size\n"
     )
     result = validate_python_artifact(artifact, source, _make_policy())
@@ -58,21 +61,143 @@ def test_simple_configuration_is_grade_a_pass() -> None:
     assert result.review_action is ReviewAction.AUTO_APPROVE_REGENERATED
     assert result.details["grade_result"]["runtime_mode"] == "REGENERATE"
     assert result.details["role_classification"]["role"] == "CONFIGURATION"
+    metadata = result.details["configuration_metadata"]
+    assert metadata["class_name"] == "DemoConfig"
+    assert metadata["model_type"] == "demo"
+    assert metadata["init_parameters"] == ["hidden_size", "kwargs"]
+    assert "hidden_size" in metadata["assigned_attributes"]
+    assert metadata["attribute_map"] == {"hidden_size": "hidden_size"}
+    assert metadata["config_regenerable"] is True
+    assert metadata["config_regeneration_block_reasons"] == []
 
 
 def test_configuration_with_execution_method_is_not_grade_a() -> None:
     artifact = _make_artifact("configuration_bad.py")
     source = (
-        "class BadConfig:\n"
-        "    def __init__(self):\n"
+        "from transformers import PretrainedConfig\n"
+        "class BadConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
         "        self.x = 1\n"
         "    def forward(self, x):\n"
         "        return x\n"
     )
     result = validate_python_artifact(artifact, source, _make_policy())
 
-    assert result.grade is not CodeGrade.A
+    assert result.grade is CodeGrade.B2
     assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+
+
+def test_configuration_missing_model_type_is_b2_pending_review() -> None:
+    artifact = _make_artifact("configuration_missing_model_type.py")
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "class MissingTypeConfig(PretrainedConfig):\n"
+        "    def __init__(self, hidden_size=128, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+        "        self.hidden_size = hidden_size\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    metadata = result.details["configuration_metadata"]
+    assert metadata["config_regenerable"] is False
+    assert "missing_model_type_class_attribute" in metadata["config_regeneration_block_reasons"]
+
+
+def test_configuration_without_pretrainedconfig_is_b2_pending_review() -> None:
+    artifact = _make_artifact("configuration_no_base.py")
+    source = (
+        "class PlainConfig:\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, hidden_size=128):\n"
+        "        self.hidden_size = hidden_size\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    metadata = result.details["configuration_metadata"]
+    assert metadata["config_regenerable"] is False
+    assert "class_not_inheriting_pretrained_config" in metadata["config_regeneration_block_reasons"]
+
+
+def test_configuration_init_helper_call_is_b2_pending_review() -> None:
+    artifact = _make_artifact("configuration_helper_call.py")
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "def _norm(v):\n"
+        "    return v\n"
+        "class HelperConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, hidden_size=128, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+        "        self.hidden_size = _norm(hidden_size)\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+
+
+def test_configuration_init_eval_is_immediate_c_block() -> None:
+    artifact = _make_artifact("configuration_eval.py")
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "class EvalConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+        "        self.x = eval('1+1')\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert "DANGEROUS_CALL" in [entry.code for entry in result.reason_entries]
+
+
+def test_configuration_top_level_function_call_is_b2_pending_review() -> None:
+    artifact = _make_artifact("configuration_top_level_call.py")
+    source = (
+        "from transformers import PretrainedConfig\n"
+        "def helper():\n"
+        "    return 1\n"
+        "BOOTSTRAP = helper()\n"
+        "class TopLevelCallConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+        "        self.ready = True\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+
+
+def test_configuration_top_level_dangerous_call_is_c_block() -> None:
+    artifact = _make_artifact("configuration_top_level_eval.py")
+    source = (
+        "eval('1+1')\n"
+        "from transformers import PretrainedConfig\n"
+        "class TopLevelEvalConfig(PretrainedConfig):\n"
+        "    model_type = 'demo'\n"
+        "    def __init__(self, **kwargs):\n"
+        "        super().__init__(**kwargs)\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
 
 
 def test_modeling_allowed_api_with_runtime_pass_is_b1_pass() -> None:
@@ -233,6 +358,7 @@ def test_result_details_include_required_keys_and_are_json_serializable() -> Non
     assert {
         "role_classification",
         "ast_scan",
+        "configuration_metadata",
         "api_scan",
         "context_api_scan",
         "grade_result",
