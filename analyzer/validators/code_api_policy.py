@@ -63,6 +63,11 @@ _DEFAULT_RISK_PREFIX = (
 _DEFAULT_CONTEXTUAL_EXACT = frozenset(
     {
         "open",
+        "os.remove",
+        "os.unlink",
+        "os.rename",
+        "os.replace",
+        "os.rmdir",
         "os.getenv",
         "os.environ.get",
         "Path.open",
@@ -71,6 +76,7 @@ _DEFAULT_CONTEXTUAL_EXACT = frozenset(
         "pathlib.Path.open",
         "pathlib.Path.read_text",
         "pathlib.Path.write_text",
+        "shutil.rmtree",
     }
 )
 

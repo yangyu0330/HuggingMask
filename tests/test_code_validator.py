@@ -299,6 +299,36 @@ def test_torch_load_is_immediate_c_block() -> None:
     assert "DANGEROUS_API" in [entry.code for entry in result.reason_entries]
 
 
+def test_os_remove_is_immediate_context_block() -> None:
+    artifact = _make_artifact("modeling_os_remove.py")
+    source = (
+        "import os\n"
+        "def run():\n"
+        "    os.remove('config.json')\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert "CONTEXT_API_BLOCKED" in [entry.code for entry in result.reason_entries]
+
+
+def test_shutil_rmtree_is_immediate_context_block() -> None:
+    artifact = _make_artifact("modeling_shutil_rmtree.py")
+    source = (
+        "import shutil\n"
+        "def run():\n"
+        "    shutil.rmtree('cache')\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert "CONTEXT_API_BLOCKED" in [entry.code for entry in result.reason_entries]
+
+
 def test_context_block_has_higher_priority_than_dynamic_review_paths() -> None:
     artifact = _make_artifact("modeling_context_block.py")
     source = (

@@ -28,6 +28,7 @@ from analyzer.validators.code_validator import validate_python_artifact
 
 SourceLoader = Callable[[str], str | bytes | None] | Mapping[str, str | bytes]
 RuntimeCheckLoader = Callable[[str], dict[str, Any] | None] | Mapping[str, dict[str, Any]]
+AstCallMetadataLoader = Callable[[str], list[dict[str, Any]] | None] | Mapping[str, list[dict[str, Any]]]
 
 _TRIGGER_AUTO_MAP = "auto_map"
 _TRIGGER_CUSTOM_PIPELINES = "custom_pipelines"
@@ -73,6 +74,7 @@ def validate_config_artifact(
     *,
     source_loader: SourceLoader | None = None,
     runtime_check_loader: RuntimeCheckLoader | None = None,
+    ast_call_metadata_loader: AstCallMetadataLoader | None = None,
 ) -> ArtifactValidationResult:
     """Validate config/tokenizer_config and route referenced Python code."""
 
@@ -120,12 +122,14 @@ def validate_config_artifact(
                 referenced_by=[artifact.repo_path],
             )
             runtime_check = _load_runtime_check(runtime_check_loader, repo_path)
+            ast_call_metadata = _load_ast_call_metadata(ast_call_metadata_loader, repo_path) or []
             code_result = validate_python_artifact(
                 artifact=code_artifact,
                 source=code_source,
                 policy=policy,
                 whitelist_lookup=whitelist_lookup,
                 runtime_check=runtime_check,
+                ast_call_metadata=ast_call_metadata,
             )
             linked_artifact_ids.append(code_result.artifact.artifact_id)
             linked_statuses.append(code_result.status.value)
@@ -310,6 +314,14 @@ def _load_referenced_source(loader: SourceLoader | None, repo_path: str) -> dict
 
 
 def _load_runtime_check(loader: RuntimeCheckLoader | None, repo_path: str) -> dict[str, Any] | None:
+    if loader is None:
+        return None
+    if callable(loader):
+        return loader(repo_path)
+    return loader.get(repo_path)
+
+
+def _load_ast_call_metadata(loader: AstCallMetadataLoader | None, repo_path: str) -> list[dict[str, Any]] | None:
     if loader is None:
         return None
     if callable(loader):

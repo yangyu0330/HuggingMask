@@ -147,6 +147,47 @@ def test_linked_code_block_raises_config_block() -> None:
     assert result.details["effective_status"] == "BLOCK"
 
 
+def test_linked_context_block_uses_ast_metadata_from_config_reroute() -> None:
+    artifact = _make_artifact("config.json", FileKind.CONFIG_JSON)
+    payload = {"auto_map": {"AutoModel": "modeling_context_block.DemoModel"}}
+    source_loader = {
+        "modeling_context_block.py": (
+            "class DemoModel:\n"
+            "    def forward(self, user_path):\n"
+            "        with open(user_path, 'w') as handle:\n"
+            "            handle.write('x')\n"
+            "        return user_path\n"
+        )
+    }
+    ast_call_metadata_loader = {
+        "modeling_context_block.py": [
+            {
+                "api": "open",
+                "args": [
+                    {"kind": "name", "value": "user_path", "source": "user_input", "is_user_input": True},
+                    {"kind": "constant_str", "value": "w"},
+                ],
+            }
+        ]
+    }
+
+    result = validate_config_artifact(
+        artifact,
+        json.dumps(payload),
+        _make_policy(),
+        source_loader=source_loader,
+        ast_call_metadata_loader=ast_call_metadata_loader,
+    )
+
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert result.details["linked_code_statuses"] == ["BLOCK"]
+    assert result.details["linked_code_results"][0]["details"]["grade_result"]["reason_codes"] == [
+        "CONTEXT_API_BLOCKED"
+    ]
+    assert result.details["effective_status"] == "BLOCK"
+
+
 def test_linked_code_pending_review_raises_config_pending_review() -> None:
     artifact = _make_artifact("config.json", FileKind.CONFIG_JSON)
     payload = {"auto_map": {"AutoModel": "modeling_unknown.DemoModel"}}

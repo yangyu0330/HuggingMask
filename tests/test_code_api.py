@@ -54,13 +54,20 @@ def test_blocked_and_risk_api_take_priority_over_allow_lookup() -> None:
 
 def test_contextual_apis_are_not_name_only_blocked_in_stage5() -> None:
     source = (
+        "import shutil\n"
         "import os\n"
         "from pathlib import Path\n"
         "def run():\n"
         "    open('vocab.json', 'r')\n"
+        "    os.remove('config.json')\n"
+        "    os.unlink('tmp.txt')\n"
+        "    os.rename('a', 'b')\n"
+        "    os.replace('a', 'b')\n"
+        "    os.rmdir('cache')\n"
         "    Path('x').open('r')\n"
         "    Path('x').read_text()\n"
         "    Path('x').write_text('ok')\n"
+        "    shutil.rmtree('cache')\n"
         "    os.path.join('a', 'b')\n"
         "    os.getenv('HOME')\n"
         "    os.environ.get('HOME')\n"
@@ -70,13 +77,20 @@ def test_contextual_apis_are_not_name_only_blocked_in_stage5() -> None:
     contextual = set(result.contextual_apis)
 
     assert "open" in contextual
+    assert "os.remove" in contextual
+    assert "os.unlink" in contextual
+    assert "os.rename" in contextual
+    assert "os.replace" in contextual
+    assert "os.rmdir" in contextual
     assert "os.path.join" in contextual
     assert "os.getenv" in contextual
     assert "os.environ.get" in contextual
     assert "pathlib.Path.open" in contextual
     assert "pathlib.Path.read_text" in contextual
     assert "pathlib.Path.write_text" in contextual
+    assert "shutil.rmtree" in contextual
     assert "open" not in result.blocked_apis
+    assert "os.remove" not in result.blocked_apis
     assert "os.path.join" not in result.blocked_apis
     assert "pathlib.Path.open" not in result.blocked_apis
 

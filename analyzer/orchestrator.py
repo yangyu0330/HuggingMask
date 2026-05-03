@@ -128,6 +128,7 @@ def dispatch_artifacts(
                     whitelist_lookup=whitelist_lookup,
                     source_loader=source_loader,
                     runtime_check_loader=runtime_check_loader,
+                    ast_call_metadata_loader=ast_call_metadata_loader,
                 )
             else:
                 result = _build_skipped_result(
