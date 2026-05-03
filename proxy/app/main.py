@@ -1,5 +1,8 @@
 from fastapi import FastAPI
 
+from analyzer.schemas import ValidationJobRequest
+from analyzer.service import validate_job
+
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 
 
@@ -11,3 +14,8 @@ def root() -> dict[str, str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/internal/v1/validation/jobs")
+def validation_jobs(payload: ValidationJobRequest):
+    return validate_job(payload)
