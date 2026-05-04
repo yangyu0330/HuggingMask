@@ -248,6 +248,31 @@ def test_tokenizer_config_custom_class_reference_is_extracted() -> None:
     assert "tokenization_demo.py" in result.details["config_scan"]["referenced_python_files"]
 
 
+def test_tokenizer_config_referenced_code_block_raises_config_block_without_trigger_field() -> None:
+    artifact = _make_artifact("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON)
+    payload = {"tokenizer_class": "tokenization_bad.DemoTokenizer"}
+    source_loader = {
+        "tokenization_bad.py": (
+            "class DemoTokenizer:\n"
+            "    def normalize(self, value):\n"
+            "        return eval(value)\n"
+        )
+    }
+
+    result = validate_config_artifact(
+        artifact,
+        json.dumps(payload),
+        _make_policy(),
+        source_loader=source_loader,
+    )
+
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert result.details["trigger_fields"] == []
+    assert result.details["linked_code_statuses"] == ["BLOCK"]
+    assert result.details["effective_status"] == "BLOCK"
+
+
 def test_invalid_json_blocks_config() -> None:
     artifact = _make_artifact("config.json", FileKind.CONFIG_JSON)
     result = validate_config_artifact(artifact, "{broken", _make_policy())

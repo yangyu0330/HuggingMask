@@ -333,23 +333,23 @@ def _compute_effective_status(scan_result: ConfigScanResult, linked_statuses: li
     if not scan_result.schema_valid:
         return ValidationStatus.BLOCK
 
-    if not scan_result.trigger_fields:
-        return ValidationStatus.PASS
+    if scan_result.referenced_python_files:
+        if not linked_statuses:
+            return ValidationStatus.PENDING_REVIEW
 
-    if not scan_result.referenced_python_files:
+        normalized = {item.upper() for item in linked_statuses}
+        if "BLOCK" in normalized:
+            return ValidationStatus.BLOCK
+        if "PENDING_REVIEW" in normalized or "ERROR" in normalized or "MISSING" in normalized:
+            return ValidationStatus.PENDING_REVIEW
+        if normalized == {"PASS"}:
+            return ValidationStatus.PASS
         return ValidationStatus.PENDING_REVIEW
 
-    if not linked_statuses:
+    if scan_result.trigger_fields:
         return ValidationStatus.PENDING_REVIEW
 
-    normalized = {item.upper() for item in linked_statuses}
-    if "BLOCK" in normalized:
-        return ValidationStatus.BLOCK
-    if "PENDING_REVIEW" in normalized or "ERROR" in normalized or "MISSING" in normalized:
-        return ValidationStatus.PENDING_REVIEW
-    if normalized == {"PASS"}:
-        return ValidationStatus.PASS
-    return ValidationStatus.PENDING_REVIEW
+    return ValidationStatus.PASS
 
 
 def _build_reason_entries(
