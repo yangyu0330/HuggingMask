@@ -1,0 +1,18 @@
+{
+  "scenario_id": "cv_10_unregistered_api",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_unregistered.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_unregistered.py",
+  "expected": {
+    "status": "PENDING_REVIEW",
+    "grade": "B-2",
+    "review_action": "SECURITY_OWNER_GATE",
+    "route_kind": "CODE_SANDBOX_RUNTIME",
+    "pending_api_refs_contains": [
+      "torch.special.expit"
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "scenario_id": "cv_02_config_auto_map_pass",
+  "validator": "config",
+  "artifact": {
+    "repo_path": "config.json",
+    "file_kind": "CONFIG_JSON"
+  },
+  "source_file": "config.json",
+  "source_loader_files": [
+    "modeling_safe.py"
+  ],
+  "runtime_check_loader_file": "runtime_check_loader.json",
+  "expected": {
+    "status": "PASS",
+    "review_action": "NONE",
+    "route_kind": "CONFIG_SCHEMA_VALIDATION",
+    "effective_status": "PASS",
+    "trigger_fields_contains": [
+      "auto_map"
+    ],
+    "referenced_files_contains": [
+      "modeling_safe.py"
+    ],
+    "linked_code_statuses_contains": [
+      "PASS"
+    ]
+  }
+}

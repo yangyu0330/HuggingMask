@@ -1,0 +1,17 @@
+{
+  "scenario_id": "cv_12_context_block",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_context_block.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_context_block.py",
+  "ast_call_metadata_file": "ast_call_metadata.json",
+  "expected": {
+    "status": "BLOCK",
+    "grade": "C",
+    "review_action": "BLOCK_IMMEDIATELY",
+    "route_kind": "CODE_AST_SCAN",
+    "context_summary_decision": "block"
+  }
+}

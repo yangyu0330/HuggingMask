@@ -1,0 +1,16 @@
+{
+  "scenario_id": "cv_06_modeling_runtime_skipped",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_safe.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_safe.py",
+  "runtime_check_file": "runtime_check.json",
+  "expected": {
+    "status": "PENDING_REVIEW",
+    "grade": "B-2",
+    "review_action": "SECURITY_OWNER_GATE",
+    "route_kind": "CODE_SANDBOX_RUNTIME"
+  }
+}

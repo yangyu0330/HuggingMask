@@ -48,9 +48,9 @@ _Notion 업로드용 / 구현 기준 문서_
 | Analyzer Core | 파일 분류, JSON 계약 검증, `ArtifactRef` 생성, 최종 응답 조립 | 파일 목록, 정책 정보, 정은미/양유상/김민우 결과 | ValidationJobRequest, ValidationJobResponse | 박용담 |
 | Config / Tokenizer Validator | `config.json`, `tokenizer_config.json` 1차 검증, 참조 `.py` 코드 검증 재라우팅 | config/tokenizer artifact | ConfigValidationResult, 추가 code job | 박용담 + 양유상 |
 | Weight Validator | safetensors / pickle Path A / pickle Path B 검증 | 가중치 artifact | ArtifactValidationResult | 정은미 |
-| Code Validator | 검증1(`CODE_AST_SCAN`), 검증2(`CODE_RESTRICTED_RUNTIME`), 검증3(`CODE_SANDBOX_RUNTIME`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
+| Code Validator | 검증1(AST 후보 추출), 검증2(`API_POLICY_SCAN` + contextual safe/review/block), 검증3(`GRADE_DECISION`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
 | Whitelist Engine | API 허용 여부 확인, Pending List 등록/갱신, 리뷰 반영 | API 목록, 미등록 API, 리뷰 결정 | WhitelistCheckResponse, PendingApiRecord, ReviewDecisionResult | 김민우 |
-| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출 | 외부 요청 | ValidationJobResponse | 공통 |
+| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출. proxy 내부에는 검증 로직을 두지 않음 | 외부 요청 | ValidationJobResponse | 공통 |
 
 ### 2.3 내부 API 엔드포인트 계약 (v1.0)
 
@@ -251,11 +251,13 @@ cache_key = sha256 + ":" + file_kind + ":" + policy_fingerprint
 | `PICKLE_PATH_B_SYSCALL_ANOMALY` | 샌드박스 이상 syscall 탐지 |
 | `PICKLE_PATH_AB_MISMATCH` | Path A/B 결과 불일치 |
 | `DANGEROUS_IMPORT` | 위험 import 탐지 |
-| `DANGEROUS_CALL` | eval/exec/open/__import__ 등 위험 호출 |
+| `DANGEROUS_CALL` | eval/exec/compile/__import__/os.system/subprocess 등 즉시 위험 호출 |
 | `DANGEROUS_API` | torch.load/pickle.load/numpy.load 등 위험 API |
 | `OBFUSCATION_PATTERN` | chr/ord/bytes.decode 등 난독화 |
 | `DYNAMIC_PATTERN` | getattr/type/조건부 import 등 동적 패턴 |
 | `UNREGISTERED_API` | 화이트리스트 미등록 API |
+| `CONTEXT_API_REVIEW` | 문맥 의존 API가 리뷰 필요 상태 |
+| `CONTEXT_API_BLOCKED` | 문맥상 위험 API로 판정 |
 | `GRADE_A_REGENERATED` | 등급 A 재생성 성공 |
 | `GRADE_B1_RUNTIME_OK` | B-1 제한 런타임 성공 |
 | `GRADE_B2_GATE_REQUIRED` | B-2 보안 담당자 게이트 필요 |
@@ -487,7 +489,7 @@ _Validation Engine → Proxy_
 | `job_id` | string | Y | 검증 ID |
 | `overall_decision` | string(enum) | Y | `OverallDecision` |
 | `overall_status` | string(enum) | Y | `PASS`, `BLOCK`, `PENDING_REVIEW`, `ERROR` |
-| `release_action` | string | Y | `CACHE_RETURN`, `APPROVE_AND_STORE`, `DENY`, `REVIEW_QUEUE` |
+| `release_action` | string | Y | `CACHE_RETURN`, `APPROVE_AND_STORE`, `DENY`, `REVIEW_QUEUE`, `ERROR` |
 | `artifact_results` | array[`ArtifactValidationResult`] | Y | 파일별 결과 |
 | `approved_artifact_ids` | array[string] | Y | 승인 artifact |
 | `blocked_artifact_ids` | array[string] | Y | 차단 artifact |
@@ -501,9 +503,9 @@ _Validation Engine → Proxy_
 ### overall status 계산 규칙
 
 1. `artifact_results` 중 하나라도 `BLOCK`이면 전체는 `BLOCK`
-2. `BLOCK`이 없고 하나라도 `PENDING_REVIEW`면 전체는 `PENDING_REVIEW`
-3. 모든 artifact가 `PASS`면 전체는 `PASS`
-4. 인프라 실패가 있고 안전한 fallback이 없으면 `ERROR`
+2. `BLOCK`이 없고 하나라도 `ERROR`면 전체는 `ERROR`
+3. `BLOCK`/`ERROR`이 없고 하나라도 `PENDING_REVIEW`면 전체는 `PENDING_REVIEW`
+4. 모든 artifact가 `PASS`면 전체는 `PASS`
 
 ---
 
@@ -683,6 +685,7 @@ _Validation Engine → Proxy_
 |---|---|---|---|
 | `ast_scan` | object | Y | AST 분석 결과 |
 | `api_scan` | object | Y | API 화이트리스트 결과 |
+| `context_api_scan` | object | Y | 문맥 의존 API safe/review/block 판정 결과 |
 | `grade_result` | object | Y | A/B-1/B-2/C 판정 |
 | `runtime_check` | object | Y | 등급별 실행/샌드박스 결과 |
 | `review_queue_entry_id` | string/null | Y | 리뷰 큐 등록 시 ID |
@@ -693,10 +696,11 @@ _Validation Engine → Proxy_
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `imports` | array[string] | Y | import 목록 |
-| `dangerous_imports` | array[string] | Y | `os`, `subprocess`, `socket`, `requests` 등 |
-| `dangerous_calls` | array[string] | Y | `eval`, `exec`, `open`, `__import__` 등 |
+| `dangerous_imports` | array[string] | Y | `subprocess`, `socket`, `requests` 등 즉시 위험 import |
+| `dangerous_calls` | array[string] | Y | `eval`, `exec`, `compile`, `__import__`, `os.system` 등 |
 | `dynamic_patterns` | array[string] | Y | `getattr`, `type(3-arg)`, `conditional_import` |
 | `obfuscation_patterns` | array[string] | Y | `chr`, `ord`, `bytes.decode` 체인 |
+| `contextual_call_candidates` | array[string] | Y | `open`, `os.path`, `Path.read_text` 등 검증 2에서 문맥 분석할 후보 |
 | `has_forward_method` | boolean | Y | `forward()` 존재 여부 |
 | `inherits_pretrained_config` | boolean | Y | A 판정용 |
 | `inherits_nn_module` | boolean | Y | B 계열 판정용 |
@@ -708,11 +712,28 @@ _Validation Engine → Proxy_
 | `used_apis` | array[string] | Y | 전체 추출 API |
 | `allowed_apis` | array[string] | Y | 허용된 API |
 | `blocked_apis` | array[string] | Y | 위험 API |
+| `contextual_apis` | array[string] | Y | 문맥 분석으로 라우팅된 API |
 | `unregistered_apis` | array[string] | Y | 미등록 API |
 | `whitelist_version` | string | Y | 사용 화이트리스트 버전 |
-| `pending_api_refs` | array[string] | Y | pending 등록된 API 경로 |
+| `pending_api_refs` | array[string] | Y | pending 등록 후보 API 경로 |
 
-### 12.4 `grade_result`
+### 12.4 `context_api_scan`
+
+문맥 의존 API는 검증 1에서 후보만 추출하고, 검증 2 API 정책 검사 내부에서 `context_api_scan`으로 판정한다.
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---|---|
+| `open_calls` | array[object] | Y | `open`, `Path.open`, `Path.read_text` 등 파일 읽기/쓰기 후보 |
+| `os_calls` | array[object] | Y | `os.path`, `os.getenv`, `os.environ`, `os.remove` 등 |
+| `path_helper_calls` | array[object] | Y | 경로 조립/조회 helper |
+| `env_access_calls` | array[object] | Y | 환경 변수 접근 |
+| `file_mutation_calls` | array[object] | Y | 파일 생성/수정/삭제/권한 변경 |
+| `network_calls` | array[object] | Y | `requests`, `urllib`, `httpx`, `socket` 등 네트워크 호출 |
+| `summary_decision` | string(enum) | Y | `safe`, `review`, `block` 중 가장 높은 위험도 |
+
+각 항목 객체는 최소 `api`, `category`, `decision`, `reason_code`, `evidence`를 포함한다. `decision=review`는 B-2/PENDING_REVIEW로, `decision=block`은 BLOCK으로 반영한다.
+
+### 12.5 `grade_result`
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
@@ -721,7 +742,9 @@ _Validation Engine → Proxy_
 | `review_action` | string(enum) | Y | `ReviewAction` |
 | `reason_codes` | array[string] | Y | 관련 reason code |
 
-### 12.5 `runtime_check`
+### 12.6 `runtime_check`
+
+1차 코드검증 구현에서는 제한 런타임/gVisor를 실제 실행하지 않고, `runtime_check` 입력과 테스트 stub로만 gate 결과를 표현할 수 있다. 제한 런타임은 B-1 후보 gate이고, gVisor/Docker는 B-2/C 증거 수집과 리뷰 보조용이며 자동 승인 증명이 아니다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
@@ -734,25 +757,28 @@ _Validation Engine → Proxy_
 | `logs_ref` | string/null | Y | 로그 위치 |
 | `status` | string(enum) | Y | `PASS`, `BLOCK`, `PENDING_REVIEW`, `ERROR`, `SKIPPED` |
 
-### 12.6 코드 등급별 고정 규칙
+### 12.7 코드 등급별 고정 규칙
 
 | 조건 | grade | status | review_action | runtime_mode |
 |---|---|---|---|---|
 | PretrainedConfig 상속 + 단순 속성 저장 + 실행 메서드 없음 | `A` | `PASS` | `AUTO_APPROVE_REGENERATED` | `REGENERATE` |
-| `nn.Module`/`PreTrainedModel` + forward 존재 + 허용 API만 사용 + 동적 패턴 없음 | `B-1` | `PASS` | `AUTO_APPROVE` | `RESTRICTED_RUNTIME` |
-| 정형 구조 + 미등록 API 존재 | `B-2` | `PENDING_REVIEW` | `SECURITY_OWNER_GATE` | `SANDBOX` |
+| `nn.Module`/`PreTrainedModel` + forward 존재 + 허용 API만 사용 + 동적 패턴 없음 + 문맥 의존 API 모두 safe + 제한 런타임 통과 | `B-1` | `PASS` | `AUTO_APPROVE` | `RESTRICTED_RUNTIME` |
+| 정형 구조 + 미등록 API 존재 또는 문맥 의존 API review | `B-2` | `PENDING_REVIEW` | `SECURITY_OWNER_GATE` | `SANDBOX` |
 | 동적/난독화/비정형 구조 | `C` | `PENDING_REVIEW` | `MANUAL_REVIEW_REQUIRED` | `SANDBOX` |
 | 위험 import / 위험 call / 위험 API | `C` | `BLOCK` | `BLOCK_IMMEDIATELY` | `NONE` |
 
-### 12.7 등급 판정 우선순위
+### 12.8 등급 판정 우선순위
 
 다음 순서를 **반드시 고정**한다.
 
-1. dangerous import / dangerous call / dangerous API → `BLOCK`
-2. 동적/난독화 패턴 탐지 → `C`
-3. 미등록 API 존재 → `B-2`
-4. `forward()` 존재 + 허용 API만 사용 → `B-1`
-5. `PretrainedConfig` 단순 설정 클래스 → `A`
+1. 호출 대상 해석 실패 + 동적/난독화 패턴 존재 -> `C/PENDING_REVIEW`, 위험 패턴이면 `BLOCK`
+2. `blocked_exact` 또는 `blocked_prefix` 매칭 -> `BLOCK`
+3. 네트워크/프로세스/역직렬화/native loading 계열 -> 기본 `BLOCK`
+4. `contextual_exact` 또는 `contextual_prefix` 매칭 -> context analyzer로 `safe/review/block` 판정
+5. `allowed_exact` 매칭 -> `ALLOWED`
+6. 그 외 -> `UNREGISTERED`, `B-2/PENDING_REVIEW`
+
+등급 확정 시 `context_api_scan.summary_decision=review`는 B-2/PENDING_REVIEW로, `block`은 BLOCK으로 반영한다. `open`, `os.path`, `Path`는 이름만으로 `DANGEROUS_CALL`에 넣지 않고 문맥 분석 결과로 판정한다.
 
 ### 예시
 
@@ -833,6 +859,8 @@ _Validation Engine → Proxy_
 | schema invalid | `BLOCK` |
 | trigger field 없음 + schema valid | `PASS` |
 | trigger field 있음 + 참조 코드 모두 PASS | `PASS` |
+| trigger field 있음 + 참조 코드 없음 | `PENDING_REVIEW` |
+| trigger field 있음 + 참조 코드 로드 실패(MISSING/ERROR) | `PENDING_REVIEW` |
 | trigger field 있음 + 참조 코드 중 PENDING_REVIEW 존재 | `PENDING_REVIEW` |
 | trigger field 있음 + 참조 코드 중 BLOCK 존재 | `BLOCK` |
 
@@ -1297,6 +1325,8 @@ _Validation Engine → Whitelist Engine_
 | `NEW` | safetensors 검증 성공 | `PASS` |
 | `NEW` | pickle Path A 금지 opcode | `BLOCK` |
 | `NEW` | dangerous import/call/api | `BLOCK` |
+| `NEW` | 문맥 의존 API context 판정 block | `BLOCK` |
+| `NEW` | 문맥 의존 API context 판정 review | `PENDING_REVIEW` |
 | `NEW` | 미등록 API | `PENDING_REVIEW` |
 | `NEW` | 동적/난독화 패턴 | `PENDING_REVIEW` |
 | `NEW` | 인프라 오류 | `ERROR` |
@@ -1306,9 +1336,9 @@ _Validation Engine → Whitelist Engine_
 | artifact 조합 | overall_status |
 |---|---|
 | 하나라도 `BLOCK` | `BLOCK` |
-| `BLOCK`는 없고 하나라도 `PENDING_REVIEW` | `PENDING_REVIEW` |
+| `BLOCK`는 없고 하나라도 `ERROR` | `ERROR` |
+| `BLOCK`/`ERROR`는 없고 하나라도 `PENDING_REVIEW` | `PENDING_REVIEW` |
 | 전부 `PASS` | `PASS` |
-| `PASS`/`PENDING_REVIEW`/`BLOCK` 결정 불가 + 인프라 실패 | `ERROR` |
 
 ---
 

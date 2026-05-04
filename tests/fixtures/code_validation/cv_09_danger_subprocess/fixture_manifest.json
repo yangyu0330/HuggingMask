@@ -1,0 +1,15 @@
+{
+  "scenario_id": "cv_09_danger_subprocess",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_subprocess.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_subprocess.py",
+  "expected": {
+    "status": "BLOCK",
+    "grade": "C",
+    "review_action": "BLOCK_IMMEDIATELY",
+    "route_kind": "CODE_AST_SCAN"
+  }
+}

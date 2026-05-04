@@ -1,0 +1,17 @@
+[
+  {
+    "api": "open",
+    "args": [
+      {
+        "kind": "name",
+        "value": "user_path",
+        "source": "user_input",
+        "is_user_input": true
+      },
+      {
+        "kind": "constant_str",
+        "value": "r"
+      }
+    ]
+  }
+]
