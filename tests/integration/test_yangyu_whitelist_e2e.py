@@ -19,7 +19,11 @@ import pytest
 from analyzer.validators.code_api import scan_api_policy
 from analyzer.validators.code_ast import extract_ast_candidates
 from whitelist.engine import WhitelistEngine
-from whitelist.integration import WhitelistEngineLookup, build_compatible_policy
+from whitelist.integration import (
+    WhitelistEngineLookup, build_compatible_policy,
+    run_validation_job_with_whitelist_engine,
+    validate_python_with_whitelist_engine,
+)
 from whitelist.models import (
     EndpointMode, ModelRef, WhitelistSource,
 )
@@ -30,6 +34,44 @@ from whitelist.tables import ApprovedApi
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 MOCK_HF = REPO_ROOT / "mock_hf"
+
+
+# ─────────────────────────────────────────────
+# 양유상 ValidationJob 빌더 (test_validation_flow.py 패턴)
+# ─────────────────────────────────────────────
+
+def _make_policy_info():
+    from analyzer.schemas import PolicyInfo
+    return PolicyInfo(
+        policy_version="policy-2026.05.06",
+        whitelist_version=WHITELIST_VERSION,
+        opcode_policy_version="opcode-2026.05.06",
+        config_schema_version="cfg-2026.05.06",
+        runtime_profile_version="rt-2026.05.06",
+    )
+
+
+def _make_python_artifact(repo_path: str, source: str):
+    import hashlib
+    from pathlib import PurePosixPath
+    from analyzer.schemas import ArtifactRef, FileKind
+
+    digest = hashlib.sha256(f"{repo_path}:{source}".encode("utf-8")).hexdigest()
+    file_name = PurePosixPath(repo_path).name
+    return ArtifactRef(
+        artifact_id=f"sha256:{digest}",
+        repo_path=repo_path,
+        file_name=file_name,
+        file_kind=FileKind.PYTHON,
+        detected_extension=".py",
+        media_type=None,
+        size_bytes=len(source.encode("utf-8")),
+        sha256=digest,
+        source_url=f"https://huggingface.co/org/demo/resolve/main/{repo_path}",
+        temp_local_path=f"/tmp/{file_name}",
+        referenced_by=[],
+        is_generated=False,
+    )
 
 
 def _seed_initial(db):
@@ -215,3 +257,146 @@ class TestAutoPendingRegistration:
 
         # torch.nn.Linear는 시드되어 있으니 PENDING 생성 안 됨
         assert get_pending(db_session, "torch.nn.Linear") is None
+
+
+# ─────────────────────────────────────────────
+# 양유상 PR #14 리뷰 재현 — pickle.loads BLOCK 회귀
+# ─────────────────────────────────────────────
+
+class TestYangyuReviewRegression:
+    """양유상 PR #14 리뷰(2026-05-06)의 재현 시나리오 — `WhitelistEngineLookup`만
+    주입 시 우리 PERMANENTLY_BLOCKED_APIS만 가진 API가 BLOCK이 아닌
+    PENDING_REVIEW로 처리되는 빈틈. wrapper 함수로 해결되었는지 검증.
+    """
+
+    PICKLE_LOADS_SOURCE = (
+        "import pickle\n"
+        "data = b'evil'\n"
+        "obj = pickle.loads(data)\n"
+    )
+
+    def test_validate_python_wrapper_blocks_pickle_loads(
+        self, db_session, model_ref_e2e,
+    ):
+        """validate_python_with_whitelist_engine 단일 진입점.
+
+        ApiPolicy를 직접 주입하므로 양유상 자체 정책에 없는 pickle.loads도
+        우리 PERMANENTLY_BLOCKED_APIS 합집합에서 BLOCK으로 판정.
+        """
+        _seed_initial(db_session)
+        artifact = _make_python_artifact("modeling_unsafe.py", self.PICKLE_LOADS_SOURCE)
+
+        result = validate_python_with_whitelist_engine(
+            artifact, self.PICKLE_LOADS_SOURCE,
+            db=db_session,
+            engine=WhitelistEngine(),
+            job_id="regression-pickle-1",
+            model=model_ref_e2e,
+        )
+
+        from analyzer.schemas import ValidationStatus
+        assert result.status == ValidationStatus.BLOCK, (
+            f"기대 BLOCK, 실제 {result.status}. details={result.details}"
+        )
+        # 양유상 details["api_scan"]["blocked_apis"]에 pickle.loads 있어야
+        api_scan = result.details.get("api_scan", {}) if result.details else {}
+        assert "pickle.loads" in api_scan.get("blocked_apis", [])
+
+    def test_run_validation_job_wrapper_blocks_pickle_loads(
+        self, db_session, model_ref_e2e,
+    ):
+        """run_validation_job_with_whitelist_engine 단일 진입점 (orchestrator).
+
+        orchestrator는 PolicyInfo만 forward하므로 monkey-patched
+        default_api_policy로 우리 합집합 정책이 적용된다.
+        """
+        from analyzer.orchestrator import build_minimal_request
+        from analyzer.schemas import ValidationStatus
+
+        _seed_initial(db_session)
+        policy = _make_policy_info()
+        artifact = _make_python_artifact("modeling_unsafe.py", self.PICKLE_LOADS_SOURCE)
+        request = build_minimal_request(
+            request_id="req-pickle-1", job_id="job-pickle-1",
+            policy=policy, artifacts=[artifact],
+        )
+
+        response = run_validation_job_with_whitelist_engine(
+            request,
+            db=db_session,
+            engine=WhitelistEngine(),
+            model=model_ref_e2e,
+            source_loader={artifact.repo_path: self.PICKLE_LOADS_SOURCE},
+        )
+
+        assert response.overall_status == ValidationStatus.BLOCK, (
+            f"기대 BLOCK, 실제 {response.overall_status}. "
+            f"artifact_results={[(r.artifact.repo_path, r.status) for r in response.artifact_results]}"
+        )
+
+        # 이전 빈틈: blocked_apis가 비고 unregistered_apis에 pickle.loads
+        # 수정 후: blocked_apis에 pickle.loads
+        first = response.artifact_results[0]
+        api_scan = first.details.get("api_scan", {}) if first.details else {}
+        assert "pickle.loads" in api_scan.get("blocked_apis", []), (
+            f"pickle.loads가 blocked_apis에 없음: {api_scan}"
+        )
+
+    def test_other_perm_blocked_apis_also_caught(
+        self, db_session, model_ref_e2e,
+    ):
+        """우리 PERMANENTLY_BLOCKED 중 양유상 default 정책에 없는 다른 API들도
+        모두 BLOCK으로 처리되는지 회귀.
+        """
+        from analyzer.schemas import ValidationStatus
+
+        targets = [
+            ("import marshal\nm = marshal.loads(b'')\n", "marshal.loads"),
+            ("import ctypes\nx = ctypes.CDLL('lib')\n", "ctypes.CDLL"),
+            ("import importlib\nimportlib.import_module('os')\n",
+             "importlib.import_module"),
+        ]
+        _seed_initial(db_session)
+
+        for source, expected_blocked in targets:
+            artifact = _make_python_artifact(
+                f"unsafe_{expected_blocked.replace('.', '_')}.py", source,
+            )
+            result = validate_python_with_whitelist_engine(
+                artifact, source,
+                db=db_session,
+                engine=WhitelistEngine(),
+                job_id=f"regression-{expected_blocked}",
+                model=model_ref_e2e,
+            )
+            assert result.status == ValidationStatus.BLOCK, (
+                f"{expected_blocked}: 기대 BLOCK, 실제 {result.status}"
+            )
+
+    def test_patched_default_policy_restores_after_exit(self):
+        """_patched_default_policy 컨텍스트가 끝난 후 원래 함수로 복원되는지."""
+        from analyzer.validators import code_api_policy as policy_mod
+        from whitelist.integration import _patched_default_policy
+
+        original = policy_mod.default_api_policy
+        try:
+            with _patched_default_policy():
+                assert policy_mod.default_api_policy is not original
+                assert policy_mod.default_api_policy.__name__ == "build_compatible_policy"
+        finally:
+            pass
+        # 빠져나온 후 원래대로
+        assert policy_mod.default_api_policy is original
+
+    def test_patched_default_policy_restores_on_exception(self):
+        """예외 발생해도 원래 함수로 복원."""
+        from analyzer.validators import code_api_policy as policy_mod
+        from whitelist.integration import _patched_default_policy
+
+        original = policy_mod.default_api_policy
+        try:
+            with _patched_default_policy():
+                raise RuntimeError("test exception")
+        except RuntimeError:
+            pass
+        assert policy_mod.default_api_policy is original
