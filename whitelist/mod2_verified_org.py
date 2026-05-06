@@ -38,10 +38,18 @@ class ApiUsage:
 
 @dataclass
 class OrgAnalysisResult:
+    """조직 단위 분석 결과.
+
+    ``apis_by_model``이 진짜 source of truth — API별 실제 사용 모델 목록.
+    ``apis_found``는 호환성을 위해 유지하는 카운트 요약(api_path → 등장 횟수).
+    aggregate 단계의 used_by_models 계산은 반드시 ``apis_by_model``을 사용해야
+    조직 전체 모델로 부풀어오는 일이 없다 (양유상 PR #16 리뷰, 2026-05-06).
+    """
     org_id: str
     org_name: str
     models_analyzed: list[str]
     apis_found: dict[str, int]
+    apis_by_model: dict[str, list[str]] = field(default_factory=dict)
     analyzed_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     errors: list[str] = field(default_factory=list)
 
@@ -176,6 +184,9 @@ class VerifiedOrgAnalyzer:
             )
 
         all_apis: dict[str, int] = {}
+        # API별 실제 사용 모델 목록 — 모델 단위 추출 결과를 정확히 보존.
+        # aggregate 단계가 이 dict로 used_by_models를 계산해야 정확하다.
+        apis_by_model: dict[str, list[str]] = {}
         analyzed_models: list[str] = []
         errors: list[str] = []
 
@@ -184,6 +195,8 @@ class VerifiedOrgAnalyzer:
             files = model_info.get("files", [])
             py_files = [f for f in files if f.endswith(".py")]
             extracted_anything = False
+            # 이 모델에서 추출된 API set (중복 제거 + 누적용)
+            apis_for_this_model: set[str] = set()
 
             for filename in py_files:
                 try:
@@ -193,6 +206,7 @@ class VerifiedOrgAnalyzer:
                     apis = self._extractor.extract_all(source)
                     for api in apis:
                         all_apis[api] = all_apis.get(api, 0) + 1
+                        apis_for_this_model.add(api)
                     if apis:
                         extracted_anything = True
                 except Exception as e:
@@ -205,6 +219,7 @@ class VerifiedOrgAnalyzer:
                         config_apis = extract_apis_from_config(config_text)
                         for api in config_apis:
                             all_apis[api] = all_apis.get(api, 0) + 1
+                            apis_for_this_model.add(api)
                         if config_apis:
                             logger.info(
                                 "config.json 폴백: %s에서 %d개 API 추출",
@@ -214,11 +229,18 @@ class VerifiedOrgAnalyzer:
                     errors.append(f"{model_id}/config.json: {e}")
 
             analyzed_models.append(model_id)
+            # 이 모델이 실제 사용한 API에 model_id를 등록
+            for api in apis_for_this_model:
+                bucket = apis_by_model.setdefault(api, [])
+                if model_id and model_id not in bucket:
+                    bucket.append(model_id)
 
         return OrgAnalysisResult(
             org_id=org_id, org_name=org_name,
             models_analyzed=analyzed_models,
-            apis_found=all_apis, errors=errors,
+            apis_found=all_apis,
+            apis_by_model=apis_by_model,
+            errors=errors,
         )
 
     def analyze_all_orgs(self, model_limit: int = 10) -> list[OrgAnalysisResult]:
@@ -238,7 +260,12 @@ def aggregate_org_results(
     results: list[OrgAnalysisResult],
     existing_whitelist: set[str],
 ) -> list[ApiUsage]:
-    """미등록 API들을 verified org 사용 횟수 기준으로 집계."""
+    """미등록 API들을 verified org 사용 횟수 기준으로 집계.
+
+    used_by_models는 ``apis_by_model`` (API별 실제 사용 모델)로 계산한다.
+    이전엔 ``models_analyzed`` (조직 전체 모델)를 모든 API에 박아 부풀어
+    오르는 버그가 있었다 (양유상 PR #16 리뷰, 2026-05-06).
+    """
     usage_map: dict[str, ApiUsage] = {}
     for result in results:
         for api_path, count in result.apis_found.items():
@@ -249,7 +276,8 @@ def aggregate_org_results(
             usage = usage_map[api_path]
             if result.org_id not in usage.used_by_orgs:
                 usage.used_by_orgs.append(result.org_id)
-            for model in result.models_analyzed:
+            # API별 실제 사용 모델만 누적 (조직 전체 모델 아님)
+            for model in result.apis_by_model.get(api_path, []):
                 if model not in usage.used_by_models:
                     usage.used_by_models.append(model)
             usage.total_count += count
