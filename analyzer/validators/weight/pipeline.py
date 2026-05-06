@@ -4,15 +4,19 @@ from pathlib import Path
 from typing import Any
 
 from analyzer.utils import build_cache_key
-from analyzer.validators.weight.hashing import sha256_file
-from analyzer.validators.weight.validators.pickle_opcode_parser import validate_pickle
-from analyzer.validators.weight.validators.safetensors_validator import validate_safetensors
-from analyzer.validators.weight.validators.yara_scanner import scan_with_yara
-from analyzer.validators.weight.validators.modelscan_wrapper import scan_with_modelscan
 from analyzer.validators.weight.cache import get_cache, set_cache
-from analyzer.validators.weight.sandbox.docker_runner import run_in_docker
+from analyzer.validators.weight.convert.to_safetensors import (
+    convert_tensor_dict_to_safetensors,
+)
 from analyzer.validators.weight.diff.checker import compare_tensor_reports
-from analyzer.validators.weight.convert.to_safetensors import convert_tensor_dict_to_safetensors
+from analyzer.validators.weight.hashing import sha256_file
+from analyzer.validators.weight.sandbox.docker_runner import run_in_docker
+from analyzer.validators.weight.validators.modelscan_wrapper import scan_with_modelscan
+from analyzer.validators.weight.validators.pickle_opcode_parser import validate_pickle
+from analyzer.validators.weight.validators.safetensors_validator import (
+    validate_safetensors,
+)
+from analyzer.validators.weight.validators.yara_scanner import scan_with_yara
 
 
 def _make_cacheable(obj: Any):
@@ -30,14 +34,32 @@ def _make_cacheable(obj: Any):
     return obj
 
 
+def _hash_mismatch_result(
+    file_hash: str,
+    expected_sha256: str,
+    file_kind: str,
+    cache_key: str,
+) -> dict:
+    return {
+        "status": "BLOCK",
+        "reason_code": "ARTIFACT_HASH_MISMATCH",
+        "reason": "artifact file hash does not match expected sha256",
+        "sha256": file_hash,
+        "expected_sha256": expected_sha256,
+        "file_kind": file_kind,
+        "cache_key": cache_key,
+    }
+
+
 def validate_pickle_pipeline(
     path: str,
     policy_fingerprint: str,
     sandbox_image: str = "weight-sandbox",
     enable_path_b: bool = False,
     runtime: str = "runc",
+    file_hash: str | None = None,
 ) -> dict:
-    file_hash = sha256_file(path)
+    file_hash = file_hash or sha256_file(path)
     cache_key = build_cache_key(file_hash, "PICKLE", policy_fingerprint)
 
     cached = get_cache(cache_key)
@@ -122,6 +144,7 @@ def validate_pickle_pipeline(
                 result["status"] = "BLOCK"
                 result["stage"] = "DIFF"
                 result["reason_code"] = "PICKLE_PATH_AB_MISMATCH"
+                result["reason"] = "Path A and Path B tensor reports do not match"
                 set_cache(cache_key, _make_cacheable(result))
                 return result
         else:
@@ -144,6 +167,8 @@ def validate_pickle_pipeline(
         if convert_result["status"] == "BLOCK":
             result["status"] = "BLOCK"
             result["stage"] = "CONVERT"
+            result["reason_code"] = convert_result.get("reason_code", "PICKLE_CONVERT_FAILED")
+            result["reason"] = convert_result.get("reason", "pickle to safetensors conversion failed")
             set_cache(cache_key, _make_cacheable(result))
             return result
     else:
@@ -160,12 +185,28 @@ def validate(
     path: str,
     policy_fingerprint: str,
     expected_sha256: str | None = None,
+    file_kind: str | None = None,
     enable_path_b: bool = False,
 ):
     file_hash = sha256_file(path)
 
-    if path.endswith(".safetensors"):
-        cache_key = build_cache_key(file_hash, "SAFETENSORS", policy_fingerprint)
+    normalized_kind = file_kind or (
+        "SAFETENSORS" if path.endswith(".safetensors") else "PICKLE"
+    )
+
+    cache_key = build_cache_key(file_hash, normalized_kind, policy_fingerprint)
+
+    # 중요: expected_sha256 검증은 cache 조회보다 먼저 해야 함.
+    # 그래야 이전 PASS 캐시가 잘못된 expected hash 요청을 우회하지 못함.
+    if expected_sha256 and expected_sha256 != file_hash:
+        return _hash_mismatch_result(
+            file_hash=file_hash,
+            expected_sha256=expected_sha256,
+            file_kind=normalized_kind,
+            cache_key=cache_key,
+        )
+
+    if normalized_kind == "SAFETENSORS":
         cached = get_cache(cache_key)
         if cached:
             cached["cached"] = True
@@ -177,8 +218,18 @@ def validate(
         set_cache(cache_key, _make_cacheable(result))
         return result
 
-    return validate_pickle_pipeline(
-        path=path,
-        policy_fingerprint=policy_fingerprint,
-        enable_path_b=enable_path_b,
-    )
+    if normalized_kind == "PICKLE":
+        return validate_pickle_pipeline(
+            path=path,
+            policy_fingerprint=policy_fingerprint,
+            enable_path_b=enable_path_b,
+            file_hash=file_hash,
+        )
+
+    return {
+        "status": "SKIPPED",
+        "reason_code": "NOT_WEIGHT_ARTIFACT",
+        "reason": f"unsupported weight validator file kind: {normalized_kind}",
+        "file_sha256": file_hash,
+        "cache_key": cache_key,
+    }

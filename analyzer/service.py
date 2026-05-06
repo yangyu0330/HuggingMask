@@ -1,13 +1,27 @@
+from datetime import UTC, datetime
 from pathlib import Path
 
 from analyzer.schemas import (
     ArtifactRef,
     ArtifactValidationResult,
+    CodeGrade,
+    OverallDecision,
+    ReasonEntry,
+    ReviewAction,
+    RouteKind,
     ValidationJobRequest,
     ValidationJobResponse,
-    ReasonEntry,
+    ValidationStatus,
 )
 from analyzer.validators.weight.pipeline import validate
+
+
+WEIGHT_FILE_KINDS = {"SAFETENSORS", "PICKLE"}
+
+
+def _now() -> str:
+    return datetime.now(UTC).isoformat()
+
 
 def _json_safe(obj):
     if isinstance(obj, dict):
@@ -45,6 +59,14 @@ def _extract_reason(core_result: dict):
     return reason_code or "UNKNOWN", reason_message or "no message"
 
 
+def _route_kind_for(artifact) -> RouteKind:
+    if artifact.file_kind == "SAFETENSORS":
+        return RouteKind.SAFETENSORS_FAST_PATH
+    if artifact.file_kind == "PICKLE":
+        return RouteKind.PICKLE_PATH_A
+    return RouteKind.CONFIG_SCHEMA_VALIDATION
+
+
 def _build_generated_artifact(artifact, core_result: dict):
     converted = core_result.get("converted")
     if not isinstance(converted, dict):
@@ -76,51 +98,121 @@ def _build_generated_artifact(artifact, core_result: dict):
     )
 
 
-def _map_result(artifact, core_result, policy_fingerprint):
-    status = "PASS" if core_result.get("status") == "PASS" else "BLOCK"
-
-    reason_code, reason_message = _extract_reason(core_result)
+def _build_result(
+    artifact,
+    status: str,
+    reason_code: str,
+    reason_message: str,
+    details: dict,
+    generated_artifact=None,
+) -> ArtifactValidationResult:
+    safe_details = _json_safe(details)
 
     return ArtifactValidationResult(
         artifact=artifact,
-        status=status,
+        route_kind=_route_kind_for(artifact),
+        status=ValidationStatus(status),
+        grade=CodeGrade.NA,
+        review_action=ReviewAction.NONE,
+        cache_key=safe_details.get("cache_key", ""),
+        cache_hit=bool(safe_details.get("cached", False)),
         reason_entries=[
             ReasonEntry(
                 code=reason_code,
                 message=reason_message,
             )
         ],
-        detail=_json_safe(core_result),
+        started_at=_now(),
+        finished_at=_now(),
+        details=safe_details,
+        generated_artifact=generated_artifact,
+    )
+
+
+def _map_result(artifact, core_result, policy_fingerprint):
+    status = "PASS" if core_result.get("status") == "PASS" else "BLOCK"
+
+    reason_code, reason_message = _extract_reason(core_result)
+
+    return _build_result(
+        artifact=artifact,
+        status=status,
+        reason_code=reason_code,
+        reason_message=reason_message,
+        details=core_result,
         generated_artifact=_build_generated_artifact(artifact, core_result),
     )
 
 
 def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
     results = []
+    generated_artifacts = []
+    approved_artifact_ids = []
+    blocked_artifact_ids = []
+    pending_artifact_ids = []
     overall_status = "PASS"
 
-    for artifact in job.artifacts:
-        expected_sha256 = None
+    policy_fingerprint = job.policy_fingerprint or "default-policy"
 
-        if artifact.file_kind == "SAFETENSORS":
-            expected_sha256 = artifact.sha256
+    for artifact in job.artifacts:
+        if artifact.file_kind not in WEIGHT_FILE_KINDS:
+            mapped = _build_result(
+                artifact=artifact,
+                status="SKIPPED",
+                reason_code="NOT_WEIGHT_ARTIFACT",
+                reason_message="artifact skipped because it is not a weight artifact",
+                details={
+                    "status": "SKIPPED",
+                    "reason_code": "NOT_WEIGHT_ARTIFACT",
+                    "reason": "artifact skipped because it is not a weight artifact",
+                },
+            )
+
+            results.append(mapped)
+            pending_artifact_ids.append(artifact.artifact_id)
+            continue
 
         core = validate(
             path=artifact.temp_local_path,
-            policy_fingerprint=job.policy_fingerprint,
-            expected_sha256=expected_sha256,
+            policy_fingerprint=policy_fingerprint,
+            expected_sha256=artifact.sha256,
+            file_kind=artifact.file_kind,
             enable_path_b=getattr(job, "enable_path_b", False),
         )
 
-        mapped = _map_result(artifact, core, job.policy_fingerprint)
+        mapped = _map_result(artifact, core, policy_fingerprint)
         results.append(mapped)
 
-        if mapped.status == "BLOCK":
+        if mapped.generated_artifact is not None:
+            generated_artifacts.append(mapped.generated_artifact)
+
+        if mapped.status == ValidationStatus.BLOCK:
             overall_status = "BLOCK"
+            blocked_artifact_ids.append(artifact.artifact_id)
+        elif mapped.status == ValidationStatus.PASS:
+            approved_artifact_ids.append(artifact.artifact_id)
+        else:
+            pending_artifact_ids.append(artifact.artifact_id)
+
+    decision = (
+        OverallDecision.DENY
+        if overall_status == "BLOCK"
+        else OverallDecision.APPROVE
+    )
 
     return ValidationJobResponse(
         request_id=job.request_id,
         job_id=job.job_id,
-        overall_status=overall_status,
+        overall_decision=decision,
+        overall_status=ValidationStatus(overall_status),
+        release_action="DENY" if overall_status == "BLOCK" else "APPROVE",
         artifact_results=results,
+        approved_artifact_ids=approved_artifact_ids,
+        blocked_artifact_ids=blocked_artifact_ids,
+        pending_artifact_ids=pending_artifact_ids,
+        generated_artifacts=generated_artifacts,
+        report_id=f"report-{job.job_id}",
+        report_path="",
+        reason_entries=[],
+        created_at=_now(),
     )

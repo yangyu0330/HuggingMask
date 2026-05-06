@@ -1,0 +1,142 @@
+"""
+화이트리스트 규칙 — namespace 매칭 + 영구 차단 + 위험 키워드
+
+설계 원칙 (whitelist/rules.md):
+- 위험 API는 명시적 block 목록에 둔다.
+- torch.nn.* 같은 namespace allow는 범위를 좁게 유지한다.
+- 규칙 변경 시 whitelist version을 갱신한다.
+
+규칙은 결정론적이며 LLM을 사용하지 않는다 (감사 가능성 보장).
+"""
+
+from whitelist.models import PendingClassification
+
+
+# ─────────────────────────────────────────────
+# 정책 버전 — 규칙 변경 시 반드시 갱신
+# 형식: wl-YYYY.MM.DD (인터페이스 정의서 14.2절 예시 기준)
+# ─────────────────────────────────────────────
+
+WHITELIST_VERSION = "wl-2026.04.20"
+
+
+# ─────────────────────────────────────────────
+# 네임스페이스 기반 분류 권고 규칙
+# longest-prefix match로 매칭하여 PendingClassification 권고값 결정
+# ─────────────────────────────────────────────
+
+NAMESPACE_RULES: dict[str, PendingClassification] = {
+    # 자동 승인 권고: 순수 텐서 연산
+    "torch.nn.":                  PendingClassification.AUTO_APPROVE,
+    "torch.nn.functional.":       PendingClassification.AUTO_APPROVE,
+    "torch.Tensor.":              PendingClassification.AUTO_APPROVE,
+    "torch.autograd.":            PendingClassification.AUTO_APPROVE,
+    "torch.linalg.":              PendingClassification.AUTO_APPROVE,
+    "torch.fft.":                 PendingClassification.AUTO_APPROVE,
+    "torch.special.":             PendingClassification.AUTO_APPROVE,
+
+    # 조건부: 대부분 안전하나 주의 필요
+    "torch.optim.":               PendingClassification.CONDITIONAL,
+    "torch.cuda.":                PendingClassification.CONDITIONAL,
+    "torch.amp.":                 PendingClassification.CONDITIONAL,
+    "torch.backends.":            PendingClassification.CONDITIONAL,
+    "numpy.":                     PendingClassification.CONDITIONAL,
+    "transformers.":              PendingClassification.CONDITIONAL,
+
+    # 수동 리뷰: 파일 I/O, 네트워크, 동적 코드 가능
+    "torch.utils.":               PendingClassification.MANUAL,
+    "torch.distributed.":         PendingClassification.MANUAL,
+    "torch.jit.":                 PendingClassification.MANUAL,
+    "torch.onnx.":                PendingClassification.MANUAL,
+    "torch.multiprocessing.":     PendingClassification.MANUAL,
+    "torch.hub.":                 PendingClassification.MANUAL,
+
+    # 명시적 위험 (sub-namespace)
+    "pickle.":                    PendingClassification.BLOCKED,
+    "os.":                        PendingClassification.BLOCKED,
+    "subprocess.":                PendingClassification.BLOCKED,
+    "importlib.":                 PendingClassification.BLOCKED,
+    "ctypes.":                    PendingClassification.BLOCKED,
+}
+
+
+# ─────────────────────────────────────────────
+# 명시적 차단 목록 (block 우선 — engine.md:21)
+# 어떤 경우에도 ALLOWED가 될 수 없다
+# ─────────────────────────────────────────────
+
+PERMANENTLY_BLOCKED_APIS: set[str] = {
+    "torch.load",
+    "torch.save",
+    "pickle.load",
+    "pickle.loads",
+    "numpy.load",
+    "numpy.save",
+    "shelve.open",
+    "marshal.loads",
+    "yaml.load",          # yaml.safe_load만 허용
+    "yaml.unsafe_load",
+    "builtins.eval",
+    "builtins.exec",
+    "builtins.__import__",
+    "builtins.compile",
+    "os.system",
+    "os.popen",
+    "os.exec",
+    "os.spawn",
+    "subprocess.call",
+    "subprocess.run",
+    "subprocess.Popen",
+    "importlib.import_module",
+    "ctypes.cdll",
+    "ctypes.CDLL",
+}
+
+
+# ─────────────────────────────────────────────
+# 위험 키워드 — 함수명에 포함 시 권고 등급 격상
+# (자동 승인 namespace에 속해도 격상)
+# ─────────────────────────────────────────────
+
+DANGER_KEYWORDS_IO: set[str] = {
+    "load", "save", "dump", "open", "write", "read",
+    "download", "fetch", "upload", "from_pretrained",
+}
+
+DANGER_KEYWORDS_EXEC: set[str] = {
+    "exec", "eval", "compile", "system", "popen",
+    "spawn", "fork", "call", "run",
+}
+
+DANGER_KEYWORDS: set[str] = DANGER_KEYWORDS_IO | DANGER_KEYWORDS_EXEC
+
+
+# ─────────────────────────────────────────────
+# 오탐 피드백 SLA (시간) — review_status별 응답 목표
+# ─────────────────────────────────────────────
+
+SLA_HOURS: dict[PendingClassification, int] = {
+    PendingClassification.AUTO_APPROVE: 4,
+    PendingClassification.CONDITIONAL:  24,
+    PendingClassification.MANUAL:       48,
+    PendingClassification.BLOCKED:      0,
+}
+
+
+# ─────────────────────────────────────────────
+# 외부 참조 URL 생성 (PendingApiRecord.documentation_url)
+# ─────────────────────────────────────────────
+
+def documentation_url_for(api_path: str) -> str | None:
+    """API 경로 → 공식 문서 링크 추정.
+
+    매칭되지 않으면 None. 추후 모듈 1 크롤러가 정확한 URL을 채울 수 있다.
+    """
+    if api_path.startswith("torch."):
+        return f"https://pytorch.org/docs/stable/generated/{api_path}.html"
+    if api_path.startswith("transformers."):
+        return f"https://huggingface.co/docs/transformers/main_classes/model"
+    if api_path.startswith("numpy."):
+        sym = api_path.split(".", 1)[1]
+        return f"https://numpy.org/doc/stable/reference/generated/numpy.{sym}.html"
+    return None

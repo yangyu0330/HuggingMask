@@ -6,3 +6,7 @@ __pycache__/
 .DS_Store
 cache_store.json
 generated/
+*.db
+*.db.backup
+*.sqlite
+*.sqlite3

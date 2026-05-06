@@ -1,0 +1,16 @@
+{
+  "scenario_id": "cv_15_unknown_no_auto_pass",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "random_script.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "random_script.py",
+  "expected": {
+    "not_pass": true,
+    "allowed_statuses": [
+      "PENDING_REVIEW",
+      "SKIPPED"
+    ]
+  }
+}

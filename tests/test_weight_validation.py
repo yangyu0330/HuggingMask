@@ -48,6 +48,24 @@ def _payload(
     }
 
 
+def _payload_with_real_hash(
+    path: Path,
+    file_kind: str,
+    ext: str,
+    policy: str,
+    enable_path_b: bool = False,
+):
+    digest = sha256_file(str(path))
+    return _payload(
+        path=path,
+        file_kind=file_kind,
+        ext=ext,
+        sha256=digest,
+        policy=policy,
+        enable_path_b=enable_path_b,
+    )
+
+
 def test_safetensors_pass(tmp_path: Path):
     path = tmp_path / "model.safetensors"
     save_file(
@@ -55,11 +73,14 @@ def test_safetensors_pass(tmp_path: Path):
         str(path),
     )
 
-    digest = sha256_file(str(path))
-
     response = client.post(
         "/internal/v1/validation/jobs",
-        json=_payload(path, "SAFETENSORS", ".safetensors", digest, "test-safe-pass"),
+        json=_payload_with_real_hash(
+            path,
+            "SAFETENSORS",
+            ".safetensors",
+            "test-safe-pass",
+        ),
     )
 
     assert response.status_code == 200
@@ -87,13 +108,14 @@ def test_safetensors_hash_mismatch_blocks(tmp_path: Path):
 
     assert body["overall_status"] == "BLOCK"
     assert body["artifact_results"][0]["status"] == "BLOCK"
-    assert body["artifact_results"][0]["reason_entries"][0]["code"] == "SAFE_TENSORS_HASH_MISMATCH"
+    assert body["artifact_results"][0]["reason_entries"][0]["code"] == "ARTIFACT_HASH_MISMATCH"
 
 
 def test_malicious_pickle_blocks(tmp_path: Path):
     class Exploit:
         def __reduce__(self):
             import os
+
             return (os.system, ("echo hacked",))
 
     path = tmp_path / "malicious.pkl"
@@ -103,7 +125,12 @@ def test_malicious_pickle_blocks(tmp_path: Path):
 
     response = client.post(
         "/internal/v1/validation/jobs",
-        json=_payload(path, "PICKLE", ".pkl", "dummy", "test-pickle-block"),
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".pkl",
+            "test-pickle-block",
+        ),
     )
 
     assert response.status_code == 200
@@ -137,7 +164,12 @@ def test_safe_schema_pickle_passes_and_converts(tmp_path: Path):
 
     response = client.post(
         "/internal/v1/validation/jobs",
-        json=_payload(path, "PICKLE", ".pkl", "dummy", "test-pickle-pass"),
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".pkl",
+            "test-pickle-pass",
+        ),
     )
 
     assert response.status_code == 200
@@ -148,6 +180,6 @@ def test_safe_schema_pickle_passes_and_converts(tmp_path: Path):
     assert body["overall_status"] == "PASS"
     assert result["status"] == "PASS"
     assert result["reason_entries"][0]["code"] == "PICKLE_OPCODE_ALLOWED_ONLY"
-    assert result["detail"]["converted"]["status"] == "PASS"
+    assert result["details"]["converted"]["status"] == "PASS"
     assert result["generated_artifact"] is not None
     assert result["generated_artifact"]["file_kind"] == "SAFETENSORS"

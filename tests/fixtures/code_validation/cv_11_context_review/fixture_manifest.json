@@ -1,0 +1,17 @@
+{
+  "scenario_id": "cv_11_context_review",
+  "validator": "code",
+  "artifact": {
+    "repo_path": "modeling_context_review.py",
+    "file_kind": "PYTHON"
+  },
+  "source_file": "modeling_context_review.py",
+  "ast_call_metadata_file": "ast_call_metadata.json",
+  "expected": {
+    "status": "PENDING_REVIEW",
+    "grade": "B-2",
+    "review_action": "SECURITY_OWNER_GATE",
+    "route_kind": "CODE_SANDBOX_RUNTIME",
+    "context_summary_decision": "review"
+  }
+}
