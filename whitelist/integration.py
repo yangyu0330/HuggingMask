@@ -216,8 +216,150 @@ def _placeholder_model() -> ModelRef:
     )
 
 
+# ─────────────────────────────────────────────
+# 통합 진입점 — lookup + compatible policy 한 번에 주입
+# ─────────────────────────────────────────────
+#
+# 양유상 PR #14 리뷰 (2026-05-06):
+#   `WhitelistEngineLookup`만 주입하면 `build_compatible_policy()`가
+#   자동으로 적용되지 않아, 우리 PERMANENTLY_BLOCKED_APIS만 가진 API
+#   (예: pickle.loads)가 BLOCK이 아닌 PENDING_REVIEW로 처리됨.
+#
+# 해결: 두 객체가 항상 함께 가도록 wrapper 제공. 호출자는 lookup·policy를
+# 따로 만들지 않고 wrapper 한 번으로 끝낸다.
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _patched_default_policy():
+    """양유상 ``default_api_policy``를 ``build_compatible_policy``로 임시 교체.
+
+    orchestrator → dispatch_artifacts → validate_python_artifact 흐름에서
+    PolicyInfo만 forward되기 때문에 ``_resolve_api_policy``가 결국
+    ``default_api_policy(policy_version=...)``를 호출한다. 그 호출이 우리
+    합집합 정책을 반환하도록 모듈 함수를 임시 교체한다.
+
+    Python ``from x import y`` 의미상 import 시점에 이름이 바인딩되므로
+    ``code_api_policy`` 원본 외에도 ``code_validator`` / ``code_api`` 같은
+    소비자 모듈의 이름까지 함께 교체해야 모든 호출이 합집합 정책을 본다.
+
+    Limitation: module-level patch라 multi-thread 동시 호출에는 한 번에
+    한 흐름만 안전. 단일 스레드(CLI/테스트/데모)에서 사용. 향후 양유상
+    측에서 ``_resolve_api_policy``가 우리 합집합 정책을 인식하도록 개선되면
+    이 patch는 제거 가능.
+    """
+    from analyzer.validators import code_api_policy as _policy_mod
+    from analyzer.validators import code_api as _api_mod
+    from analyzer.validators import code_validator as _validator_mod
+
+    sites = [_policy_mod, _api_mod, _validator_mod]
+    originals: list[tuple] = []
+    for mod in sites:
+        if hasattr(mod, "default_api_policy"):
+            originals.append((mod, mod.default_api_policy))
+            mod.default_api_policy = build_compatible_policy
+    try:
+        yield
+    finally:
+        for mod, original in originals:
+            mod.default_api_policy = original
+
+
+def validate_python_with_whitelist_engine(
+    artifact,
+    source,
+    *,
+    db: Session,
+    engine: WhitelistEngine | None = None,
+    job_id: str = "",
+    model: ModelRef | None = None,
+    api_policy: ApiPolicy | None = None,
+    **forward,
+):
+    """``validate_python_artifact`` + 어댑터 + 합집합 정책 단일 진입점.
+
+    양유상 validator가 ``policy: PolicyInfo | ApiPolicy | None``을 받으므로
+    ApiPolicy를 직접 주입 (monkey-patch 불필요).
+
+    Args:
+        artifact: ``ArtifactRef``
+        source: Python 소스 (str | bytes)
+        db: SQLAlchemy 세션
+        engine: ``WhitelistEngine`` (기본 싱글턴)
+        job_id, model: audit / pending 등록용 메타데이터
+        api_policy: ``ApiPolicy`` (None이면 ``build_compatible_policy()``)
+        **forward: ``validate_python_artifact``의 나머지 인자
+            (``runtime_check`` / ``ast_call_metadata``)
+
+    Returns:
+        ``ArtifactValidationResult``
+    """
+    from analyzer.validators.code_validator import validate_python_artifact
+
+    resolved_policy = api_policy or build_compatible_policy()
+    with WhitelistEngineLookup(
+        db=db, engine=engine, job_id=job_id, model=model,
+    ) as lookup:
+        return validate_python_artifact(
+            artifact=artifact,
+            source=source,
+            policy=resolved_policy,
+            whitelist_lookup=lookup,
+            **forward,
+        )
+
+
+def run_validation_job_with_whitelist_engine(
+    request,
+    *,
+    db: Session,
+    engine: WhitelistEngine | None = None,
+    job_id: str = "",
+    model: ModelRef | None = None,
+    **forward,
+):
+    """``run_validation_job`` + 어댑터 + 합집합 정책 단일 진입점.
+
+    orchestrator가 ``PolicyInfo``만 forward해서 ApiPolicy 직접 주입 불가.
+    ``_patched_default_policy()`` contextmanager로 ``default_api_policy``를
+    임시 교체하여 ``_resolve_api_policy`` 결과가 합집합 정책이 되도록 한다.
+
+    Args:
+        request: ``ValidationJobRequest`` (또는 dict)
+        db: SQLAlchemy 세션
+        engine, job_id, model: 어댑터 메타데이터
+        **forward: ``run_validation_job``의 나머지 인자
+            (``source_loader`` / ``runtime_check_loader`` /
+             ``ast_call_metadata_loader``)
+
+    Returns:
+        ``ValidationJobResponse``
+
+    주의:
+        monkey-patch는 module-level이라 multi-thread 동시 호출 시 한 번에
+        한 흐름만 안전. 단일 스레드(CLI/테스트/데모)에서 사용.
+    """
+    from analyzer.orchestrator import run_validation_job
+
+    # request에서 job_id 자동 채움 (있으면)
+    if not job_id and hasattr(request, "job_id"):
+        job_id = getattr(request, "job_id", "") or ""
+
+    with WhitelistEngineLookup(
+        db=db, engine=engine, job_id=job_id, model=model,
+    ) as lookup, _patched_default_policy():
+        return run_validation_job(
+            request,
+            whitelist_lookup=lookup,
+            **forward,
+        )
+
+
 __all__ = [
     "WhitelistEngineLookup",
     "build_compatible_policy",
     "register_pending_from_apis",
+    "validate_python_with_whitelist_engine",
+    "run_validation_job_with_whitelist_engine",
 ]
