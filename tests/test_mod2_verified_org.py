@@ -183,12 +183,16 @@ class TestVerifiedOrgAnalyzer:
 
 class TestAggregate:
 
-    def _make_result(self, org_id: str, apis: dict[str, int], models=None):
+    def _make_result(
+        self, org_id: str, apis: dict[str, int],
+        models=None, apis_by_model=None,
+    ):
         from whitelist.mod2_verified_org import OrgAnalysisResult
         return OrgAnalysisResult(
             org_id=org_id, org_name=org_id,
             models_analyzed=models or [f"{org_id}/x"],
             apis_found=apis,
+            apis_by_model=apis_by_model or {},
         )
 
     def test_filters_existing_whitelist(self):
@@ -220,3 +224,139 @@ class TestAggregate:
         # api.X는 3개 org, api.Y는 1개 org
         assert agg[0].api_path == "api.X"
         assert len(agg[0].used_by_orgs) == 3
+
+
+# ─────────────────────────────────────────────
+# 양유상 PR #16 리뷰 회귀
+# ─────────────────────────────────────────────
+
+class TestYangyuPR16Regression:
+    """양유상 PR #16 리뷰 (2026-05-06):
+    1) used_by_models가 조직 전체 모델로 부풀어오는 버그
+    2) (별도 파일) 도메인 화이트리스트 suffix 우회 취약점
+    """
+
+    def _make_result(
+        self, org_id: str, apis: dict[str, int],
+        models=None, apis_by_model=None,
+    ):
+        from whitelist.mod2_verified_org import OrgAnalysisResult
+        return OrgAnalysisResult(
+            org_id=org_id, org_name=org_id,
+            models_analyzed=models or [f"{org_id}/x"],
+            apis_found=apis,
+            apis_by_model=apis_by_model or {},
+        )
+
+    def test_used_by_models_only_actual_users(self):
+        """A 모델만 X API, B 모델만 Y API를 써도 두 API 모두 [A, B]로
+        부풀어오르지 않아야 한다. 양유상 재현 시나리오 그대로.
+        """
+        result = self._make_result(
+            "meta-llama",
+            apis={"torch.nn.Linear": 1, "numpy.zeros": 1},
+            models=["meta-llama/A", "meta-llama/B"],
+            apis_by_model={
+                "torch.nn.Linear": ["meta-llama/A"],   # A만 사용
+                "numpy.zeros":     ["meta-llama/B"],   # B만 사용
+            },
+        )
+        agg = aggregate_org_results([result], existing_whitelist=set())
+        by_path = {u.api_path: u for u in agg}
+
+        assert by_path["torch.nn.Linear"].used_by_models == ["meta-llama/A"]
+        assert by_path["numpy.zeros"].used_by_models == ["meta-llama/B"]
+        # 부풀어오르면 안 됨
+        assert "meta-llama/B" not in by_path["torch.nn.Linear"].used_by_models
+        assert "meta-llama/A" not in by_path["numpy.zeros"].used_by_models
+
+    def test_apis_by_model_populated_by_analyzer(self):
+        """VerifiedOrgAnalyzer.analyze_org가 apis_by_model을 정확히 채우는지."""
+        from whitelist.mod2_verified_org import VerifiedOrgAnalyzer
+
+        class MultiModelFetcher:
+            def list_models(self, org_id, limit):
+                return [
+                    {"id": "org/A", "files": ["modeling_a.py"]},
+                    {"id": "org/B", "files": ["modeling_b.py"]},
+                ]
+
+            def get_file(self, model_id, filename):
+                if model_id == "org/A" and filename == "modeling_a.py":
+                    return "from torch import nn\nx = nn.Linear(2,2)\n"
+                if model_id == "org/B" and filename == "modeling_b.py":
+                    return "import numpy as np\ny = np.zeros(3)\n"
+                return ""
+
+        analyzer = VerifiedOrgAnalyzer(fetcher=MultiModelFetcher())
+        result = analyzer.analyze_org("meta-llama", model_limit=10)
+
+        # apis_by_model이 모델별 실제 사용 API만 가져야 함
+        # A는 torch.nn 관련만, B는 numpy 관련만
+        for api, models in result.apis_by_model.items():
+            assert len(models) >= 1
+            if api.startswith("torch"):
+                assert "org/A" in models
+                assert "org/B" not in models  # 부풀어오르면 안 됨
+            if api.startswith("numpy"):
+                assert "org/B" in models
+                assert "org/A" not in models  # 부풀어오르면 안 됨
+
+
+class TestDomainAllowlistSuffixBypass:
+    """양유상 PR #16 리뷰 1번 — host.endswith(d)는 evilpytorch.org도 통과시킴.
+    OfficialDocCrawler._is_allowed_domain + HttpxFetcher.get 둘 다 정확
+    매칭으로 강화.
+    """
+
+    def test_exact_domain_allowed(self):
+        from whitelist.mod1_doc_crawler import OfficialDocCrawler
+        assert OfficialDocCrawler._is_allowed_domain("https://pytorch.org/docs")
+        assert OfficialDocCrawler._is_allowed_domain("https://numpy.org/")
+        assert OfficialDocCrawler._is_allowed_domain("https://huggingface.co/x")
+
+    def test_subdomain_allowed(self):
+        from whitelist.mod1_doc_crawler import OfficialDocCrawler
+        assert OfficialDocCrawler._is_allowed_domain("https://docs.pytorch.org/x")
+        assert OfficialDocCrawler._is_allowed_domain("https://www.numpy.org/")
+
+    def test_suffix_bypass_blocked(self):
+        from whitelist.mod1_doc_crawler import OfficialDocCrawler
+        # 양유상 재현: evilpytorch.org는 pytorch.org와 무관한 도메인이지만
+        # endswith("pytorch.org") 통과해버리는 취약점
+        assert not OfficialDocCrawler._is_allowed_domain(
+            "https://evilpytorch.org/x"
+        )
+        assert not OfficialDocCrawler._is_allowed_domain(
+            "https://fakehuggingface.co/x"
+        )
+        assert not OfficialDocCrawler._is_allowed_domain(
+            "https://pytorch.org.attacker.com/x"
+        )
+
+    def test_unrelated_domain_blocked(self):
+        from whitelist.mod1_doc_crawler import OfficialDocCrawler
+        assert not OfficialDocCrawler._is_allowed_domain("https://evil.com/")
+        # http 등 비-https는 HttpxFetcher.get에서 별도 차단 (아래 test 참조)
+
+    def test_real_fetcher_rejects_non_https(self):
+        """HttpxFetcher.get은 https가 아니면 ValueError."""
+        from whitelist.mod1_real_crawler import HttpxFetcher
+
+        fetcher = HttpxFetcher(timeout=5.0, rate_limit_delay=0.0)
+        try:
+            with pytest.raises(ValueError, match="HTTPS만 허용"):
+                fetcher.get("http://pytorch.org/api")
+        finally:
+            fetcher.close()
+
+    def test_real_fetcher_blocks_suffix_bypass(self):
+        """HttpxFetcher.get도 같은 패턴으로 강화돼있는지."""
+        from whitelist.mod1_real_crawler import HttpxFetcher
+
+        fetcher = HttpxFetcher(timeout=5.0, rate_limit_delay=0.0)
+        try:
+            with pytest.raises(ValueError, match="허용되지 않은 도메인"):
+                fetcher.get("https://evilpytorch.org/api")
+        finally:
+            fetcher.close()
