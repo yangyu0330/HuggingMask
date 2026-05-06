@@ -81,7 +81,13 @@ class HttpxFetcher:
         if parsed.scheme != "https":
             raise ValueError(f"HTTPS만 허용: {url}")
         host = parsed.hostname or ""
-        if not any(host.endswith(d) for d in ALLOWED_CRAWL_DOMAINS):
+        # 정확 도메인 또는 dot-경계 하위 도메인만 허용 — suffix 우회 방어
+        # (양유상 PR #16 리뷰, 2026-05-06): host.endswith("pytorch.org")만 쓰면
+        # "evilpytorch.org"도 통과하는 취약점이 있다.
+        if not any(
+            host == d or host.endswith("." + d)
+            for d in ALLOWED_CRAWL_DOMAINS
+        ):
             raise ValueError(f"허용되지 않은 도메인: {host}")
 
         elapsed = time.time() - self._last_request_time

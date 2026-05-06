@@ -234,10 +234,19 @@ class OfficialDocCrawler:
 
     @staticmethod
     def _is_allowed_domain(url: str) -> bool:
+        """정확 도메인 또는 dot-경계 하위 도메인만 허용.
+
+        단순 ``host.endswith(d)``는 ``pytorch.org`` 허용 시 ``evilpytorch.org``
+        같은 suffix 우회 도메인도 통과시키는 취약점이 있다. 정확 매칭 + dot
+        경계로 강화 (양유상 PR #16 리뷰, 2026-05-06).
+        """
         from urllib.parse import urlparse
         try:
             host = urlparse(url).hostname or ""
-            return any(host.endswith(d) for d in ALLOWED_CRAWL_DOMAINS)
+            return any(
+                host == d or host.endswith("." + d)
+                for d in ALLOWED_CRAWL_DOMAINS
+            )
         except Exception:
             return False
 
