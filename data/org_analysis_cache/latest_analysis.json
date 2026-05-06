@@ -1,0 +1,86 @@
+{
+  "analyzed_at": "2026-04-07T01:30:12.174218+00:00",
+  "summary": {
+    "orgs_analyzed": 6,
+    "total_models": 18,
+    "total_apis_found": 0,
+    "unregistered_apis": 0,
+    "top_unregistered": [],
+    "errors": 0
+  },
+  "org_details": [
+    {
+      "org_id": "meta-llama",
+      "org_name": "Meta AI",
+      "models": [
+        "meta-llama/Llama-3.1-8B-Instruct",
+        "meta-llama/Llama-3.2-3B-Instruct",
+        "meta-llama/Llama-3.2-1B-Instruct"
+      ],
+      "api_count": 0,
+      "top_apis": [],
+      "errors": []
+    },
+    {
+      "org_id": "google",
+      "org_name": "Google",
+      "models": [
+        "google/electra-base-discriminator",
+        "google/vit-base-patch16-224-in21k",
+        "google/vit-base-patch16-224"
+      ],
+      "api_count": 0,
+      "top_apis": [],
+      "errors": []
+    },
+    {
+      "org_id": "mistralai",
+      "org_name": "Mistral AI",
+      "models": [
+        "mistralai/Mistral-7B-Instruct-v0.2",
+        "mistralai/Mistral-7B-Instruct-v0.3",
+        "mistralai/Voxtral-Mini-4B-Realtime-2602"
+      ],
+      "api_count": 0,
+      "top_apis": [],
+      "errors": []
+    },
+    {
+      "org_id": "microsoft",
+      "org_name": "Microsoft",
+      "models": [
+        "microsoft/table-transformer-detection",
+        "microsoft/TRELLIS-image-large",
+        "microsoft/deberta-v3-base"
+      ],
+      "api_count": 0,
+      "top_apis": [],
+      "errors": []
+    },
+    {
+      "org_id": "bigscience",
+      "org_name": "BigScience",
+      "models": [
+        "bigscience/bloomz-560m",
+        "bigscience/bloom-560m",
+        "bigscience/bloom-1b7"
+      ],
+      "api_count": 0,
+      "top_apis": [],
+      "errors": []
+    },
+    {
+      "org_id": "EleutherAI",
+      "org_name": "EleutherAI",
+      "models": [
+        "EleutherAI/pythia-160m",
+        "EleutherAI/pythia-70m-deduped",
+        "EleutherAI/gpt-neo-125m"
+      ],
+      "api_count": 0,
+      "top_apis": [],
+      "errors": []
+    }
+  ],
+  "unregistered_apis": []
+}
