@@ -7,7 +7,7 @@ from analyzer.schemas import (
     ValidationJobResponse,
     ReasonEntry,
 )
-from analyzer.validators.weigth.pipeline import validate
+from analyzer.validators.weight.pipeline import validate
 
 def _json_safe(obj):
     if isinstance(obj, dict):

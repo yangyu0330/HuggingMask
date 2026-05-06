@@ -4,7 +4,7 @@ from pathlib import Path
 
 from safetensors.torch import save_file
 
-from analyzer.validators.weigth.hashing import sha256_file
+from analyzer.validators.weight.hashing import sha256_file
 
 
 def convert_tensor_dict_to_safetensors(

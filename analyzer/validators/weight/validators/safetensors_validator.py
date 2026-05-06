@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from safetensors import safe_open
 
-from analyzer.validators.weigth.hashing import sha256_file
-from analyzer.validators.weigth.reporting import make_tensor_entry
+from analyzer.validators.weight.hashing import sha256_file
+from analyzer.validators.weight.reporting import make_tensor_entry
 
 ALLOWED_DTYPES = {
     "torch.float16",

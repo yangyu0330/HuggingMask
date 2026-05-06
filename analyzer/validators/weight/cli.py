@@ -1,12 +1,12 @@
 import json
 import sys
 
-from validators.weigth.pipeline import validate
+from validators.weight.pipeline import validate
 
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python -m validators.weigth.cli <file_path>")
+        print("Usage: python -m validators.weight.cli <file_path>")
         sys.exit(1)
 
     path = sys.argv[1]

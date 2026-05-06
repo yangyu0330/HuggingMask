@@ -5,7 +5,7 @@ from safetensors.torch import save_file
 import torch
 
 from proxy.app.main import app
-from analyzer.validators.weigth.hashing import sha256_file
+from analyzer.validators.weight.hashing import sha256_file
 
 client = TestClient(app)
 

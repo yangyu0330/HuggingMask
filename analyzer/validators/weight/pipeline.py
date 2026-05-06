@@ -4,15 +4,15 @@ from pathlib import Path
 from typing import Any
 
 from analyzer.utils import build_cache_key
-from analyzer.validators.weigth.hashing import sha256_file
-from analyzer.validators.weigth.validators.pickle_opcode_parser import validate_pickle
-from analyzer.validators.weigth.validators.safetensors_validator import validate_safetensors
-from analyzer.validators.weigth.validators.yara_scanner import scan_with_yara
-from analyzer.validators.weigth.validators.modelscan_wrapper import scan_with_modelscan
-from analyzer.validators.weigth.cache import get_cache, set_cache
-from analyzer.validators.weigth.sandbox.docker_runner import run_in_docker
-from analyzer.validators.weigth.diff.checker import compare_tensor_reports
-from analyzer.validators.weigth.convert.to_safetensors import convert_tensor_dict_to_safetensors
+from analyzer.validators.weight.hashing import sha256_file
+from analyzer.validators.weight.validators.pickle_opcode_parser import validate_pickle
+from analyzer.validators.weight.validators.safetensors_validator import validate_safetensors
+from analyzer.validators.weight.validators.yara_scanner import scan_with_yara
+from analyzer.validators.weight.validators.modelscan_wrapper import scan_with_modelscan
+from analyzer.validators.weight.cache import get_cache, set_cache
+from analyzer.validators.weight.sandbox.docker_runner import run_in_docker
+from analyzer.validators.weight.diff.checker import compare_tensor_reports
+from analyzer.validators.weight.convert.to_safetensors import convert_tensor_dict_to_safetensors
 
 
 def _make_cacheable(obj: Any):

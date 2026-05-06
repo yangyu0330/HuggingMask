@@ -5,7 +5,7 @@ from typing import Any
 
 import torch
 
-from analyzer.validators.weigth.reporting import make_tensor_entry
+from analyzer.validators.weight.reporting import make_tensor_entry
 
 
 ALLOWED_OPCODES = {
