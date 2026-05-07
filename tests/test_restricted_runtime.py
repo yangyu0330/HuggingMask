@@ -85,9 +85,17 @@ class TestYangyuSchemaCompat:
 class TestPolicyConstants:
 
     def test_restricted_builtins_contains_dangerous(self):
-        """eval/exec/__import__ 같은 핵심 위험 builtins 포함."""
-        for name in ("eval", "exec", "compile", "__import__", "open"):
+        """eval/exec/compile/open 같은 핵심 위험 builtins 포함.
+
+        ``__import__``은 RESTRICTED에 없다 — 정상 ``import`` 문 동작에 필요.
+        IMPORT_DENYLIST는 sys.meta_path import hook이 별도로 차단.
+        """
+        for name in ("eval", "exec", "compile", "open"):
             assert name in RESTRICTED_BUILTINS
+
+    def test_import_dunder_intentionally_kept(self):
+        """``__import__``은 builtins overlay에 유지 (import 문 동작에 필요)."""
+        assert "__import__" not in RESTRICTED_BUILTINS
 
     def test_import_allowlist_has_safe_modules(self):
         """모델링 코드가 흔히 쓰는 안전한 모듈."""
@@ -110,28 +118,111 @@ class TestPolicyConstants:
 # ─────────────────────────────────────────────
 
 class TestSkeletonBehavior:
-
-    def test_safe_code_returns_skipped_for_now(self):
-        """Phase 1 skeleton — 실제 실행 안 함, SKIPPED 반환.
-        false positive 0 (양유상 gate 통과 못 함 → 안전).
-        Phase 2~3에서 실제 PASS 판정 추가 예정.
-        """
-        result = restricted_exec("x = 1 + 1\n")
-        assert result.status == RuntimeStatus.SKIPPED
-
-    def test_exec_does_not_actually_execute_yet(self):
-        """skeleton은 격리 없이 실행하지 않음 — 부수효과 없어야 함."""
-        # 만약 진짜 실행됐다면 ImportError 나올 텐데, skeleton은 안 실행
-        result = restricted_exec("import nonexistent_module_xyz\n")
-        assert result.status == RuntimeStatus.SKIPPED
-        # exception 정보 없음 (실행 안 했으므로)
-        assert result.exception_class is None
+    """Phase 1 skeleton 회귀 — to_dict 라운드트립."""
 
     def test_result_to_dict_round_trip(self):
         result = restricted_exec("pass")
         d = result.to_dict()
         assert d["runtime_mode"] == "RESTRICTED_RUNTIME"
         assert "status" in d
+
+
+# ─────────────────────────────────────────────
+# Phase 2 — 실제 격리 실행 (multiprocessing)
+# subprocess spawn 비용으로 각 테스트 ~수백 ms 소요. 핵심 시나리오만.
+# ─────────────────────────────────────────────
+
+class TestPhase2Isolation:
+
+    def test_safe_arithmetic_passes(self):
+        """안전 코드 → status=PASS, exception 없음."""
+        result = restricted_exec("x = 1 + 2 * 3\n", timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.PASS, (
+            f"기대 PASS, 실제 {result.status}. tb={result.traceback}"
+        )
+        assert result.exception_class is None
+        assert result.exec_time_ms > 0
+
+    def test_dangerous_import_blocked(self):
+        """IMPORT_DENYLIST 모듈 import → ImportError → FAIL."""
+        result = restricted_exec(
+            "import subprocess\nsubprocess.run(['ls'])\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert "subprocess" in result.blocked_imports
+        assert result.exception_class == "ImportError"
+
+    def test_eval_blocked_by_builtins_overlay(self):
+        """builtins에서 eval 제거 → NameError → FAIL."""
+        result = restricted_exec(
+            "x = eval('1+1')\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "NameError"
+
+    def test_exec_blocked_by_builtins_overlay(self):
+        result = restricted_exec(
+            "exec('y = 1')\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "NameError"
+
+    def test_open_blocked_by_builtins_overlay(self):
+        """open() 호출 차단."""
+        result = restricted_exec(
+            "f = open('/etc/passwd')\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "NameError"
+
+    def test_runtime_error_in_user_code_returns_fail(self):
+        """사용자 코드의 일반 예외도 FAIL로 정규화."""
+        result = restricted_exec(
+            "x = 1 / 0\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "ZeroDivisionError"
+        assert result.traceback is not None
+
+    def test_infinite_loop_timeout(self):
+        """무한 루프 → TIMEOUT."""
+        result = restricted_exec(
+            "while True:\n    pass\n",
+            timeout_seconds=2.0,
+        )
+        assert result.status == RuntimeStatus.TIMEOUT
+        assert result.exception_class == "TimeoutError"
+
+    def test_class_definition_works(self):
+        """B-1 시나리오 — class M(nn.Module) 같은 코드는 (nn import는 차단되지만)
+        class 정의 자체는 builtins overlay에서 동작해야 함.
+        """
+        result = restricted_exec(
+            "class Demo:\n    def __init__(self): self.x = 1\n"
+            "d = Demo()\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.PASS, (
+            f"class 정의 실패. tb={result.traceback}"
+        )
+
+    def test_pass_result_compatible_with_yangyu_gate(self):
+        """우리 PASS 결과가 양유상 _runtime_gate_passed()를 통과하는지."""
+        from analyzer.validators.code_validator import _runtime_gate_passed
+        result = restricted_exec("x = 1\n", timeout_seconds=10.0)
+        assert _runtime_gate_passed(result.to_dict()) is True
+
+    def test_fail_result_does_not_pass_yangyu_gate(self):
+        from analyzer.validators.code_validator import _runtime_gate_passed
+        result = restricted_exec(
+            "import subprocess\n", timeout_seconds=10.0,
+        )
+        assert _runtime_gate_passed(result.to_dict()) is False
 
 
 # ─────────────────────────────────────────────
