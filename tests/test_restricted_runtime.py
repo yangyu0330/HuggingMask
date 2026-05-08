@@ -226,6 +226,152 @@ class TestPhase2Isolation:
 
 
 # ─────────────────────────────────────────────
+# Phase 3 — 메모리 제한 (Linux/Mac만)
+# ─────────────────────────────────────────────
+
+class TestPhase3MemoryLimit:
+
+    def test_memory_limit_triggers_memory_status(self):
+        """Linux/Mac: setrlimit(RLIMIT_AS) → MemoryError → status=MEMORY_LIMIT.
+        Windows: resource 모듈에 RLIMIT_AS 없어서 setrlimit 없음, 일반 PASS.
+        """
+        import sys as _sys
+        if _sys.platform == "win32":
+            pytest.skip("Linux/Mac only — RLIMIT_AS")
+
+        result = restricted_exec(
+            # 1GB bytearray 시도 — limit 64MB로 걸리면 MemoryError
+            "x = bytearray(1024 * 1024 * 1024)\n",
+            timeout_seconds=10.0,
+            memory_limit_mb=64,
+        )
+        assert result.status == RuntimeStatus.MEMORY_LIMIT
+        assert result.exception_class == "MemoryError"
+
+    def test_memory_limit_does_not_block_normal_code(self):
+        """일반 산술 같은 작은 코드는 메모리 제한과 무관."""
+        result = restricted_exec(
+            "x = sum(range(100))\n",
+            timeout_seconds=10.0,
+            memory_limit_mb=128,
+        )
+        assert result.status == RuntimeStatus.PASS
+
+
+# ─────────────────────────────────────────────
+# Phase 4 — orchestrator 호환 factory + end-to-end
+# ─────────────────────────────────────────────
+
+class TestPhase4OrchestratorIntegration:
+
+    def test_factory_returns_callable_compatible_with_yangyu_orchestrator(self):
+        """make_restricted_runtime_loader 반환 callable은 (repo_path,) → dict|None.
+        양유상 ``Callable[[str], dict | None]`` 시그니처와 호환.
+        """
+        from analyzer.validators.code_restricted_runtime import (
+            make_restricted_runtime_loader,
+        )
+        sources = {"modeling.py": "x = 1\n"}
+        loader = make_restricted_runtime_loader(sources)
+
+        # repo_path만 받고 dict 반환
+        result = loader("modeling.py")
+        assert result is not None
+        assert result["runtime_mode"] == "RESTRICTED_RUNTIME"
+        assert result["status"] == "PASS"
+
+    def test_factory_loader_returns_none_for_missing_path(self):
+        from analyzer.validators.code_restricted_runtime import (
+            make_restricted_runtime_loader,
+        )
+        loader = make_restricted_runtime_loader({"a.py": "pass"})
+        assert loader("missing.py") is None
+
+    def test_end_to_end_run_validation_job(self):
+        """양유상 run_validation_job + 우리 loader = 진짜 격리 실행 통합.
+
+        B-1 후보 코드(정형 modeling, allowed API only) → restricted_exec PASS
+        → 양유상 _runtime_gate_passed True → grade B-1, status PASS.
+        """
+        import hashlib
+        from pathlib import PurePosixPath
+
+        from analyzer.orchestrator import build_minimal_request, run_validation_job
+        from analyzer.schemas import (
+            ArtifactRef, FileKind, PolicyInfo, ValidationStatus,
+        )
+        from analyzer.validators.code_restricted_runtime import (
+            make_restricted_runtime_loader,
+        )
+
+        # 정형 modeling 코드 — 위험 import / call / 동적 패턴 없음
+        source = (
+            "from torch import nn\n"
+            "class M(nn.Module):\n"
+            "    def __init__(self):\n"
+            "        super().__init__()\n"
+            "        self.fc = nn.Linear(2, 2)\n"
+            "    def forward(self, x):\n"
+            "        return self.fc(x)\n"
+        )
+        # 우리 격리 환경에선 torch import가 IMPORT_ALLOWLIST에 있긴 하지만
+        # torch가 venv에 없으면 ImportError. 그래서 단순한 코드로 대체:
+        source = (
+            "x = 1\n"
+            "class M:\n"
+            "    def forward(self, x): return x\n"
+            "m = M()\n"
+            "result = m.forward(42)\n"
+        )
+
+        digest = hashlib.sha256(source.encode("utf-8")).hexdigest()
+        artifact = ArtifactRef(
+            artifact_id=f"sha256:{digest}",
+            repo_path="modeling_safe.py",
+            file_name="modeling_safe.py",
+            file_kind=FileKind.PYTHON,
+            detected_extension=".py",
+            media_type=None,
+            size_bytes=len(source.encode("utf-8")),
+            sha256=digest,
+            source_url="https://huggingface.co/org/demo/resolve/main/modeling_safe.py",
+            temp_local_path="/tmp/modeling_safe.py",
+            referenced_by=[],
+            is_generated=False,
+        )
+        policy = PolicyInfo(
+            policy_version="policy-2026.05.07",
+            whitelist_version="wl-2026.04.20",
+            opcode_policy_version="opcode-2026.05.07",
+            config_schema_version="cfg-2026.05.07",
+            runtime_profile_version="rt-2026.05.07",
+        )
+        request = build_minimal_request(
+            request_id="req-rt-1", job_id="job-rt-1",
+            policy=policy, artifacts=[artifact],
+        )
+
+        sources = {"modeling_safe.py": source}
+        response = run_validation_job(
+            request,
+            source_loader=sources,
+            runtime_check_loader=make_restricted_runtime_loader(
+                sources, timeout_seconds=10.0,
+            ),
+        )
+
+        # 검증: artifact_results의 첫 결과가 runtime_check를 거쳐 처리됨
+        assert len(response.artifact_results) == 1
+        first = response.artifact_results[0]
+        rt = first.details.get("runtime_check", {})
+        assert rt.get("runtime_mode") == "RESTRICTED_RUNTIME"
+        assert rt.get("status") == "PASS"
+        # 양유상 등급 결정 — 실제 PASS 받았으면 B-1/PASS 또는 그 이상
+        # (정확한 등급은 양유상 로직 — 우리는 runtime_check가 dict로 잘
+        # 들어갔는지만 회귀)
+
+
+# ─────────────────────────────────────────────
 # runtime_check_loader 어댑터 (양유상 orchestrator에 주입할 함수)
 # ─────────────────────────────────────────────
 

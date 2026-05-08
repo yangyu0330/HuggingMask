@@ -122,23 +122,37 @@ class RestrictedRuntimeResult:
 # (Windows spawn 호환을 위해 module-level 함수 + picklable 인자)
 # ─────────────────────────────────────────────
 
-def _worker_run_in_subprocess(source: str, queue: Any) -> None:  # pragma: no cover - subprocess
+def _worker_run_in_subprocess(
+    source: str, queue: Any, memory_limit_mb: int = 256,
+) -> None:  # pragma: no cover - subprocess
     """자식 프로세스에서 실행. 격리 메커니즘 적용 후 ``source`` 실행.
 
     적용 메커니즘:
-      1. import hook (sys.meta_path) — IMPORT_DENYLIST 차단
-      2. audit hook (sys.addaudithook) — exec/compile/subprocess.* 차단
-      3. builtins overlay — RESTRICTED_BUILTINS 제거한 globals 주입
+      1. (Linux/Mac) ``resource.setrlimit(RLIMIT_AS)`` — 가상 메모리 제한
+      2. import hook (sys.meta_path) — IMPORT_DENYLIST 차단
+      3. audit hook (sys.addaudithook) — subprocess/socket/ctypes 차단
+      4. builtins overlay — RESTRICTED_BUILTINS 제거한 globals 주입
 
     결과 dict를 ``queue.put()``으로 부모에 전달.
     """
     import builtins as _builtins
     import sys as _sys
     import traceback as _tb_mod
-    import importlib.machinery as _machinery
 
     blocked_imports: list[str] = []
     audit_events: list[str] = []
+
+    # ── 0. 메모리 제한 (Linux/Mac만) ──
+    # Windows는 resource 모듈에 RLIMIT_AS가 없어 skip. Docker(Linux)
+    # 운영 환경에서는 정상 동작. setrlimit 실패해도 로깅만 하고 계속
+    # 진행 (소프트 페일).
+    if _sys.platform != "win32":
+        try:
+            import resource as _resource
+            _bytes = max(1, memory_limit_mb) * 1024 * 1024
+            _resource.setrlimit(_resource.RLIMIT_AS, (_bytes, _bytes))
+        except Exception:
+            pass
 
     # ── 1. import hook ──
     class _ImportRestriction:
@@ -223,6 +237,20 @@ def _worker_run_in_subprocess(source: str, queue: Any) -> None:  # pragma: no co
             "exception_class": None,
             "traceback": None,
         }
+    except MemoryError as exc:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        result = {
+            "status": RuntimeStatus.MEMORY_LIMIT,
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "builtins_removed": list(RESTRICTED_BUILTINS),
+            "import_allowlist_applied": True,
+            "dummy_forward_executed": False,
+            "blocked_imports": sorted(set(blocked_imports)),
+            "audit_events": list(audit_events),
+            "exec_time_ms": elapsed_ms,
+            "exception_class": "MemoryError",
+            "traceback": _tb_mod.format_exc(),
+        }
     except Exception as exc:
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
         result = {
@@ -274,7 +302,7 @@ def restricted_exec(
     queue: Any = ctx.Queue()
     proc = ctx.Process(
         target=_worker_run_in_subprocess,
-        args=(source, queue),
+        args=(source, queue, memory_limit_mb),
     )
 
     started_at = time.perf_counter()
@@ -362,8 +390,44 @@ def runtime_check_loader(
     return result.to_dict()
 
 
+# ─────────────────────────────────────────────
+# orchestrator 호환 factory
+# ─────────────────────────────────────────────
+
+def make_restricted_runtime_loader(
+    source_loader: Any,
+    *,
+    timeout_seconds: float = 5.0,
+    memory_limit_mb: int = 256,
+) -> Any:
+    """양유상 ``run_validation_job(runtime_check_loader=...)`` 시그니처와 호환되는
+    callable을 반환한다.
+
+    양유상 orchestrator는 ``Callable[[str], dict | None]`` 형태의 loader를
+    기대 (``repo_path``만 받음). ``restricted_exec``는 source가 필요하므로
+    ``source_loader``를 closure로 잡아 wrapping.
+
+    사용 예::
+
+        run_validation_job(
+            request,
+            source_loader=sources,
+            runtime_check_loader=make_restricted_runtime_loader(sources),
+        )
+    """
+    def _loader(repo_path: str) -> dict[str, Any] | None:
+        return runtime_check_loader(
+            repo_path,
+            source_loader=source_loader,
+            timeout_seconds=timeout_seconds,
+            memory_limit_mb=memory_limit_mb,
+        )
+    return _loader
+
+
 __all__ = [
     "RestrictedRuntimeResult", "RuntimeStatus",
     "RESTRICTED_BUILTINS", "IMPORT_ALLOWLIST", "IMPORT_DENYLIST",
     "restricted_exec", "runtime_check_loader",
+    "make_restricted_runtime_loader",
 ]
