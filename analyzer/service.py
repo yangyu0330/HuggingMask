@@ -169,7 +169,6 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
             )
 
             results.append(mapped)
-            pending_artifact_ids.append(artifact.artifact_id)
             continue
 
         core = validate(

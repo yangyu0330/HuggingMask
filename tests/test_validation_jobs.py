@@ -1,13 +1,20 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pytest
 from safetensors.torch import save_file
 import torch
 
 from proxy.app.main import app
 from analyzer.validators.weight.hashing import sha256_file
+import analyzer.validators.weight.cache as cache_mod
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def isolate_weight_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(cache_mod, "CACHE_FILE", tmp_path / "cache_store.json")
 
 
 def _payload_for(file_path: Path, file_kind: str, ext: str) -> dict:
@@ -65,3 +72,4 @@ def test_validation_jobs_other_is_skipped(tmp_path: Path):
     assert response.status_code == 200
     body = response.json()
     assert body["artifact_results"][0]["status"] == "SKIPPED"
+    assert body["pending_artifact_ids"] == []

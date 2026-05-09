@@ -181,9 +181,16 @@ class ArtifactRef(Serializable):
     is_generated: bool = False
 
     def __post_init__(self) -> None:
-        # 여기서는 file_kind enum 변환만 수행한다.
-        # sha256 형식/불일치 여부는 schema가 아니라 validator에서 BLOCK 처리해야 한다.
         self.file_kind = FileKind(self.file_kind)
+        expected_artifact_id = f"sha256:{self.sha256}"
+
+        if self.artifact_id != expected_artifact_id:
+            raise ValueError("artifact_id must be 'sha256:' plus sha256")
+
+        if len(self.sha256) != 64 or any(
+            ch not in "0123456789abcdef" for ch in self.sha256
+        ):
+            raise ValueError("sha256 must be a 64-character lowercase hex digest")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ArtifactRef":
