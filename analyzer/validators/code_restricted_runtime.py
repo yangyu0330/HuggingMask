@@ -50,7 +50,8 @@ RESTRICTED_BUILTINS: tuple[str, ...] = (
     "breakpoint", "memoryview",
 )
 
-# import 허용 목록 — 모델링 코드에 필요한 안전한 라이브러리
+# 사용자 코드가 요청할 수 있는 import name/prefix allowlist.
+# 허용 라이브러리 내부 import도 denylist/audit hook에 걸리면 fail-closed.
 IMPORT_ALLOWLIST: frozenset[str] = frozenset({
     "torch", "torch.nn", "torch.nn.functional", "torch.optim",
     "torch.autograd", "torch.linalg", "torch.fft", "torch.special",
@@ -141,6 +142,7 @@ def _worker_run_in_subprocess(
     import builtins as _builtins
     import sys as _sys
     import traceback as _tb_mod
+    import types as _types
 
     blocked_imports: list[str] = []
     audit_events: list[str] = []
@@ -159,6 +161,18 @@ def _worker_run_in_subprocess(
 
     def _record_blocked_import(name: str) -> None:
         blocked_imports.append(name or "<relative>")
+
+    def _blocked_runtime_access(name: str) -> None:
+        raise RuntimeError(f"제한 런타임: 차단된 접근 '{name}'")
+
+    def _safe_format_exc(exc: BaseException) -> str:
+        try:
+            return _tb_mod.format_exc()
+        except Exception as tb_exc:
+            return (
+                f"{type(exc).__name__}: {exc}\n"
+                f"(traceback formatting failed: {type(tb_exc).__name__}: {tb_exc})"
+            )
 
     # ── 0. 메모리 제한 (Linux/Mac만) ──
     # Windows는 resource 모듈에 RLIMIT_AS가 없어 skip. Docker(Linux)
@@ -228,6 +242,100 @@ def _worker_run_in_subprocess(
             pass
 
     real_import = _builtins.__import__
+    restricted_builtins_module: _types.ModuleType
+    safe_sys_proxy: Any
+    blocked_builtin_values = tuple(
+        (getattr(_builtins, name), name)
+        for name in RESTRICTED_BUILTINS
+        if hasattr(_builtins, name)
+    )
+
+    class _BlockedModuleProxy:
+        def __init__(self, name: str) -> None:
+            self.__name__ = name
+
+        def __getattr__(self, attr: str) -> Any:
+            _blocked_runtime_access(f"{self.__name__}.{attr}")
+
+    class _SafeModulesMapping:
+        def __getitem__(self, name: str) -> Any:
+            if name == "builtins":
+                return restricted_builtins_module
+            if _is_denied_import(name):
+                raise KeyError(name)
+            if not _matches_module_policy(name, effective_import_allowlist):
+                raise KeyError(name)
+            module = _sys.modules[name]
+            return _sanitize_user_visible_object(module)
+
+        def get(self, name: str, default: Any = None) -> Any:
+            try:
+                return self[name]
+            except KeyError:
+                return default
+
+        def __contains__(self, name: object) -> bool:
+            return isinstance(name, str) and self.get(name) is not None
+
+    class _SafeSysProxy:
+        modules = _SafeModulesMapping()
+        _blocked_attrs = {
+            "meta_path",
+            "path_hooks",
+            "path_importer_cache",
+        }
+
+        def __getattr__(self, name: str) -> Any:
+            if name in self._blocked_attrs:
+                _blocked_runtime_access(f"sys.{name}")
+            return getattr(_sys, name)
+
+    def _blocked_builtin(name: str) -> Any:
+        def _raise_blocked(*args: Any, **kwargs: Any) -> None:
+            _blocked_runtime_access(name)
+
+        return _raise_blocked
+
+    blocked_builtin_replacements = {
+        name: _blocked_builtin(name) for name in RESTRICTED_BUILTINS
+    }
+
+    def _sanitize_user_visible_object(obj: Any, seen: set[int] | None = None) -> Any:
+        if not isinstance(obj, _types.ModuleType):
+            return obj
+
+        if obj.__name__ == "builtins":
+            return restricted_builtins_module
+        if obj.__name__ == "sys":
+            return safe_sys_proxy
+        if _is_denied_import(obj.__name__):
+            return _BlockedModuleProxy(obj.__name__)
+
+        seen = seen or set()
+        obj_id = id(obj)
+        if obj_id in seen:
+            return obj
+        seen.add(obj_id)
+
+        module_globals = getattr(obj, "__dict__", {})
+        module_globals["__builtins__"] = safe_builtins
+
+        for key, value in list(module_globals.items()):
+            if key == "__builtins__":
+                continue
+            if value is _builtins:
+                module_globals[key] = restricted_builtins_module
+            elif value is _sys:
+                module_globals[key] = safe_sys_proxy
+            elif isinstance(value, _types.ModuleType):
+                module_globals[key] = _sanitize_user_visible_object(value, seen)
+            else:
+                for blocked_value, blocked_name in blocked_builtin_values:
+                    if value is blocked_value:
+                        module_globals[key] = blocked_builtin_replacements[blocked_name]
+                        break
+
+        return obj
 
     def _restricted_import(
         name: str,
@@ -245,9 +353,14 @@ def _worker_run_in_subprocess(
         if not _matches_module_policy(name, effective_import_allowlist):
             _record_blocked_import(name)
             raise ImportError(f"제한 런타임: 허용되지 않은 import '{name}'")
-        return real_import(name, globals, locals, fromlist, level)
+        imported = real_import(name, globals, locals, fromlist, level)
+        return _sanitize_user_visible_object(imported)
 
     safe_builtins["__import__"] = _restricted_import
+
+    restricted_builtins_module = _types.ModuleType("builtins")
+    restricted_builtins_module.__dict__.update(safe_builtins)
+    safe_sys_proxy = _SafeSysProxy()
 
     # 사용자 코드의 globals에 위험 함수가 절대 노출 안 되도록 RESTRICTED 제거.
     # (audit hook으로 별도 차단도 함 — 이중 방어)
@@ -288,7 +401,7 @@ def _worker_run_in_subprocess(
             "audit_events": list(audit_events),
             "exec_time_ms": elapsed_ms,
             "exception_class": "MemoryError",
-            "traceback": _tb_mod.format_exc(),
+            "traceback": _safe_format_exc(exc),
         }
     except Exception as exc:
         elapsed_ms = (time.perf_counter() - started_at) * 1000.0
@@ -302,7 +415,7 @@ def _worker_run_in_subprocess(
             "audit_events": list(audit_events),
             "exec_time_ms": elapsed_ms,
             "exception_class": type(exc).__name__,
-            "traceback": _tb_mod.format_exc(),
+            "traceback": _safe_format_exc(exc),
         }
 
     queue.put(result)

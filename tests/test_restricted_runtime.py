@@ -9,6 +9,8 @@
 
 from __future__ import annotations
 
+import importlib.util
+
 import pytest
 
 from analyzer.validators.code_restricted_runtime import (
@@ -204,6 +206,29 @@ class TestPhase2Isolation:
                 "data = Path('analyzer/schemas.py').read_text(encoding='utf-8')\n",
                 "pathlib",
             ),
+            (
+                "import dataclasses\n"
+                "x = dataclasses.__builtins__['eval']('1+1')\n",
+                None,
+            ),
+            (
+                "import functools\n"
+                "b = functools.__builtins__\n"
+                "f = (b['open'] if isinstance(b, dict) else b.open)"
+                "('analyzer/schemas.py', 'r', encoding='utf-8')\n",
+                None,
+            ),
+            (
+                "import typing\n"
+                "f = typing.sys.modules['builtins'].open"
+                "('analyzer/schemas.py', 'r', encoding='utf-8')\n",
+                None,
+            ),
+            (
+                "from dataclasses import dataclass\n"
+                "dataclass.__globals__['__builtins__']['eval']('1+1')\n",
+                None,
+            ),
         ],
     )
     def test_non_allowlisted_import_bypass_attempts_blocked(
@@ -211,8 +236,33 @@ class TestPhase2Isolation:
     ):
         result = restricted_exec(source, timeout_seconds=10.0)
         assert result.status == RuntimeStatus.FAIL
+        if blocked_name is not None:
+            assert result.exception_class == "ImportError"
+            assert blocked_name in result.blocked_imports
+
+    def test_torch_allowlist_fails_closed_on_internal_denied_import(self):
+        if importlib.util.find_spec("torch") is None:
+            pytest.skip("torch is not installed")
+
+        result = restricted_exec(
+            "from torch import nn\nclass M(nn.Module):\n    pass\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status != RuntimeStatus.PASS
         assert result.exception_class == "ImportError"
-        assert blocked_name in result.blocked_imports
+        assert result.blocked_imports
+
+    def test_numpy_allowlist_fails_closed_on_internal_denied_import(self):
+        if importlib.util.find_spec("numpy") is None:
+            pytest.skip("numpy is not installed")
+
+        result = restricted_exec(
+            "import numpy as np\nx = np.array([1])\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status != RuntimeStatus.PASS
+        assert result.exception_class == "ImportError"
+        assert result.blocked_imports
 
     def test_eval_blocked_by_builtins_overlay(self):
         """builtins에서 eval 제거 → NameError → FAIL."""
