@@ -14,13 +14,12 @@ import를 제거한 격리 환경에서 코드를 실제 실행해보고 시그�
 격리 메커니즘 (별 4 / Phase 2~3):
 1. Python 서브프로세스 격리 (multiprocessing.Process)
 2. builtins 화이트리스트 overlay (``__builtins__``를 안전 dict로 교체)
-3. import allowlist (sys.meta_path import hook)
+3. import allowlist (custom ``__import__``) + denylist import hook
 4. audit hook (sys.addaudithook)
 5. 시간 제한 (Process.join(timeout) + Process.kill)
 6. 메모리 제한 (Linux: resource.setrlimit, Windows: psutil 모니터)
 
-이 파일은 Phase 1 skeleton — 핵심 인터페이스와 결과 dataclass만 정의.
-실제 격리 메커니즘은 Phase 2~3에서 구현.
+이 파일은 실제 제한 런타임을 실행하고 ``runtime_check`` dict를 반환한다.
 """
 
 from __future__ import annotations
@@ -123,15 +122,19 @@ class RestrictedRuntimeResult:
 # ─────────────────────────────────────────────
 
 def _worker_run_in_subprocess(
-    source: str, queue: Any, memory_limit_mb: int = 256,
+    source: str,
+    queue: Any,
+    memory_limit_mb: int = 256,
+    import_allowlist: frozenset[str] | None = None,
 ) -> None:  # pragma: no cover - subprocess
     """자식 프로세스에서 실행. 격리 메커니즘 적용 후 ``source`` 실행.
 
     적용 메커니즘:
       1. (Linux/Mac) ``resource.setrlimit(RLIMIT_AS)`` — 가상 메모리 제한
-      2. import hook (sys.meta_path) — IMPORT_DENYLIST 차단
-      3. audit hook (sys.addaudithook) — subprocess/socket/ctypes 차단
-      4. builtins overlay — RESTRICTED_BUILTINS 제거한 globals 주입
+      2. custom ``__import__`` — 사용자 import allowlist 강제
+      3. import hook (sys.meta_path) — IMPORT_DENYLIST 전역 차단
+      4. audit hook (sys.addaudithook) — subprocess/socket/ctypes 차단
+      5. builtins overlay — RESTRICTED_BUILTINS 제거한 globals 주입
 
     결과 dict를 ``queue.put()``으로 부모에 전달.
     """
@@ -141,6 +144,21 @@ def _worker_run_in_subprocess(
 
     blocked_imports: list[str] = []
     audit_events: list[str] = []
+    effective_import_allowlist = import_allowlist or IMPORT_ALLOWLIST
+
+    def _matches_module_policy(name: str, policy: frozenset[str]) -> bool:
+        return any(name == allowed or name.startswith(allowed + ".") for allowed in policy)
+
+    def _is_denied_import(name: str) -> bool:
+        top_level = name.split(".")[0]
+        return (
+            name in IMPORT_DENYLIST
+            or top_level in IMPORT_DENYLIST
+            or _matches_module_policy(name, IMPORT_DENYLIST)
+        )
+
+    def _record_blocked_import(name: str) -> None:
+        blocked_imports.append(name or "<relative>")
 
     # ── 0. 메모리 제한 (Linux/Mac만) ──
     # Windows는 resource 모듈에 RLIMIT_AS가 없어 skip. Docker(Linux)
@@ -157,9 +175,8 @@ def _worker_run_in_subprocess(
     # ── 1. import hook ──
     class _ImportRestriction:
         def find_spec(self, name, path=None, target=None):
-            top_level = name.split(".")[0]
-            if name in IMPORT_DENYLIST or top_level in IMPORT_DENYLIST:
-                blocked_imports.append(name)
+            if _is_denied_import(name):
+                _record_blocked_import(name)
                 raise ImportError(
                     f"제한 런타임: 차단된 import '{name}'"
                 )
@@ -209,6 +226,28 @@ def _worker_run_in_subprocess(
             safe_builtins[name] = getattr(_builtins, name)
         except AttributeError:
             pass
+
+    real_import = _builtins.__import__
+
+    def _restricted_import(
+        name: str,
+        globals: dict[str, Any] | None = None,
+        locals: dict[str, Any] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> Any:
+        if level:
+            _record_blocked_import(name or "<relative>")
+            raise ImportError("제한 런타임: 상대 import는 허용되지 않습니다")
+        if _is_denied_import(name):
+            _record_blocked_import(name)
+            raise ImportError(f"제한 런타임: 차단된 import '{name}'")
+        if not _matches_module_policy(name, effective_import_allowlist):
+            _record_blocked_import(name)
+            raise ImportError(f"제한 런타임: 허용되지 않은 import '{name}'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    safe_builtins["__import__"] = _restricted_import
 
     # 사용자 코드의 globals에 위험 함수가 절대 노출 안 되도록 RESTRICTED 제거.
     # (audit hook으로 별도 차단도 함 — 이중 방어)
@@ -297,12 +336,14 @@ def restricted_exec(
         - 자식 안에서 builtins overlay + import hook + audit hook 적용
         - 부모는 ``timeout_seconds`` 초과 시 자식 강제 종료
     """
+    effective_import_allowlist = IMPORT_ALLOWLIST | frozenset(extra_import_allowlist or ())
+
     # Queue로 자식 → 부모 결과 전달
     ctx = mp.get_context("spawn")  # cross-platform 일관성 (Windows 기본)
     queue: Any = ctx.Queue()
     proc = ctx.Process(
         target=_worker_run_in_subprocess,
-        args=(source, queue, memory_limit_mb),
+        args=(source, queue, memory_limit_mb, effective_import_allowlist),
     )
 
     started_at = time.perf_counter()
@@ -359,6 +400,7 @@ def runtime_check_loader(
     source_loader: Any,
     timeout_seconds: float = 5.0,
     memory_limit_mb: int = 256,
+    extra_import_allowlist: frozenset[str] | None = None,
 ) -> dict[str, Any] | None:
     """양유상 ``run_validation_job(..., runtime_check_loader=...)``에 주입할 어댑터.
 
@@ -366,7 +408,7 @@ def runtime_check_loader(
     실행 결과 dict를 반환. ``code_validator``의 ``_normalize_runtime_check``가
     이 dict를 받아 grade 결정에 사용한다.
 
-    Phase 1: skeleton — 항상 SKIPPED 반환 (양유상 stub 동작과 동일).
+    제한 런타임을 실행한 결과를 그대로 반환한다.
     """
     # source_loader가 callable 또는 mapping
     source: str | bytes | None
@@ -386,6 +428,7 @@ def runtime_check_loader(
         source,
         timeout_seconds=timeout_seconds,
         memory_limit_mb=memory_limit_mb,
+        extra_import_allowlist=extra_import_allowlist,
     )
     return result.to_dict()
 
@@ -399,6 +442,7 @@ def make_restricted_runtime_loader(
     *,
     timeout_seconds: float = 5.0,
     memory_limit_mb: int = 256,
+    extra_import_allowlist: frozenset[str] | None = None,
 ) -> Any:
     """양유상 ``run_validation_job(runtime_check_loader=...)`` 시그니처와 호환되는
     callable을 반환한다.
@@ -421,6 +465,7 @@ def make_restricted_runtime_loader(
             source_loader=source_loader,
             timeout_seconds=timeout_seconds,
             memory_limit_mb=memory_limit_mb,
+            extra_import_allowlist=extra_import_allowlist,
         )
     return _loader
 

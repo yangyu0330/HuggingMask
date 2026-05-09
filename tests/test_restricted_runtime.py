@@ -1,12 +1,10 @@
 """
 제한 런타임 (CODE_RESTRICTED_RUNTIME) 단위 테스트.
 
-Phase 1 (현재): skeleton 인터페이스 검증
+기본 계약:
   - RestrictedRuntimeResult 양유상 스키마 키 호환
-  - restricted_exec skeleton이 SKIPPED 반환 (false positive 0 보장)
+  - restricted_exec가 builtins/import/audit/time/memory 제한 적용
   - runtime_check_loader 어댑터 — callable/mapping source_loader
-
-Phase 2~3 (후속): 실제 격리 메커니즘
 """
 
 from __future__ import annotations
@@ -152,6 +150,69 @@ class TestPhase2Isolation:
         assert result.status == RuntimeStatus.FAIL
         assert "subprocess" in result.blocked_imports
         assert result.exception_class == "ImportError"
+
+    def test_allowlisted_math_import_passes(self):
+        result = restricted_exec(
+            "import math\nx = math.sqrt(4)\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.PASS, result.traceback
+
+    def test_non_allowlisted_json_import_blocked(self):
+        result = restricted_exec(
+            "import json\nx = json.dumps({'a': 1})\n",
+            timeout_seconds=10.0,
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "ImportError"
+        assert "json" in result.blocked_imports
+
+    def test_extra_import_allowlist_permits_json(self):
+        result = restricted_exec(
+            "import json\nx = json.dumps({'a': 1})\n",
+            timeout_seconds=10.0,
+            extra_import_allowlist=frozenset({"json"}),
+        )
+        assert result.status == RuntimeStatus.PASS, result.traceback
+
+    def test_extra_import_allowlist_does_not_override_denylist(self):
+        result = restricted_exec(
+            "import os\nx = os.getcwd()\n",
+            timeout_seconds=10.0,
+            extra_import_allowlist=frozenset({"os"}),
+        )
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "ImportError"
+        assert "os" in result.blocked_imports
+
+    @pytest.mark.parametrize(
+        ("source", "blocked_name"),
+        [
+            ("import builtins\nx = builtins.eval('1+1')\n", "builtins"),
+            (
+                "import builtins\n"
+                "f = builtins.open('analyzer/schemas.py', 'r', encoding='utf-8')\n",
+                "builtins",
+            ),
+            (
+                "import io\n"
+                "f = io.open('analyzer/schemas.py', 'r', encoding='utf-8')\n",
+                "io",
+            ),
+            (
+                "from pathlib import Path\n"
+                "data = Path('analyzer/schemas.py').read_text(encoding='utf-8')\n",
+                "pathlib",
+            ),
+        ],
+    )
+    def test_non_allowlisted_import_bypass_attempts_blocked(
+        self, source, blocked_name,
+    ):
+        result = restricted_exec(source, timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "ImportError"
+        assert blocked_name in result.blocked_imports
 
     def test_eval_blocked_by_builtins_overlay(self):
         """builtins에서 eval 제거 → NameError → FAIL."""
@@ -547,3 +608,27 @@ class TestRuntimeCheckLoader:
         )
         assert result is not None
         assert result["runtime_mode"] == "RESTRICTED_RUNTIME"
+
+    def test_extra_import_allowlist_forwarded_to_runtime_check_loader(self):
+        sources = {"modeling.py": "import json\nx = json.dumps({'a': 1})\n"}
+        result = runtime_check_loader(
+            "modeling.py",
+            source_loader=sources,
+            extra_import_allowlist=frozenset({"json"}),
+        )
+        assert result is not None
+        assert result["status"] == RuntimeStatus.PASS
+
+    def test_extra_import_allowlist_forwarded_to_factory_loader(self):
+        from analyzer.validators.code_restricted_runtime import (
+            make_restricted_runtime_loader,
+        )
+
+        sources = {"modeling.py": "import json\nx = json.dumps({'a': 1})\n"}
+        loader = make_restricted_runtime_loader(
+            sources,
+            extra_import_allowlist=frozenset({"json"}),
+        )
+        result = loader("modeling.py")
+        assert result is not None
+        assert result["status"] == RuntimeStatus.PASS
