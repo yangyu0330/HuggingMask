@@ -372,6 +372,146 @@ class TestPhase4OrchestratorIntegration:
 
 
 # ─────────────────────────────────────────────
+# Phase 5 — mock_hf 통합 회귀
+# ─────────────────────────────────────────────
+
+class TestPhase5MockHfIntegration:
+    """양유상 정적 분석 + 우리 격리 흐름의 정합성 회귀.
+
+    hm-04(악성)는 양유상 AST가 dangerous_calls(``__import__``)로 잡아 grade C.
+    우리 restricted_exec까지 도달 안 함 (정상 흐름). overall_status = BLOCK.
+
+    hm-05(안전 코드 + 악성 config)에서 modeling_safe.py만 보면 정적 안전 →
+    B-1 후보 → 우리 격리로 옴. torch가 venv에 없으면 ModuleNotFoundError로
+    FAIL — 안전 fallback (gate 통과 안 됨, false positive 0).
+    """
+
+    @pytest.fixture
+    def mock_hf_path(self):
+        from pathlib import Path
+        return Path(__file__).resolve().parent.parent / "mock_hf"
+
+    def test_hm04_dangerous_import_isolated_runtime(self, mock_hf_path):
+        """hm-04 evil code를 우리 격리에 직접 통과시켰을 때.
+
+        torch 없는 환경(테스트)에선 import 실패로 ModuleNotFoundError.
+        Docker(torch 설치) 환경에선 ``__import__("builtins")`` 호출 자체는
+        통과하지만 ``builtins`` 모듈 자체는 안전. 핵심: 어떤 환경이든
+        status != PASS이므로 양유상 gate 통과 안 됨 (false positive 0).
+        """
+        src = (mock_hf_path / "hm-04-bad-py-import" / "modeling_evil.py").read_text(
+            encoding="utf-8",
+        )
+        result = restricted_exec(src, timeout_seconds=10.0)
+        # 어떤 결과가 나오든 PASS는 아니어야 함 (안전 fallback)
+        assert result.status != RuntimeStatus.PASS, (
+            f"hm-04가 PASS로 통과 — 위험. 실제 status={result.status}, "
+            f"exception={result.exception_class}"
+        )
+
+    def test_dynamic_subprocess_import_blocked_by_runtime(self):
+        """양유상 AST가 어떤 이유로 동적 import를 못 잡았을 때 우리 격리가
+        2차 방어선으로 잡는지. ``__import__("subprocess")``는 우리 import hook이
+        IMPORT_DENYLIST로 차단 → ImportError + blocked_imports.
+        """
+        src = (
+            'mod = __import__("subprocess")\n'
+            'mod.run(["echo", "hacked"])\n'
+        )
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.FAIL
+        assert "subprocess" in result.blocked_imports
+
+    def test_indirect_eval_via_getattr_blocked(self):
+        """``getattr(__builtins__, "ev"+"al")(...)`` 같은 builtins 우회 시도.
+        builtins overlay에서 eval/getattr 모두 제거됨 → NameError.
+        """
+        src = (
+            'f = getattr(__builtins__, "ev" + "al")\n'
+            'f("1+1")\n'
+        )
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "NameError"
+
+    def test_socket_connect_blocked_by_audit_hook(self):
+        """``socket.connect`` audit event를 hook이 차단 — ImportError(socket)가
+        먼저 막아도 OK.
+        """
+        src = (
+            'import socket\n'
+            's = socket.socket()\n'
+            's.connect(("evil.example.com", 80))\n'
+        )
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.FAIL
+        # socket이 IMPORT_DENYLIST에 있으니 import 단계에서 막힘
+        assert "socket" in result.blocked_imports
+
+    def test_hm04_via_yangyu_orchestrator_grade_c_block(self):
+        """hm-04 코드를 양유상 run_validation_job에 통과시키면 AST가
+        dangerous_calls로 잡아 grade C / BLOCK. 우리 restricted_exec까지
+        도달 안 함 (정상 흐름).
+        """
+        import hashlib
+        from analyzer.orchestrator import build_minimal_request, run_validation_job
+        from analyzer.schemas import (
+            ArtifactRef, FileKind, PolicyInfo, ValidationStatus,
+        )
+        from analyzer.validators.code_restricted_runtime import (
+            make_restricted_runtime_loader,
+        )
+        from pathlib import Path
+
+        mock_hf = Path(__file__).resolve().parent.parent / "mock_hf"
+        src = (mock_hf / "hm-04-bad-py-import" / "modeling_evil.py").read_text(
+            encoding="utf-8",
+        )
+
+        digest = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        artifact = ArtifactRef(
+            artifact_id=f"sha256:{digest}",
+            repo_path="modeling_evil.py",
+            file_name="modeling_evil.py",
+            file_kind=FileKind.PYTHON,
+            detected_extension=".py",
+            media_type=None,
+            size_bytes=len(src.encode("utf-8")),
+            sha256=digest,
+            source_url="https://huggingface.co/hm-04/resolve/main/modeling_evil.py",
+            temp_local_path="/tmp/modeling_evil.py",
+            referenced_by=[],
+            is_generated=False,
+        )
+        policy = PolicyInfo(
+            policy_version="policy-2026.05.08",
+            whitelist_version="wl-2026.04.20",
+            opcode_policy_version="opcode-2026.05.08",
+            config_schema_version="cfg-2026.05.08",
+            runtime_profile_version="rt-2026.05.08",
+        )
+        request = build_minimal_request(
+            request_id="req-hm04", job_id="job-hm04",
+            policy=policy, artifacts=[artifact],
+        )
+
+        sources = {"modeling_evil.py": src}
+        response = run_validation_job(
+            request,
+            source_loader=sources,
+            runtime_check_loader=make_restricted_runtime_loader(
+                sources, timeout_seconds=10.0,
+            ),
+        )
+
+        # hm-04는 양유상 AST가 잡아서 BLOCK
+        assert response.overall_status == ValidationStatus.BLOCK, (
+            f"hm-04가 BLOCK 안 됨. status={response.overall_status}, "
+            f"artifact_results={[(r.artifact.repo_path, r.status) for r in response.artifact_results]}"
+        )
+
+
+# ─────────────────────────────────────────────
 # runtime_check_loader 어댑터 (양유상 orchestrator에 주입할 함수)
 # ─────────────────────────────────────────────
 
