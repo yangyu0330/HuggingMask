@@ -283,58 +283,6 @@ def verify_audit(db: Session = Depends(get_db)):
 
 
 # ─────────────────────────────────────────────
-# 승인된 API 목록 (운영 / 대시보드)
-# ─────────────────────────────────────────────
-
-@router.get("/approved")
-def list_approved(
-    search: str = "",
-    namespace: str = "",
-    source: str = "",
-    limit: int = 50,
-    offset: int = 0,
-    db: Session = Depends(get_db),
-):
-    """승인된 ApprovedApi 목록 — 검색/네임스페이스/source 필터.
-
-    대시보드 ✅ 승인 목록 탭 + bulk 스크립트 운영용.
-    is_blocked=True인 항목은 BLOCKED 응답 전용이므로 여기선 제외.
-    """
-    stmt = select(ApprovedApi).where(ApprovedApi.is_blocked == False)  # noqa: E712
-    if search:
-        stmt = stmt.where(ApprovedApi.api_path.contains(search))
-    if namespace:
-        stmt = stmt.where(ApprovedApi.namespace.contains(namespace))
-    if source:
-        stmt = stmt.where(ApprovedApi.source == source)
-
-    total = db.execute(
-        select(func.count()).select_from(stmt.subquery())
-    ).scalar() or 0
-    rows = db.execute(
-        stmt.order_by(ApprovedApi.added_date.desc()).limit(limit).offset(offset)
-    ).scalars().all()
-
-    return {
-        "items": [
-            {
-                "api_path": a.api_path,
-                "namespace": a.namespace,
-                "source": a.source,
-                "matched_rule": a.matched_rule,
-                "source_version": a.source_version or "",
-                "added_date": a.added_date.isoformat() if a.added_date else "",
-                "reviewer_id": a.reviewer_id or "",
-                "review_note": a.review_note or "",
-            }
-            for a in rows
-        ],
-        "total": total,
-        "count": len(rows),
-    }
-
-
-# ─────────────────────────────────────────────
 # 통계
 # ─────────────────────────────────────────────
 
