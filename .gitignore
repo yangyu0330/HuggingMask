@@ -10,3 +10,4 @@ generated/
 *.db.backup
 *.sqlite
 *.sqlite3
+.claude/
