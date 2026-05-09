@@ -11,6 +11,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from analyzer.schemas import ValidationJobRequest
+from analyzer.service import validate_job
+
+app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
 from whitelist.router import router as whitelist_router
 
@@ -34,4 +38,7 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/internal/v1/validation/jobs")
+def validation_jobs(payload: ValidationJobRequest):
+    return validate_job(payload)
 app.include_router(whitelist_router)
