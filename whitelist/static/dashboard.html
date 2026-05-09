@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>적응형 화이트리스트 엔진 — 보안 관리 대시보드</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:100vh}.header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:24px 32px}.header h1{font-size:22px;font-weight:600}.header p{font-size:13px;opacity:.7;margin-top:4px}.container{max-width:1200px;margin:0 auto;padding:24px}.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-card .label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.5px}.stat-card .value{font-size:32px;font-weight:700;margin-top:4px}.stat-card.approved .value{color:#0f6e56}.stat-card.pending .value{color:#ba7517}.stat-card.blocked .value{color:#a32d2d}.stat-card.total .value{color:#534ab7}.tabs{display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.tab{padding:10px 20px;border-radius:8px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:#666;transition:all .15s}.tab.active{background:#534ab7;color:#fff}.tab:hover:not(.active){background:#f0f0f0}.tab-content{display:none}.tab-content.active{display:block}.section{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:24px;overflow:hidden}.section-header{padding:16px 20px;border-bottom:1px solid #e8e8e8;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}.section-header h2{font-size:16px;font-weight:600}.search-row{display:flex;gap:8px}.search-row input,.search-row select{border:1px solid #ddd;border-radius:8px;padding:6px 12px;font-size:13px}.search-row input{width:200px}.classify-form{padding:20px}.classify-form textarea{width:100%;height:80px;border:1px solid #ddd;border-radius:8px;padding:12px;font-family:monospace;font-size:13px;resize:vertical}.classify-form .row{display:flex;gap:12px;margin-top:12px;align-items:center}.classify-form input[type=text]{flex:1;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px}.btn{border:none;border-radius:8px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}.btn-primary{background:#534ab7;color:#fff}.btn-primary:hover{background:#3c3489}.btn-approve{background:#0f6e56;color:#fff}.btn-approve:hover{background:#085041}.btn-reject{background:#a32d2d;color:#fff}.btn-reject:hover{background:#791f1f}.btn-defer{background:#ba7517;color:#fff}.btn-defer:hover{background:#854f0b}.btn-sm{padding:5px 12px;font-size:12px}.api-path{font-family:monospace;font-weight:500;word-break:break-all}.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}.badge-auto{background:#e1f5ee;color:#0f6e56}.badge-conditional{background:#faeeda;color:#854f0b}.badge-manual{background:#faeeda;color:#ba7517}.badge-blocked{background:#fcebeb;color:#a32d2d}.badge-pending{background:#eeedfe;color:#534ab7}.badge-approved{background:#e1f5ee;color:#0f6e56}.badge-rejected{background:#fcebeb;color:#a32d2d}.result-row{display:grid;grid-template-columns:1fr 120px 140px 200px;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px}.result-row:hover{background:#fafbfc}.pending-row{display:grid;grid-template-columns:1fr 100px 80px 100px 180px;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px;gap:8px}.pending-row:hover{background:#fafbfc}.danger-kw{font-family:monospace;font-size:11px;color:#a32d2d}.model-info{font-size:11px;color:#666}.approved-row{display:grid;grid-template-columns:1.2fr .8fr 100px 120px 1fr;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px;gap:8px}.approved-row:hover{background:#fafbfc}.audit-row{display:grid;grid-template-columns:60px 140px 100px 1fr 100px 1fr 120px;align-items:center;padding:10px 20px;border-bottom:1px solid #f0f0f0;font-size:12px;gap:8px}.audit-row:hover{background:#fafbfc}.hash-val{font-family:monospace;font-size:10px;color:#999}.action-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.action-approve{background:#e1f5ee;color:#0f6e56}.action-reject{background:#fcebeb;color:#a32d2d}.action-defer{background:#faeeda;color:#ba7517}.action-pending{background:#eeedfe;color:#534ab7}.action-add{background:#e6f1fb;color:#185fa5}.table-header{font-weight:600;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:#fafbfc}.table-header:hover{background:#fafbfc}.empty{padding:40px;text-align:center;color:#999;font-size:14px}.pagination{display:flex;justify-content:center;gap:8px;padding:16px}.pagination button{border:1px solid #ddd;border-radius:6px;padding:6px 14px;background:#fff;cursor:pointer;font-size:12px}.pagination button:hover{background:#f0f0f0}.pagination span{padding:6px 10px;font-size:12px;color:#666}.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center}.modal-overlay.active{display:flex}.modal{background:#fff;border-radius:16px;padding:24px;width:500px;max-width:90vw}.modal h3{font-size:18px;margin-bottom:16px}.modal .field{margin-bottom:12px}.modal .field label{display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px}.modal .field input,.modal .field textarea{width:100%;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px}.modal .field textarea{height:60px;resize:vertical}.modal .actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}.toast{position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:200;opacity:0;transform:translateY(10px);transition:all .3s}.toast.show{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+<div class="header"><h1>🛡️ 적응형 화이트리스트 엔진 — 보안 관리 대시보드</h1><p>AI 모델 공급망 보안 파이프라인 | Adaptive Whitelist Engine v0.1.0</p></div>
+<div class="container">
+<div class="stats-row">
+<div class="stat-card approved"><div class="label">승인된 API</div><div class="value" id="stat-approved">-</div></div>
+<div class="stat-card pending"><div class="label">리뷰 대기</div><div class="value" id="stat-pending">-</div></div>
+<div class="stat-card blocked"><div class="label">차단</div><div class="value" id="stat-blocked">-</div></div>
+<div class="stat-card total"><div class="label">영구 차단 목록</div><div class="value">16</div></div>
+</div>
+<div class="tabs">
+<button class="tab active" onclick="switchTab('classify',this)">🔍 분류 테스트</button>
+<button class="tab" onclick="switchTab('pending',this)">📋 리뷰 대기</button>
+<button class="tab" onclick="switchTab('approved',this)">✅ 승인 목록</button>
+<button class="tab" onclick="switchTab('feedback',this)">📨 오탐 피드백</button>
+<button class="tab" onclick="switchTab('audit',this)">📜 감사 로그</button>
+</div>
+
+<div class="tab-content active" id="tab-classify">
+<div class="section"><div class="section-header"><h2>🔍 API 분류 테스트</h2></div>
+<div class="classify-form"><textarea id="api-input">torch.nn.Linear
+torch.nn.functional.gelu
+torch.load
+os.system
+subprocess.Popen
+torch.utils.data.DataLoader</textarea>
+<div class="row"><input type="text" id="model-id" value="test-model"><button class="btn btn-primary" onclick="classifyApis()">분류 실행</button></div></div>
+<div id="classify-results"></div></div>
+<div class="section"><div class="section-header"><h2>📊 분류 결과</h2></div><div id="recent-results"><div class="empty">분류 테스트를 실행하면 결과가 표시됩니다</div></div></div>
+</div>
+
+<div class="tab-content" id="tab-pending">
+<div class="section"><div class="section-header"><h2>📋 Pending List</h2><button class="btn btn-primary btn-sm" onclick="loadPending()">새로고침</button></div><div id="pending-list"></div></div>
+</div>
+
+<div class="tab-content" id="tab-approved">
+<div class="section"><div class="section-header"><h2>✅ 승인된 API 목록</h2>
+<div class="search-row"><input type="text" id="approved-search" placeholder="API 검색..." oninput="loadApproved()">
+<select id="approved-filter" onchange="loadApproved()"><option value="">전체</option><option value="INITIAL">시드</option><option value="AUTO_CRAWL">크롤링</option><option value="MANUAL_REVIEW">수동 승인</option></select></div></div>
+<div class="approved-row table-header"><div>API 경로</div><div>네임스페이스</div><div>추가 경로</div><div>승인자</div><div>승인 사유</div></div>
+<div id="approved-list"></div><div class="pagination" id="approved-pagination"></div></div>
+</div>
+
+<div class="tab-content" id="tab-feedback">
+<div class="section"><div class="section-header"><h2>📨 오탐 피드백 보고 (모듈 5)</h2></div>
+<div class="classify-form">
+<div class="row" style="margin-top:0;gap:8px"><input type="text" id="fb-api" placeholder="차단된 API 경로 (예: torch.nn.functional.scaled_dot_product_attention)" style="flex:2"><input type="text" id="fb-model" placeholder="모델 ID" style="flex:1"></div>
+<div class="row" style="gap:8px"><input type="text" id="fb-reporter" placeholder="보고자 ID" value="dev_user_01" style="flex:1"><input type="text" id="fb-purpose" placeholder="사용 목적" style="flex:2"><button class="btn btn-primary" onclick="submitFeedback()">보고 제출</button></div>
+</div>
+<div id="fb-result"></div></div>
+<div class="section"><div class="section-header"><h2>📋 접수된 보고 목록</h2><button class="btn btn-primary btn-sm" onclick="loadFeedback()">새로고침</button></div>
+<div class="audit-row table-header" style="grid-template-columns:140px 1fr 140px 100px 100px 100px"><div>Report ID</div><div>API 경로 / 목적</div><div>모델</div><div>분류</div><div>SLA</div><div>상태</div></div>
+<div id="fb-list"></div></div>
+</div>
+
+<div class="tab-content" id="tab-audit">
+<div class="section"><div class="section-header"><h2>📜 감사 로그 — 해시 체인 무결성 보장</h2>
+<div class="search-row"><input type="text" id="audit-search" placeholder="API 검색..." oninput="loadAudit()">
+<select id="audit-action" onchange="loadAudit()"><option value="">전체</option><option value="seed_loaded">시드</option><option value="review_approve">승인</option><option value="review_reject">거부</option><option value="review_defer">보류</option><option value="pending_registered">등록</option><option value="feedback_received">오탐신고</option><option value="crawl_auto_approved">크롤</option></select></div></div>
+<div class="audit-row table-header"><div>#</div><div>시각</div><div>액션</div><div>API 경로</div><div>수행자</div><div>사유</div><div>해시 체인</div></div>
+<div id="audit-list"></div><div class="pagination" id="audit-pagination"></div></div>
+</div>
+</div>
+
+<div class="modal-overlay" id="review-modal"><div class="modal"><h3>🔎 API 리뷰</h3>
+<div class="field"><label>API 경로</label><input type="text" id="review-api" readonly></div>
+<div class="field"><label>분류 결과</label><input type="text" id="review-classification" readonly></div>
+<div class="field"><label>리뷰어 ID</label><input type="text" id="review-reviewer" value="security_admin"></div>
+<div class="field"><label>리뷰 노트</label><textarea id="review-note" placeholder="승인/거부 사유를 입력하세요"></textarea></div>
+<div class="actions"><button class="btn" style="background:#e8e8e8" onclick="closeModal()">취소</button>
+<button class="btn btn-defer" onclick="submitReview('defer')">보류</button>
+<button class="btn btn-reject" onclick="submitReview('reject')">거부</button>
+<button class="btn btn-approve" onclick="submitReview('approve')">승인</button></div></div></div>
+<div class="toast" id="toast"></div>
+
+<script>
+// HuggingMask 인터페이스 정의서 v1.0 14·15장 + /internal/v1 prefix
+// enum은 대문자 (PendingClassification.AUTO_APPROVE, ReviewStatus.PENDING 등)
+const API = window.location.origin + '/internal/v1';
+
+let approvedPage = 0, auditPage = 0;
+
+// 가짜 ModelRef — /whitelist/check 호출에 필요한 placeholder
+// (대시보드 분류 테스트는 모델 단위 검증이 아니라 API 단건 분류 용도)
+function _placeholderModel(){
+  return {
+    repo_id: 'dashboard/test',
+    revision: 'main',
+    source_host: 'huggingface.co',
+    source_url: 'https://huggingface.co/dashboard/test',
+    requested_by: 'dashboard',
+    requested_at: new Date().toISOString(),
+    endpoint_mode: 'HF_ENDPOINT_PROXY',
+  };
+}
+function _uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.random()*16|0;return(c==='x'?r:(r&3)|8).toString(16)})}
+
+async function fetchJson(u,o){try{const r=await fetch(u,o);return await r.json()}catch(e){showToast('서버 연결 실패');return null}}
+
+function switchTab(n,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.getElementById('tab-'+n).classList.add('active');if(n==='approved')loadApproved();if(n==='audit')loadAudit();if(n==='pending')loadPending();if(n==='feedback')loadFeedback()}
+
+async function submitFeedback(){
+  const api=document.getElementById('fb-api').value.trim();
+  const mid=document.getElementById('fb-model').value.trim();
+  const rid=document.getElementById('fb-reporter').value.trim();
+  const pur=document.getElementById('fb-purpose').value.trim();
+  if(!api||!mid||!rid||!pur){showToast('모든 필드를 입력하세요');return}
+  const r=await fetch(API+'/feedback',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocked_api:api,model_id:mid,reporter_id:rid,purpose:pur})});
+  const d=await r.json();
+  const el=document.getElementById('fb-result');
+  if(!r.ok){el.innerHTML='<div style="padding:12px 20px;background:#fcebeb;color:#a32d2d;font-size:13px">⚠ '+(d.detail||'오류')+'</div>';return}
+  const cls=d.auto_classification;
+  const bg=cls==='BLOCKED'?'#fcebeb':cls==='AUTO_APPROVE'?'#e1f5ee':'#faeeda';
+  const fg=cls==='BLOCKED'?'#a32d2d':cls==='AUTO_APPROVE'?'#0f6e56':'#854f0b';
+  el.innerHTML='<div style="padding:12px 20px;background:'+bg+';color:'+fg+';font-size:13px"><b>'+d.report_id+'</b> — '+d.message+'</div>';
+  loadFeedback();loadStats();loadPending()
+}
+
+async function loadFeedback(){
+  const d=await fetchJson(API+'/feedback');if(!d)return;
+  const el=document.getElementById('fb-list');
+  if(!d.items?.length){el.innerHTML='<div class="empty">접수된 보고가 없습니다</div>';return}
+  let h='';
+  for(const i of d.items){
+    const tm=i.submitted_at?new Date(i.submitted_at).toLocaleString('ko-KR'):'';
+    const stat=i.auto_rejected?'<span class="badge badge-blocked">자동거부</span>':rvBadge(i.review_status);
+    h+='<div class="audit-row" style="grid-template-columns:140px 1fr 140px 100px 100px 100px"><div style="font-family:monospace;font-size:11px">'+i.report_id+'</div><div><div class="api-path">'+i.blocked_api+'</div><div style="font-size:11px;color:#666">'+i.purpose+'</div><div style="font-size:10px;color:#999">'+tm+' | '+i.reporter_id+'</div></div><div style="font-size:11px;color:#666">'+i.model_id+'</div><div>'+clsBadge(i.auto_classification)+'</div><div style="font-size:11px">'+i.estimated_response_hours+'h</div><div>'+stat+'</div></div>'
+  }
+  el.innerHTML=h
+}
+
+async function loadStats(){const d=await fetchJson(API+'/stats');if(!d)return;document.getElementById('stat-approved').textContent=(d.approved_active||0).toLocaleString();document.getElementById('stat-pending').textContent=(d.pending_review||0).toLocaleString();document.getElementById('stat-blocked').textContent=d.blocked||0}
+
+// 분류 테스트 — HuggingMask 14.1 WhitelistCheckRequest로 호출, 14.2 응답 배열 받음
+async function classifyApis(){
+  const t=document.getElementById('api-input').value.trim();if(!t)return;
+  const paths=t.split('\n').map(s=>s.trim()).filter(Boolean);
+  const reqId=_uuid(), jobId=_uuid();
+  const body={schema_version:'1.0',request_id:reqId,job_id:jobId,model:_placeholderModel(),apis:paths};
+  const d=await fetchJson(API+'/whitelist/check',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(!Array.isArray(d))return;
+  // 4-state 카운트
+  const counts={ALLOWED:0,BLOCKED:0,PENDING:0,UNKNOWN:0};
+  for(const r of d){counts[r.status]=(counts[r.status]||0)+1}
+  let h='<div style="padding:12px 20px;background:#fafbfc;border-top:1px solid #e8e8e8;display:flex;gap:16px;font-size:13px">'
+    +'<span>전체:<b>'+d.length+'</b></span>'
+    +'<span style="color:#0f6e56">허용:<b>'+counts.ALLOWED+'</b></span>'
+    +'<span style="color:#ba7517">대기:<b>'+counts.PENDING+'</b></span>'
+    +'<span style="color:#534ab7">미등록:<b>'+counts.UNKNOWN+'</b></span>'
+    +'<span style="color:#a32d2d">차단:<b>'+counts.BLOCKED+'</b></span></div>';
+  document.getElementById('classify-results').innerHTML=h;
+  let rows='<div class="result-row table-header"><div>API 경로</div><div>상태</div><div>매칭 규칙</div><div>사유</div></div>';
+  for(const r of d){
+    rows+='<div class="result-row"><div class="api-path">'+r.api_path+'</div><div>'+statusBadge(r.status)+'</div><div style="font-size:11px;font-family:monospace;color:#666">'+(r.matched_rule||'—')+'</div><div style="font-size:12px;color:#444">'+(r.reason||'')+'</div></div>'
+  }
+  document.getElementById('recent-results').innerHTML=rows;
+  showToast('판정 완료: '+d.length+'개');
+  loadStats();loadPending()
+}
+
+async function loadPending(){
+  const d=await fetchJson(API+'/pending');if(!d)return;
+  const el=document.getElementById('pending-list');
+  if(!d.items?.length){el.innerHTML='<div class="empty">리뷰 대기 중인 API가 없습니다</div>';return}
+  let h='<div class="pending-row table-header"><div>API 경로</div><div>분류</div><div>탐지</div><div>상태</div><div>액션</div></div>';
+  for(const i of d.items){
+    const risk=i.risk_keywords||[];
+    const models=i.model_list||[];
+    h+='<div class="pending-row"><div><div class="api-path">'+i.api_path+'</div>'
+      +(risk.length?'<div class="danger-kw">⚠ '+risk.join(', ')+'</div>':'')
+      +(models.length?'<div class="model-info">모델: '+models.join(', ')+'</div>':'')
+      +'</div><div>'+clsBadge(i.auto_classification)+'</div><div>'+i.seen_count+'회</div><div>'+rvBadge(i.review_status)+'</div>'
+      +'<div><button class="btn btn-approve btn-sm" onclick="openReview(\''+i.api_path+'\',\''+i.auto_classification+'\')" '+(i.review_status!=='PENDING'?'disabled style="opacity:.5"':'')+'>리뷰</button></div></div>'
+  }
+  el.innerHTML=h
+}
+
+async function loadApproved(pg){
+  if(pg!==undefined)approvedPage=pg;
+  const s=document.getElementById('approved-search').value;
+  const f=document.getElementById('approved-filter').value;
+  const p=new URLSearchParams({limit:50,offset:approvedPage*50});
+  if(s)p.set('search',s);
+  if(f)p.set('source',f);
+  const d=await fetchJson(API+'/approved?'+p);if(!d)return;
+  const el=document.getElementById('approved-list');
+  if(!d.items?.length){el.innerHTML='<div class="empty">검색 결과 없음</div>';return}
+  let h='';
+  for(const a of d.items){
+    const sb={'INITIAL':'시드','AUTO_CRAWL':'크롤링','MANUAL_REVIEW':'수동'}[a.source]||a.source;
+    h+='<div class="approved-row"><div class="api-path">'+a.api_path+'</div><div style="font-size:11px;color:#666">'+a.namespace+'</div><div><span class="badge badge-approved">'+sb+'</span></div><div style="font-size:11px;color:#666">'+(a.reviewer_id||'system')+'</div><div style="font-size:12px;color:#444;font-style:italic">'+(a.review_note||'—')+'</div></div>'
+  }
+  el.innerHTML=h;
+  const tp=Math.ceil(d.total/50);
+  let pg2='<span>'+d.total.toLocaleString()+'개 중 '+(approvedPage*50+1)+'-'+Math.min((approvedPage+1)*50,d.total)+'</span>';
+  if(approvedPage>0)pg2+='<button onclick="loadApproved('+(approvedPage-1)+')">이전</button>';
+  if(approvedPage<tp-1)pg2+='<button onclick="loadApproved('+(approvedPage+1)+')">다음</button>';
+  document.getElementById('approved-pagination').innerHTML=pg2
+}
+
+async function loadAudit(pg){
+  if(pg!==undefined)auditPage=pg;
+  const s=document.getElementById('audit-search').value;
+  const a=document.getElementById('audit-action').value;
+  const p=new URLSearchParams({limit:50,offset:auditPage*50});
+  if(s)p.set('api_path',s);
+  if(a)p.set('action',a);
+  const d=await fetchJson(API+'/audit?'+p);if(!d)return;
+  const el=document.getElementById('audit-list');
+  if(!d.items?.length){el.innerHTML='<div class="empty">로그 없음</div>';return}
+  let h='';
+  for(const l of d.items){
+    const ac=l.action.includes('approve')?'action-approve':l.action.includes('reject')?'action-reject':l.action.includes('defer')?'action-defer':l.action.includes('pending')?'action-pending':'action-add';
+    const al={'seed_loaded':'시드','review_approve':'승인','review_reject':'거부','review_defer':'보류','review_conditional':'조건부','pending_registered':'등록','pending_upserted':'갱신','feedback_received':'오탐신고','crawl_auto_approved':'크롤'}[l.action]||l.action;
+    const tm=l.timestamp?new Date(l.timestamp).toLocaleString('ko-KR'):'';
+    const hv=l.entry_hash||'';
+    h+='<div class="audit-row"><div style="color:#999">#'+l.id+'</div><div style="font-size:11px">'+tm+'</div><div><span class="action-badge '+ac+'">'+al+'</span></div><div class="api-path">'+l.api_path+'</div><div style="font-size:11px;color:#666">'+l.actor+'</div><div style="font-size:12px">'+(l.detail||'—')+'</div><div class="hash-val" title="'+hv+'">'+hv+'</div></div>'
+  }
+  el.innerHTML=h;
+  const tp=Math.ceil(d.total/50);
+  let pg2='<span>'+d.total.toLocaleString()+'개 로그</span> <button onclick="verifyChain()" style="margin-left:8px">체인 검증</button>';
+  if(auditPage>0)pg2+='<button onclick="loadAudit('+(auditPage-1)+')">이전</button>';
+  if(auditPage<tp-1)pg2+='<button onclick="loadAudit('+(auditPage+1)+')">다음</button>';
+  document.getElementById('audit-pagination').innerHTML=pg2
+}
+
+async function verifyChain(){const d=await fetchJson(API+'/audit/verify');if(!d)return;if(d.valid)showToast('✓ 체인 무결성 OK ('+d.total_entries+'개)');else showToast('⚠ 체인 위반 '+d.violation_count+'건')}
+
+function openReview(a,c){document.getElementById('review-api').value=a;document.getElementById('review-classification').value=c;document.getElementById('review-note').value='';document.getElementById('review-modal').classList.add('active')}
+function closeModal(){document.getElementById('review-modal').classList.remove('active')}
+
+async function submitReview(dec){
+  const d=await fetchJson(API+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_path:document.getElementById('review-api').value,decision:dec,reviewer_id:document.getElementById('review-reviewer').value,review_note:document.getElementById('review-note').value})});
+  if(d?.applied){showToast(d.api_path+' → '+{approve:'승인',reject:'거부',defer:'보류'}[dec]+' 완료');closeModal();loadStats();loadPending()}
+}
+
+// PendingClassification (대문자 enum)
+function clsBadge(c){const m={AUTO_APPROVE:['자동승인','badge-auto'],CONDITIONAL:['조건부','badge-conditional'],MANUAL:['수동리뷰','badge-manual'],BLOCKED:['차단','badge-blocked']};const[l,s]=m[c]||[c,''];return'<span class="badge '+s+'">'+l+'</span>'}
+
+// ReviewStatus (대문자 enum)
+function rvBadge(s){const m={PENDING:['대기','badge-pending'],UNDER_REVIEW:['검토중','badge-pending'],APPROVED:['승인됨','badge-approved'],REJECTED:['거부됨','badge-rejected'],DEFERRED:['보류됨','badge-conditional']};const[l,c]=m[s]||[s,''];return'<span class="badge '+c+'">'+l+'</span>'}
+
+// WhitelistStatus 4-state (대문자 enum) — 분류 테스트 결과 표시용
+function statusBadge(s){const m={ALLOWED:['허용','badge-approved'],BLOCKED:['차단','badge-blocked'],PENDING:['대기','badge-pending'],UNKNOWN:['미등록','badge-conditional']};const[l,c]=m[s]||[s,''];return'<span class="badge '+c+'">'+l+'</span>'}
+
+function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000)}
+
+loadStats();loadPending()
+</script>
+</body>
+</html>
