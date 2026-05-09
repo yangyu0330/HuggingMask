@@ -11,19 +11,32 @@ import를 제거한 격리 환경에서 코드를 실제 실행해보고 시그�
 - 위험 API 발견 코드는 호출 전에 BLOCK되므로 여기까지 오지 않음
 - 격리 수준은 in-process Python (OS 레벨은 검증3 ``CODE_SANDBOX_RUNTIME`` 영역)
 
-격리 메커니즘 (별 4 / Phase 2~3):
-1. Python 서브프로세스 격리 (multiprocessing.Process)
-2. builtins 화이트리스트 overlay (``__builtins__``를 안전 dict로 교체)
-3. import allowlist (custom ``__import__``) + denylist import hook
-4. audit hook (sys.addaudithook)
-5. 시간 제한 (Process.join(timeout) + Process.kill)
-6. 메모리 제한 (Linux: resource.setrlimit, Windows: psutil 모니터)
+격리 메커니즘 (PR #17 review 반영):
+1. AST 사전 검사 — 위험 dunder attribute(``__subclasses__``/``__mro__``/
+   ``__class__``/``__globals__``/``__builtins__`` 등) 사용 차단
+2. Python 서브프로세스 격리 (multiprocessing.Process, spawn)
+3. builtins 화이트리스트 overlay (``__builtins__``를 안전 dict로 교체)
+4. import allowlist (custom ``__import__``) + denylist import hook
+   주의: ``IMPORT_ALLOWLIST``는 사용자 코드의 직접 import 화이트리스트.
+   ``torch``/``numpy`` 등 라이브러리는 내부에서 ``ctypes``/``os``를
+   import하므로 fail-closed 정책으로 실제로는 통과하지 않는다 (의도된 동작).
+5. audit hook (sys.addaudithook) — ``open``/``subprocess``/``socket``/
+   ``ctypes`` 호출 즉시 차단
+6. ``_SafeSysProxy`` — frame introspection(``_getframe``/``settrace``)과
+   import internals(``meta_path``/``path_hooks``) 노출 차단
+7. ``_sanitize_user_visible_object`` — 허용 모듈을 통한 real builtins/
+   real sys 회수 차단 (단 ``dataclasses``/``functools``/``typing`` 같은
+   stdlib는 정상 사용 깨뜨리지 않게 builtins은 보존)
+8. 시간 제한 (Process.join(timeout) + Process.kill)
+9. 메모리 제한 — Linux/Mac: ``resource.setrlimit(RLIMIT_AS)``.
+   Windows에는 RLIMIT_AS가 없어 skip한다 (운영은 Docker(Linux) 전제).
 
 이 파일은 실제 제한 런타임을 실행하고 ``runtime_check`` dict를 반환한다.
 """
 
 from __future__ import annotations
 
+import ast
 import logging
 import multiprocessing as mp
 import time
@@ -72,6 +85,29 @@ IMPORT_DENYLIST: frozenset[str] = frozenset({
 })
 
 
+# 위험 dunder attribute — AST 사전 검사로 사용자 코드에서 직접 접근 차단.
+# 이들은 ``object.__subclasses__()`` / ``func.__globals__["__builtins__"]`` /
+# ``frame.__class__.__mro__`` 같은 introspection chain의 핵심 hop이라,
+# 노출되면 builtins overlay·sanitize·sys proxy를 모두 우회 가능.
+# 정상 dunder(``__name__``/``__doc__``/``__init__``/``__repr__`` 등)는 허용.
+DANGEROUS_DUNDER_ATTRS: frozenset[str] = frozenset({
+    # type 트리 순회
+    "__class__", "__bases__", "__base__", "__mro__", "__subclasses__",
+    "__init_subclass__",
+    # globals / module internals
+    "__globals__", "__builtins__", "__import__",
+    "__loader__", "__spec__", "__file__", "__path__", "__package__",
+    # 객체 dict / weakref
+    "__dict__", "__weakref__",
+    # 동적 attribute 접근 우회
+    "__getattribute__", "__setattr__", "__delattr__",
+    # function / method introspection
+    "__code__", "__func__", "__self__", "__closure__",
+    "__defaults__", "__kwdefaults__", "__wrapped__",
+    "__qualname__", "__annotations__",
+})
+
+
 # 결과 status 값 (양유상 _runtime_gate_passed가 "PASS"만 통과시킴)
 class RuntimeStatus:
     PASS = "PASS"
@@ -114,7 +150,38 @@ class RestrictedRuntimeResult:
 
 
 # ─────────────────────────────────────────────
-# 메인 진입점 (Phase 2~3에서 구현)
+# AST 사전 검사 — 위험 dunder attribute 사용 차단
+# ─────────────────────────────────────────────
+
+def _scan_dangerous_dunders(source: str) -> tuple[bool, str | None]:
+    """사용자 코드를 AST로 파싱해 위험 dunder attribute 사용을 검출한다.
+
+    검출 패턴:
+      - ``obj.__subclasses__`` / ``obj.__class__`` / ``obj.__mro__`` 등
+        ``ast.Attribute(attr=...)`` 노드
+      - ``Foo.__dict__["__subclasses__"]`` 같은 subscript는 attribute 단계에서
+        ``__dict__``가 잡혀서 차단됨
+      - 동적 ``getattr``는 ``getattr`` 자체가 builtins overlay에서 제거됨
+
+    Returns:
+        (ok, reason). ok=False면 reason에 차단된 attr 이름.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return False, f"SyntaxError: {exc}"
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in DANGEROUS_DUNDER_ATTRS:
+            return False, node.attr
+        # 함수 정의 등에서 dangerous dunder를 이름으로 정의하는 것도 차단
+        if isinstance(node, ast.FunctionDef) and node.name in DANGEROUS_DUNDER_ATTRS:
+            return False, node.name
+    return True, None
+
+
+# ─────────────────────────────────────────────
+# 메인 진입점
 # ─────────────────────────────────────────────
 
 # ─────────────────────────────────────────────
@@ -213,8 +280,13 @@ def _worker_run_in_subprocess(
     # 'compile'/'exec'는 audit이 아니라 builtins overlay에서 제거 (사용자
     # globals에 없음 → NameError). 우리(worker)가 호출하는 compile/exec는
     # audit이 안 막아야 사용자 코드를 실행할 수 있다.
+    # 주의: 'open' 이벤트는 사용자 코드 뿐 아니라 import 처리 중 Python이
+    # .py/.pyc 파일을 여는 것까지 잡혀 정상 import가 깨진다. 따라서 audit
+    # hook에는 추가하지 않고, ``_io.FileIO`` 우회는 AST 사전 검사
+    # (``__subclasses__`` 차단)로 잡는다.
     _DANGEROUS_AUDIT_EVENTS = (
         "subprocess.Popen", "os.system", "os.exec",
+        "os.fork", "os.spawn", "os.posix_spawn", "os.startfile",
         "socket.connect", "socket.bind", "socket.gethostbyname",
         "ctypes.PyObj_FromPtr", "ctypes.dlopen",
     )
@@ -280,9 +352,24 @@ def _worker_run_in_subprocess(
     class _SafeSysProxy:
         modules = _SafeModulesMapping()
         _blocked_attrs = {
+            # import internals — sanitize 우회 가능
             "meta_path",
             "path_hooks",
             "path_importer_cache",
+            # frame / trace introspection — worker frame에서 _builtins
+            # local을 회수해 real eval/open 사용 가능 (양유상 P1 #3 재현)
+            "_getframe",
+            "_current_frames",
+            "settrace",
+            "gettrace",
+            "setprofile",
+            "getprofile",
+            # 디버깅·내부 진단 — 잠재적 우회 면적
+            "_clear_type_cache",
+            "_debugmallocstats",
+            "set_coroutine_origin_tracking_depth",
+            "audit",
+            "addaudithook",
         }
 
         def __getattr__(self, name: str) -> Any:
@@ -300,6 +387,22 @@ def _worker_run_in_subprocess(
         name: _blocked_builtin(name) for name in RESTRICTED_BUILTINS
     }
 
+    # stdlib 모듈 화이트리스트 — sanitize에서 ``__builtins__`` 교체를
+    # 면제한다. ``dataclasses``의 ``@dataclass`` 데코레이터가 내부적으로
+    # ``exec``로 ``__init__`` 메서드를 동적 생성하므로, ``__builtins__``를
+    # safe overlay로 바꾸면 정상 사용이 깨진다 (양유상 P2 #5 재현).
+    # 사용자 코드가 이 모듈을 통한 우회를 시도해도, 모듈 globals에서
+    # ``__builtins__``/``__globals__`` 같은 dunder access는 AST 사전 검사로
+    # 이미 차단된다.
+    # 주의: ``typing``은 모듈 globals에 ``sys`` attribute를 가지므로
+    # ``import typing; typing.sys.<frame_attr>`` 같은 우회 경로가 있다.
+    # 따라서 typing은 preserve list에 넣지 않고 sanitize를 받게 한다.
+    _SANITIZE_PRESERVE_STDLIB = frozenset({
+        "dataclasses", "functools", "itertools",
+        "abc", "collections", "collections.abc",
+        "enum", "math",
+    })
+
     def _sanitize_user_visible_object(obj: Any, seen: set[int] | None = None) -> Any:
         if not isinstance(obj, _types.ModuleType):
             return obj
@@ -310,6 +413,9 @@ def _worker_run_in_subprocess(
             return safe_sys_proxy
         if _is_denied_import(obj.__name__):
             return _BlockedModuleProxy(obj.__name__)
+        # stdlib 정상 사용 보호 — 모듈은 그대로 반환, 내부 sanitize 안 함
+        if obj.__name__ in _SANITIZE_PRESERVE_STDLIB:
+            return obj
 
         seen = seen or set()
         obj_id = id(obj)
@@ -364,11 +470,19 @@ def _worker_run_in_subprocess(
 
     # 사용자 코드의 globals에 위험 함수가 절대 노출 안 되도록 RESTRICTED 제거.
     # (audit hook으로 별도 차단도 함 — 이중 방어)
-    user_globals: dict[str, Any] = {
-        "__builtins__": safe_builtins,
-        "__name__": "__restricted__",
-        "__doc__": None,
-    }
+    # 사용자 코드를 ``__restricted__`` 이름의 fake module로 등록한다.
+    # ``dataclasses`` 같은 stdlib decorator는 ``sys.modules.get(cls.__module__)
+    # .__dict__``를 통해 클래스 정의 위치를 조회하므로, fake module이 real
+    # ``sys.modules``에 등록되어 있어야 정상 동작 (양유상 P2 #5).
+    # 사용자 코드는 ``_SafeSysProxy``를 통해서만 sys.modules에 접근하고,
+    # ``_SafeModulesMapping``이 allowlist에 없는 모듈은 KeyError 던지므로
+    # ``__restricted__``를 직접 import해도 차단된다.
+    restricted_module = _types.ModuleType("__restricted__")
+    user_globals = restricted_module.__dict__
+    user_globals["__builtins__"] = safe_builtins
+    user_globals["__name__"] = "__restricted__"
+    user_globals["__doc__"] = None
+    _sys.modules["__restricted__"] = restricted_module
 
     # ── 실행 ──
     started_at = time.perf_counter()
@@ -445,10 +559,31 @@ def restricted_exec(
         ``_runtime_gate_passed()``가 통과 인정 → B-1 PASS gate.
 
     격리:
+        - 사용자 source AST 사전 검사 — 위험 dunder attribute 차단
         - multiprocessing.Process로 별도 프로세스 격리 (Windows: spawn)
         - 자식 안에서 builtins overlay + import hook + audit hook 적용
         - 부모는 ``timeout_seconds`` 초과 시 자식 강제 종료
     """
+    # ── AST 사전 검사 ──
+    # 위험 dunder attribute (``__subclasses__`` / ``__class__`` /
+    # ``__mro__`` / ``__globals__`` / ``__builtins__`` 등) 사용은
+    # 자식 spawn 전에 즉시 reject. 격리 비용 낭비를 줄이고 객체 그래프
+    # 우회와 frame introspection 우회를 한 번에 차단한다.
+    ast_ok, ast_reason = _scan_dangerous_dunders(source)
+    if not ast_ok:
+        return RestrictedRuntimeResult(
+            runtime_mode="RESTRICTED_RUNTIME",
+            status=RuntimeStatus.FAIL,
+            builtins_removed=list(RESTRICTED_BUILTINS),
+            import_allowlist_applied=True,
+            dummy_forward_executed=False,
+            exception_class="DangerousDunderAccess",
+            traceback=(
+                f"제한 런타임: 위험 dunder attribute 사용 감지 — '{ast_reason}'. "
+                "객체 그래프 / frame / globals 우회 경로로 사용되므로 차단됨."
+            ),
+        )
+
     effective_import_allowlist = IMPORT_ALLOWLIST | frozenset(extra_import_allowlist or ())
 
     # Queue로 자식 → 부모 결과 전달
@@ -586,6 +721,7 @@ def make_restricted_runtime_loader(
 __all__ = [
     "RestrictedRuntimeResult", "RuntimeStatus",
     "RESTRICTED_BUILTINS", "IMPORT_ALLOWLIST", "IMPORT_DENYLIST",
+    "DANGEROUS_DUNDER_ATTRS",
     "restricted_exec", "runtime_check_loader",
     "make_restricted_runtime_loader",
 ]
