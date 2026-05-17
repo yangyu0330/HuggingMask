@@ -62,8 +62,10 @@ def _extract_reason(core_result: dict):
 def _route_kind_for(artifact) -> RouteKind:
     if artifact.file_kind == "SAFETENSORS":
         return RouteKind.SAFETENSORS_FAST_PATH
+
     if artifact.file_kind == "PICKLE":
         return RouteKind.PICKLE_PATH_A
+
     return RouteKind.CONFIG_SCHEMA_VALIDATION
 
 
@@ -188,8 +190,30 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
         if mapped.status == ValidationStatus.BLOCK:
             overall_status = "BLOCK"
             blocked_artifact_ids.append(artifact.artifact_id)
+
         elif mapped.status == ValidationStatus.PASS:
-            approved_artifact_ids.append(artifact.artifact_id)
+            if artifact.file_kind == "PICKLE":
+                # 보안 정책:
+                # 원본 pickle은 release 대상이 아님.
+                # Path A에서 변환된 safetensors artifact만 release 승인.
+                if mapped.generated_artifact is None:
+                    overall_status = "BLOCK"
+                    blocked_artifact_ids.append(artifact.artifact_id)
+                    mapped.status = ValidationStatus.BLOCK
+                    mapped.reason_entries.append(
+                        ReasonEntry(
+                            code="PICKLE_RELEASE_REQUIRES_CONVERTED_SAFETENSORS",
+                            message=(
+                                "pickle passed validation but no converted "
+                                "safetensors artifact is available for release"
+                            ),
+                        )
+                    )
+                else:
+                    approved_artifact_ids.append(mapped.generated_artifact.artifact_id)
+            else:
+                approved_artifact_ids.append(artifact.artifact_id)
+
         else:
             pending_artifact_ids.append(artifact.artifact_id)
 

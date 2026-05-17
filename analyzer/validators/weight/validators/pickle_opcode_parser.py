@@ -5,8 +5,8 @@ from typing import Any
 
 import torch
 
+from analyzer.validators.weight.dtypes import DTYPE_MAP
 from analyzer.validators.weight.reporting import make_tensor_entry
-
 
 ALLOWED_OPCODES = {
     "PROTO",
@@ -70,42 +70,20 @@ BLOCKED_EXECUTION_OPCODES = {
 
 _MARK = object()
 
-
-DTYPE_MAP = {
-    "float16": torch.float16,
-    "float32": torch.float32,
-    "float64": torch.float64,
-    "bfloat16": torch.bfloat16,
-    "int8": torch.int8,
-    "int16": torch.int16,
-    "int32": torch.int32,
-    "int64": torch.int64,
-    "uint8": torch.uint8,
-    "bool": torch.bool,
-    "torch.float16": torch.float16,
-    "torch.float32": torch.float32,
-    "torch.float64": torch.float64,
-    "torch.bfloat16": torch.bfloat16,
-    "torch.int8": torch.int8,
-    "torch.int16": torch.int16,
-    "torch.int32": torch.int32,
-    "torch.int64": torch.int64,
-    "torch.uint8": torch.uint8,
-    "torch.bool": torch.bool,
-}
-
-
 def _find_mark(stack: list[Any]) -> int:
     for i in range(len(stack) - 1, -1, -1):
         if stack[i] is _MARK:
             return i
+
     raise ValueError("MARK not found")
 
 
 def _product(shape: list[int]) -> int:
     result = 1
+
     for dim in shape:
         result *= dim
+
     return result
 
 
@@ -147,6 +125,7 @@ def _reconstruct_safe_object(path: str) -> dict:
                         "reason_code": "PICKLE_PARSE_ERROR",
                         "reason": "empty stack at STOP",
                     }
+
                 return {
                     "status": "PASS",
                     "object": stack[-1],
@@ -192,8 +171,10 @@ def _reconstruct_safe_object(path: str) -> dict:
                 value = stack.pop()
                 key = stack.pop()
                 target = stack[-1]
+
                 if not isinstance(target, dict):
                     raise ValueError("SETITEM target is not dict")
+
                 target[key] = value
 
             elif name == "SETITEMS":
@@ -202,6 +183,7 @@ def _reconstruct_safe_object(path: str) -> dict:
                 del stack[mark_index:]
 
                 target = stack[-1]
+
                 if not isinstance(target, dict):
                     raise ValueError("SETITEMS target is not dict")
 
@@ -210,8 +192,10 @@ def _reconstruct_safe_object(path: str) -> dict:
             elif name == "APPEND":
                 value = stack.pop()
                 target = stack[-1]
+
                 if not isinstance(target, list):
                     raise ValueError("APPEND target is not list")
+
                 target.append(value)
 
             elif name == "APPENDS":
@@ -220,8 +204,10 @@ def _reconstruct_safe_object(path: str) -> dict:
                 del stack[mark_index:]
 
                 target = stack[-1]
+
                 if not isinstance(target, list):
                     raise ValueError("APPENDS target is not list")
+
                 target.extend(items)
 
             elif name == "LIST":
@@ -292,9 +278,15 @@ def _schema_to_tensor_dict(obj: Any) -> dict:
         raise ValueError("top-level object is not dict")
 
     if "__tensor_dict__" not in obj:
-        raise ValueError("unsupported pickle format: missing __tensor_dict__")
+        raise ValueError(
+            "unsupported pickle format: Path A currently supports only the "
+            "HuggingMask __tensor_dict__ safe schema. Ordinary torch.save "
+            "state_dict / pytorch_model.bin files are blocked unless a "
+            "non-executing PyTorch storage parser is implemented."
+        )
 
     raw_tensor_dict = obj["__tensor_dict__"]
+
     if not isinstance(raw_tensor_dict, dict):
         raise ValueError("__tensor_dict__ must be dict")
 
@@ -321,6 +313,7 @@ def _schema_to_tensor_dict(obj: Any) -> dict:
             raise ValueError(f"invalid data for {name}")
 
         expected = _product(shape)
+
         if len(data) != expected:
             raise ValueError(
                 f"data length mismatch for {name}: expected {expected}, got {len(data)}"
