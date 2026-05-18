@@ -124,6 +124,74 @@ SLA_HOURS: dict[PendingClassification, int] = {
 
 
 # ─────────────────────────────────────────────
+# 모듈 1 — 공식 문서 크롤링 대상
+# ─────────────────────────────────────────────
+
+CRAWL_TARGETS: dict[str, dict] = {
+    "pytorch": {
+        "base_url": "https://pytorch.org/docs/stable/",
+        "pages": [
+            "nn.html",
+            "nn.functional.html",
+            "torch.html",
+            "tensors.html",
+            "optim.html",
+            "autograd.html",
+            "cuda.html",
+            "linalg.html",
+            "fft.html",
+            "special.html",
+        ],
+    },
+    "transformers": {
+        "base_url": "https://huggingface.co/docs/transformers/",
+        "pages": [
+            "main_classes/model",
+            "main_classes/configuration",
+            "main_classes/tokenizer",
+            "main_classes/trainer",
+        ],
+    },
+    "numpy": {
+        "base_url": "https://numpy.org/doc/stable/reference/",
+        "pages": [
+            "routines.array-creation.html",
+            "routines.array-manipulation.html",
+            "routines.math.html",
+            "routines.linalg.html",
+        ],
+    },
+}
+
+# 한 번의 크롤링에서 이 수 이상 신규 API가 발견되면 자동 플래그 (상세설계 9.3절)
+CRAWL_SPIKE_THRESHOLD: int = 100
+
+# 도메인 화이트리스트 (HTTPS 외 차단, 외부 도메인 접근 차단)
+ALLOWED_CRAWL_DOMAINS: set[str] = {
+    "pytorch.org",
+    "huggingface.co",
+    "numpy.org",
+}
+
+
+# ─────────────────────────────────────────────
+# 모듈 2 — 검증된 조직 (HuggingFace Verified Org)
+# ─────────────────────────────────────────────
+
+VERIFIED_ORGANIZATIONS: dict[str, str] = {
+    "meta-llama":   "Meta AI",
+    "google":       "Google",
+    "mistralai":    "Mistral AI",
+    "microsoft":    "Microsoft",
+    "bigscience":   "BigScience",
+    "EleutherAI":   "EleutherAI",
+    "Qwen":         "Alibaba Qwen",
+    "deepseek-ai":  "DeepSeek",
+    "THUDM":        "Tsinghua THUDM",
+}
+
+
+# ─────────────────────────────────────────────
 # 외부 참조 URL 생성 (PendingApiRecord.documentation_url)
 # ─────────────────────────────────────────────
 
