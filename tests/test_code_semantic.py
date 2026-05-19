@@ -438,6 +438,293 @@ def test_processor_config_chat_template_records_processor_inventory_and_findings
     assert "CHAT_TEMPLATE_ADD_GENERATION_PROMPT_PRESENT" in finding_codes
 
 
+def test_invalid_image_size_and_crop_size_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 0, "width": 224},
+            "crop_size": "large",
+            "do_rescale": True,
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": True,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_SIZE_INVALID" in finding_codes
+    assert "IMAGE_CROP_SIZE_INVALID" in finding_codes
+
+
+def test_invalid_image_mean_and_std_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": 224,
+            "crop_size": 224,
+            "do_normalize": True,
+            "image_mean": [0.5, 99.0],
+            "image_std": [0.5, 0.0, 0.5],
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_MEAN_INVALID" in finding_codes
+    assert "IMAGE_STD_INVALID" in finding_codes
+
+
+def test_invalid_rescale_factor_records_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": 224,
+            "crop_size": 224,
+            "do_rescale": True,
+            "rescale_factor": 0,
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_RESCALE_FACTOR_INVALID" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_invalid_image_bool_type_fields_record_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "do_resize": "yes",
+            "size": 224,
+            "crop_size": 224,
+            "do_rescale": "true",
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": "false",
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_BOOL_FIELD_INVALID" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_invalid_channel_and_data_format_record_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": 224,
+            "crop_size": 224,
+            "channel_order": "CMYK",
+            "data_format": "NHWC",
+            "input_data_format": "NCHW",
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_FORMAT_INVALID" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_invalid_audio_sampling_rate_records_invariant_finding() -> None:
+    source = json.dumps({"sampling_rate": 999999, "padding_value": 0.0, "feature_size": 80})
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "AUDIO_SAMPLING_RATE_INVALID" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_invalid_audio_padding_value_feature_size_and_max_length_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "sampling_rate": 16000,
+            "padding_value": "0",
+            "feature_size": 0,
+            "max_length": -1,
+            "truncation": {"enabled": True},
+            "padding": {"strategy": "max_length"},
+            "return_attention_mask": "yes",
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "AUDIO_PADDING_VALUE_INVALID" in finding_codes
+    assert "AUDIO_FEATURE_SIZE_INVALID" in finding_codes
+    assert "AUDIO_MAX_LENGTH_INVALID" in finding_codes
+    assert "AUDIO_FIELD_TYPE_INVALID" in finding_codes
+
+
+def test_invalid_processor_component_refs_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "tokenizer_class": "DemoTokenizer",
+            "image_processor_class": 123,
+            "image_processor": [],
+            "feature_extractor_class": "DemoFeatureExtractor",
+            "feature_extractor": 42,
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "PROCESSOR_CLASS_REFERENCE_INVALID" in finding_codes
+    assert "PROCESSOR_COMPONENT_REF_MISSING" in finding_codes
+    assert "PROCESSOR_COMPONENT_REF_INVALID" in finding_codes
+
+
+def test_processor_chat_template_media_placeholder_records_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "chat_template": (
+                "{% for message in messages %}<|user|>{{ message['content'] }}{% endfor %}"
+                "{% if image %}<image>{{ image }}{% endif %}"
+                "{% if video %}<video>{{ video }}{% endif %}"
+                "{% if audio %}<audio>{{ audio }}{% endif %}"
+            ),
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "PROCESSOR_CHAT_TEMPLATE_MEDIA_LITERAL" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_baseline_match_with_processor_invariant_finding_is_review() -> None:
+    source = json.dumps({"do_resize": True, "size": 0, "crop_size": 224})
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_SIZE_INVALID" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_baseline_match_without_processor_invariant_finding_can_pass() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 224, "width": 224},
+            "crop_size": {"height": 224, "width": 224},
+            "do_rescale": True,
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": True,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "channel_order": "RGB",
+            "data_format": "channels_first",
+            "input_data_format": "channels_last",
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.grade is CodeGrade.B1
+    assert result.status is ValidationStatus.PASS
+    assert result.details["semantic_check"]["status"] == "PASSED"
+
+
 def test_metadata_url_or_path_like_literal_records_network_or_path_finding() -> None:
     source = json.dumps(
         {

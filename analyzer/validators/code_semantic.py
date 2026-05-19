@@ -187,7 +187,16 @@ _TOKENIZER_INVARIANT_FILE_KINDS = {
     FileKind.ADDED_TOKENS_JSON,
 }
 
+_PROCESSOR_INVARIANT_FILE_KINDS = {
+    FileKind.PREPROCESSOR_CONFIG_JSON,
+    FileKind.PROCESSOR_CONFIG_JSON,
+}
+
 _MODEL_MAX_LENGTH_REVIEW_THRESHOLD = 1_000_000
+_IMAGE_DIMENSION_REVIEW_THRESHOLD = 100_000
+_AUDIO_SAMPLING_RATE_REVIEW_THRESHOLD = 384_000
+_AUDIO_FEATURE_SIZE_REVIEW_THRESHOLD = 100_000
+_AUDIO_MAX_LENGTH_REVIEW_THRESHOLD = 10_000_000
 
 _ADDED_TOKEN_OPTION_KEYS = (
     "id",
@@ -226,10 +235,38 @@ _IMAGE_HINT_KEYS = (
     "channel_order",
 )
 
+_IMAGE_DETECTION_KEYS = (
+    "do_resize",
+    "size",
+    "crop_size",
+    "do_rescale",
+    "rescale_factor",
+    "image_mean",
+    "image_std",
+    "channel_order",
+    "data_format",
+    "input_data_format",
+    "image_processor_type",
+    "image_processor_class",
+    "do_convert_rgb",
+    "resample",
+)
+
 _AUDIO_METADATA_KEYS = (
     "sampling_rate",
     "padding_value",
     "do_normalize",
+    "feature_size",
+    "return_attention_mask",
+    "max_length",
+    "truncation",
+    "padding",
+    "pad_to_multiple_of",
+)
+
+_AUDIO_DETECTION_KEYS = (
+    "sampling_rate",
+    "padding_value",
     "feature_size",
     "return_attention_mask",
     "max_length",
@@ -253,6 +290,29 @@ _PROCESSOR_COMPONENT_KEYS = (
     "video_processor",
     "processor",
 )
+
+_PROCESSOR_CLASS_TO_COMPONENT_KEY = {
+    "tokenizer_class": "tokenizer",
+    "image_processor_class": "image_processor",
+    "feature_extractor_class": "feature_extractor",
+}
+
+_MEDIA_TEMPLATE_HINTS = (
+    "<image",
+    "<video",
+    "<audio",
+    "image",
+    "images",
+    "video",
+    "videos",
+    "audio",
+    "audios",
+    "pixel_values",
+    "input_features",
+)
+
+_CHANNEL_ORDER_VALUES = {"rgb", "bgr", "rgba", "grayscale", "gray", "l"}
+_DATA_FORMAT_VALUES = {"channels_first", "channels_last", "none"}
 
 
 def is_preprocessing_metadata_kind(file_kind: FileKind | str) -> bool:
@@ -777,6 +837,7 @@ def _build_semantic_findings(
         findings.extend(_chat_template_findings(template))
 
     findings.extend(_tokenizer_invariant_findings(file_kind, payload))
+    findings.extend(_processor_invariant_findings(file_kind, payload))
 
     lowered = source_text.lower()
     if any(hint in lowered for hint in _PATH_OR_NETWORK_HINTS):
@@ -1064,6 +1125,261 @@ def _added_token_option_findings(tokens: list[dict[str, Any]]) -> list[dict[str,
             )
         )
     return findings
+
+
+def _processor_invariant_findings(file_kind: FileKind, payload: Any) -> list[dict[str, Any]]:
+    if file_kind not in _PROCESSOR_INVARIANT_FILE_KINDS or not isinstance(payload, dict):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if file_kind is FileKind.PROCESSOR_CONFIG_JSON:
+        findings.extend(_processor_component_invariant_findings(payload))
+        findings.extend(_processor_chat_template_media_findings(payload))
+    if file_kind is FileKind.PREPROCESSOR_CONFIG_JSON:
+        findings.extend(_image_invariant_findings(payload))
+        findings.extend(_audio_invariant_findings(payload))
+    return findings
+
+
+def _processor_component_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+
+    invalid_class_keys = [
+        key for key in _PROCESSOR_CLASS_KEYS if key in payload and not _is_non_empty_string(payload[key])
+    ]
+    if invalid_class_keys:
+        findings.append(
+            _finding(
+                "PROCESSOR_CLASS_REFERENCE_INVALID",
+                "MEDIUM",
+                f"processor class fields must be non-empty strings: {', '.join(sorted(invalid_class_keys))}",
+            )
+        )
+
+    missing_components = [
+        component_key
+        for class_key, component_key in _PROCESSOR_CLASS_TO_COMPONENT_KEY.items()
+        if class_key in payload and component_key not in payload
+    ]
+    if missing_components:
+        findings.append(
+            _finding(
+                "PROCESSOR_COMPONENT_REF_MISSING",
+                "MEDIUM",
+                f"declared processor classes are missing component refs: {', '.join(sorted(missing_components))}",
+            )
+        )
+
+    invalid_components = [
+        key
+        for key in _PROCESSOR_COMPONENT_KEYS
+        if key in payload and not _is_valid_component_ref(payload[key])
+    ]
+    if invalid_components:
+        findings.append(
+            _finding(
+                "PROCESSOR_COMPONENT_REF_INVALID",
+                "MEDIUM",
+                f"processor component refs have invalid type/value: {', '.join(sorted(invalid_components))}",
+            )
+        )
+
+    return findings
+
+
+def _processor_chat_template_media_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    template = payload.get("chat_template")
+    if not isinstance(template, str):
+        return []
+    lowered = template.lower()
+    hints = sorted({hint for hint in _MEDIA_TEMPLATE_HINTS if hint in lowered})
+    if not hints:
+        return []
+    return [
+        _finding(
+            "PROCESSOR_CHAT_TEMPLATE_MEDIA_LITERAL",
+            "MEDIUM",
+            f"processor chat_template contains media-related literals: {', '.join(hints[:20])}",
+        )
+    ]
+
+
+def _image_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not _looks_like_image_config(payload):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if not _is_valid_image_dimension_spec(payload.get("size")):
+        findings.append(_finding("IMAGE_SIZE_INVALID", "MEDIUM", "image size is missing or invalid."))
+    if not _is_valid_image_dimension_spec(payload.get("crop_size")):
+        findings.append(_finding("IMAGE_CROP_SIZE_INVALID", "MEDIUM", "image crop_size is missing or invalid."))
+
+    if payload.get("do_normalize") is True or "image_mean" in payload:
+        if not _is_valid_image_stat(payload.get("image_mean"), allow_zero=True):
+            findings.append(_finding("IMAGE_MEAN_INVALID", "MEDIUM", "image_mean length or value range is invalid."))
+    if payload.get("do_normalize") is True or "image_std" in payload:
+        if not _is_valid_image_stat(payload.get("image_std"), allow_zero=False):
+            findings.append(_finding("IMAGE_STD_INVALID", "MEDIUM", "image_std length or value range is invalid."))
+
+    if payload.get("do_rescale") is True or "rescale_factor" in payload:
+        if not _is_valid_positive_number(payload.get("rescale_factor"), maximum=10.0):
+            findings.append(
+                _finding("IMAGE_RESCALE_FACTOR_INVALID", "MEDIUM", "rescale_factor is missing or invalid.")
+            )
+
+    invalid_bool_fields = [
+        key for key in ("do_resize", "do_rescale", "do_normalize") if key in payload and not isinstance(payload[key], bool)
+    ]
+    if invalid_bool_fields:
+        findings.append(
+            _finding(
+                "IMAGE_BOOL_FIELD_INVALID",
+                "MEDIUM",
+                f"image boolean fields have invalid type: {', '.join(sorted(invalid_bool_fields))}",
+            )
+        )
+
+    invalid_format_fields = [
+        key
+        for key in ("channel_order", "data_format", "input_data_format")
+        if key in payload and not _is_valid_image_format(key, payload[key])
+    ]
+    if invalid_format_fields:
+        findings.append(
+            _finding(
+                "IMAGE_FORMAT_INVALID",
+                "MEDIUM",
+                f"image channel/data format fields are invalid: {', '.join(sorted(invalid_format_fields))}",
+            )
+        )
+
+    return findings
+
+
+def _audio_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not _looks_like_audio_config(payload):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if not _is_valid_positive_int(payload.get("sampling_rate"), maximum=_AUDIO_SAMPLING_RATE_REVIEW_THRESHOLD):
+        findings.append(
+            _finding("AUDIO_SAMPLING_RATE_INVALID", "MEDIUM", "sampling_rate is missing or invalid.")
+        )
+    if "padding_value" in payload and not _is_number(payload["padding_value"]):
+        findings.append(
+            _finding("AUDIO_PADDING_VALUE_INVALID", "MEDIUM", "padding_value must be numeric.")
+        )
+    if "feature_size" in payload and not _is_valid_positive_int(
+        payload["feature_size"], maximum=_AUDIO_FEATURE_SIZE_REVIEW_THRESHOLD
+    ):
+        findings.append(
+            _finding("AUDIO_FEATURE_SIZE_INVALID", "MEDIUM", "feature_size must be a positive bounded integer.")
+        )
+    if "max_length" in payload and not _is_valid_positive_int(
+        payload["max_length"], maximum=_AUDIO_MAX_LENGTH_REVIEW_THRESHOLD
+    ):
+        findings.append(
+            _finding("AUDIO_MAX_LENGTH_INVALID", "MEDIUM", "max_length must be a positive bounded integer.")
+        )
+
+    invalid_type_fields: list[str] = []
+    if "truncation" in payload and not isinstance(payload["truncation"], (bool, str)):
+        invalid_type_fields.append("truncation")
+    if "padding" in payload and not isinstance(payload["padding"], (bool, str)):
+        invalid_type_fields.append("padding")
+    if "return_attention_mask" in payload and not isinstance(payload["return_attention_mask"], bool):
+        invalid_type_fields.append("return_attention_mask")
+    if invalid_type_fields:
+        findings.append(
+            _finding(
+                "AUDIO_FIELD_TYPE_INVALID",
+                "MEDIUM",
+                f"audio option fields have invalid type: {', '.join(sorted(invalid_type_fields))}",
+            )
+        )
+
+    return findings
+
+
+def _looks_like_image_config(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in _IMAGE_DETECTION_KEYS)
+
+
+def _looks_like_audio_config(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in _AUDIO_DETECTION_KEYS)
+
+
+def _is_valid_component_ref(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return False
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_valid_image_dimension_spec(value: Any) -> bool:
+    if _is_valid_positive_int(value, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD):
+        return True
+    if isinstance(value, dict):
+        numeric_values = [item for item in value.values() if isinstance(item, (int, float)) and not isinstance(item, bool)]
+        return bool(numeric_values) and all(
+            _is_valid_positive_int(item, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD) for item in numeric_values
+        )
+    if isinstance(value, list):
+        return bool(value) and all(
+            _is_valid_positive_int(item, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD) for item in value
+        )
+    return False
+
+
+def _is_valid_image_stat(value: Any, *, allow_zero: bool) -> bool:
+    if not isinstance(value, list) or len(value) not in {1, 3, 4}:
+        return False
+    for item in value:
+        if not _is_number(item):
+            return False
+        numeric = float(item)
+        if allow_zero:
+            if numeric < -10.0 or numeric > 10.0:
+                return False
+        elif numeric <= 0.0 or numeric > 10.0:
+            return False
+    return True
+
+
+def _is_valid_positive_number(value: Any, *, maximum: float) -> bool:
+    return _is_number(value) and 0.0 < float(value) <= maximum
+
+
+def _is_valid_positive_int(value: Any, *, maximum: int) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        numeric = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        numeric = int(value.strip())
+    else:
+        return False
+    return 0 < numeric <= maximum
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_valid_image_format(key: str, value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.lower()
+    if key == "channel_order":
+        return normalized in _CHANNEL_ORDER_VALUES
+    return normalized in _DATA_FORMAT_VALUES
 
 
 def _extract_chat_templates(file_kind: FileKind, source_text: str, payload: Any) -> list[str]:
