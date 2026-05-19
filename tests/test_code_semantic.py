@@ -157,6 +157,165 @@ def test_merges_txt_inventory_records_merge_rule_count() -> None:
     assert inventory["merge_rules"]["sample"] == ["h e", "he llo", "w orld"]
 
 
+def test_preprocessor_config_image_inventory_records_image_fields_and_hints() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 336, "width": 336},
+            "crop_size": {"height": 224, "width": 224},
+            "do_rescale": True,
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": True,
+            "image_mean": [0.48145466, 0.4578275, 0.40821073],
+            "image_std": [0.26862954, 0.26130258, 0.27577711],
+            "channel_order": "RGB",
+            "data_format": "channels_first",
+            "input_data_format": "channels_last",
+            "image_processor_type": "CLIPImageProcessor",
+            "backend": "pil",
+            "use_fast": False,
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    inventory = result.details["semantic_inventory"]
+    image = inventory["image"]
+    assert image["fields"]["do_resize"] is True
+    assert image["fields"]["size"] == {"height": 336, "width": 336}
+    assert image["fields"]["crop_size"] == {"height": 224, "width": 224}
+    assert image["fields"]["do_rescale"] is True
+    assert image["fields"]["rescale_factor"] == 0.00392156862745098
+    assert image["fields"]["do_normalize"] is True
+    assert image["fields"]["image_mean"] == [0.48145466, 0.4578275, 0.40821073]
+    assert image["fields"]["image_std"] == [0.26862954, 0.26130258, 0.27577711]
+    assert image["fields"]["channel_order"] == "RGB"
+    assert image["fields"]["data_format"] == "channels_first"
+    assert image["fields"]["input_data_format"] == "channels_last"
+    assert image["hints"]["image_processor_type"] == "CLIPImageProcessor"
+    assert image["hints"]["backend"] == "pil"
+    assert image["hints"]["use_fast"] is False
+
+
+def test_preprocessor_config_audio_inventory_records_audio_fields() -> None:
+    source = json.dumps(
+        {
+            "sampling_rate": 16000,
+            "padding_value": 0.0,
+            "do_normalize": True,
+            "feature_size": 80,
+            "return_attention_mask": True,
+            "max_length": 3000,
+            "truncation": True,
+            "padding": "max_length",
+            "pad_to_multiple_of": 8,
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    audio = result.details["semantic_inventory"]["audio"]
+    assert audio["fields"]["sampling_rate"] == 16000
+    assert audio["fields"]["padding_value"] == 0.0
+    assert audio["fields"]["do_normalize"] is True
+    assert audio["fields"]["feature_size"] == 80
+    assert audio["fields"]["return_attention_mask"] is True
+    assert audio["fields"]["max_length"] == 3000
+    assert audio["fields"]["truncation"] is True
+    assert audio["fields"]["padding"] == "max_length"
+    assert audio["fields"]["pad_to_multiple_of"] == 8
+
+
+def test_processor_config_class_reference_inventory_records_components() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "tokenizer_class": "DemoTokenizer",
+            "image_processor_class": "DemoImageProcessor",
+            "feature_extractor_class": "DemoFeatureExtractor",
+            "tokenizer": {"tokenizer_class": "DemoTokenizer", "name_or_path": "org/demo-tokenizer"},
+            "image_processor": {"image_processor_class": "DemoImageProcessor"},
+            "feature_extractor": {"feature_extractor_class": "DemoFeatureExtractor"},
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    processor = result.details["semantic_inventory"]["processor"]
+    assert processor["classes"] == {
+        "processor_class": "DemoProcessor",
+        "tokenizer_class": "DemoTokenizer",
+        "image_processor_class": "DemoImageProcessor",
+        "feature_extractor_class": "DemoFeatureExtractor",
+    }
+    assert processor["component_refs"]["tokenizer"]["tokenizer_class"] == "DemoTokenizer"
+    assert processor["component_refs"]["tokenizer"]["name_or_path"] == "org/demo-tokenizer"
+    assert processor["component_refs"]["image_processor"]["image_processor_class"] == "DemoImageProcessor"
+    assert processor["component_refs"]["feature_extractor"]["feature_extractor_class"] == "DemoFeatureExtractor"
+
+
+def test_processor_config_chat_template_records_processor_inventory_and_findings() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "chat_template": (
+                "{% for message in messages %}"
+                "{% if message['role'] == 'system' %}<|system|>{{ message['content'] }}"
+                "{% elif message['role'] == 'user' %}<|user|>{{ message['content'] }}"
+                "{% endif %}{% endfor %}"
+                "{% if add_generation_prompt %}<|assistant|>{% endif %}"
+            ),
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    processor = result.details["semantic_inventory"]["processor"]
+    assert processor["has_chat_template"] is True
+    assert processor["chat_template"]["hint_details"]["system"] is True
+    assert processor["chat_template"]["hint_details"]["user"] is True
+    assert processor["chat_template"]["hint_details"]["assistant"] is True
+    assert processor["chat_template"]["hint_details"]["add_generation_prompt"] is True
+    assert "CHAT_TEMPLATE_PRESENT" in finding_codes
+    assert "CHAT_TEMPLATE_SYSTEM_ROLE_LITERAL" in finding_codes
+    assert "CHAT_TEMPLATE_USER_ROLE_LITERAL" in finding_codes
+    assert "CHAT_TEMPLATE_ASSISTANT_ROLE_LITERAL" in finding_codes
+    assert "CHAT_TEMPLATE_ADD_GENERATION_PROMPT_PRESENT" in finding_codes
+
+
+def test_metadata_url_or_path_like_literal_records_network_or_path_finding() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "tokenizer": {"name_or_path": "https://huggingface.co/org/demo"},
+            "local_resource": "../relative/path/resource.json",
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert "NETWORK_OR_PATH_REVIEW" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_preprocessor_config_without_baseline_is_b2_pending_review() -> None:
+    source = json.dumps({"do_resize": True, "size": 224})
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert "BASELINE_MISSING" in [item["code"] for item in result.details["semantic_findings"]]
+
+
 def test_baseline_match_can_pass_semantic_metadata_gate() -> None:
     source = json.dumps({"bos_token": "<s>", "eos_token": "</s>"})
     artifact = build_artifact_ref("special_tokens_map.json", source)

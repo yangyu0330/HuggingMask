@@ -96,8 +96,18 @@ _KEY_FIELDS_BY_KIND = {
         "do_normalize",
         "image_mean",
         "image_std",
+        "channel_order",
+        "data_format",
+        "input_data_format",
+        "image_processor_type",
+        "processor_class",
         "sampling_rate",
         "padding_value",
+        "feature_size",
+        "return_attention_mask",
+        "max_length",
+        "truncation",
+        "padding",
     ),
     FileKind.PROCESSOR_CONFIG_JSON: (
         "processor_class",
@@ -168,6 +178,61 @@ _ADDED_TOKEN_OPTION_KEYS = (
     "lstrip",
     "rstrip",
     "normalized",
+)
+
+_IMAGE_METADATA_KEYS = (
+    "do_resize",
+    "size",
+    "crop_size",
+    "do_rescale",
+    "rescale_factor",
+    "do_normalize",
+    "image_mean",
+    "image_std",
+    "channel_order",
+    "data_format",
+    "input_data_format",
+    "do_convert_rgb",
+    "resample",
+)
+
+_IMAGE_HINT_KEYS = (
+    "image_processor_type",
+    "processor_class",
+    "image_processor_class",
+    "backend",
+    "use_fast",
+    "data_format",
+    "input_data_format",
+    "channel_order",
+)
+
+_AUDIO_METADATA_KEYS = (
+    "sampling_rate",
+    "padding_value",
+    "do_normalize",
+    "feature_size",
+    "return_attention_mask",
+    "max_length",
+    "truncation",
+    "padding",
+    "pad_to_multiple_of",
+)
+
+_PROCESSOR_CLASS_KEYS = (
+    "processor_class",
+    "tokenizer_class",
+    "image_processor_class",
+    "feature_extractor_class",
+)
+
+_PROCESSOR_COMPONENT_KEYS = (
+    "tokenizer",
+    "image_processor",
+    "feature_extractor",
+    "audio_processor",
+    "video_processor",
+    "processor",
 )
 
 
@@ -282,6 +347,9 @@ def _build_inventory(
         "split_special_tokens": None,
         "clean_up_tokenization_spaces": None,
         "tokenizer_options": {},
+        "image": _empty_image_inventory(),
+        "audio": _empty_audio_inventory(),
+        "processor": _empty_processor_inventory(),
     }
 
     if parse_error is not None:
@@ -290,6 +358,7 @@ def _build_inventory(
     if isinstance(payload, dict):
         inventory["key_fields"] = _extract_key_fields(file_kind, payload)
         inventory.update(_extract_tokenizer_metadata_inventory(file_kind, payload))
+        inventory.update(_extract_processor_metadata_inventory(file_kind, payload))
         chat_template = payload.get("chat_template")
         if isinstance(chat_template, str):
             inventory["chat_template"] = _chat_template_inventory(chat_template)
@@ -354,6 +423,106 @@ def _extract_tokenizer_metadata_inventory(file_kind: FileKind, payload: dict[str
         "clean_up_tokenization_spaces": tokenizer_options["clean_up_tokenization_spaces"],
         "tokenizer_options": tokenizer_options,
     }
+
+
+def _extract_processor_metadata_inventory(file_kind: FileKind, payload: dict[str, Any]) -> dict[str, Any]:
+    if file_kind not in {FileKind.PREPROCESSOR_CONFIG_JSON, FileKind.PROCESSOR_CONFIG_JSON}:
+        return {
+            "image": _empty_image_inventory(),
+            "audio": _empty_audio_inventory(),
+            "processor": _empty_processor_inventory(),
+        }
+
+    return {
+        "image": _image_inventory(payload),
+        "audio": _audio_inventory(payload),
+        "processor": _processor_inventory(payload),
+    }
+
+
+def _empty_image_inventory() -> dict[str, Any]:
+    return {
+        "fields": {},
+        "hints": {},
+    }
+
+
+def _empty_audio_inventory() -> dict[str, Any]:
+    return {
+        "fields": {},
+    }
+
+
+def _empty_processor_inventory() -> dict[str, Any]:
+    return {
+        "classes": {},
+        "component_refs": {},
+        "has_chat_template": False,
+        "chat_template": None,
+    }
+
+
+def _image_inventory(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fields": _select_present_fields(payload, _IMAGE_METADATA_KEYS),
+        "hints": _select_present_fields(payload, _IMAGE_HINT_KEYS),
+    }
+
+
+def _audio_inventory(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fields": _select_present_fields(payload, _AUDIO_METADATA_KEYS),
+    }
+
+
+def _processor_inventory(payload: dict[str, Any]) -> dict[str, Any]:
+    chat_template = payload.get("chat_template")
+    inventory = _empty_processor_inventory()
+    inventory["classes"] = _select_present_fields(payload, _PROCESSOR_CLASS_KEYS)
+    inventory["component_refs"] = _processor_component_refs(payload)
+    inventory["has_chat_template"] = isinstance(chat_template, str)
+    if isinstance(chat_template, str):
+        inventory["chat_template"] = _chat_template_inventory(chat_template)
+    return inventory
+
+
+def _processor_component_refs(payload: dict[str, Any]) -> dict[str, Any]:
+    refs: dict[str, Any] = {}
+    for key in _PROCESSOR_COMPONENT_KEYS:
+        if key not in payload:
+            continue
+        refs[key] = _summarize_component_ref(payload[key])
+    return refs
+
+
+def _summarize_component_ref(value: Any) -> Any:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        class_keys = (
+            "type",
+            "class",
+            "processor_class",
+            "tokenizer_class",
+            "image_processor_class",
+            "feature_extractor_class",
+            "pretrained_model_name_or_path",
+            "name_or_path",
+        )
+        summary = {key: value.get(key) for key in class_keys if key in value}
+        if not summary:
+            summary["keys"] = sorted(value.keys())[:20]
+        return summary
+    if isinstance(value, list):
+        return {
+            "count": len(value),
+            "values": [_summarize_component_ref(item) for item in value[:20]],
+        }
+    return {"value": value}
+
+
+def _select_present_fields(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {key: payload[key] for key in keys if key in payload}
 
 
 def _empty_special_token_map_inventory() -> dict[str, Any]:
