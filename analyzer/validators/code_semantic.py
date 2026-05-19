@@ -372,6 +372,7 @@ def validate_preprocessing_metadata_artifact(
         },
         "semantic_inventory": inventory,
         "semantic_findings": semantic_findings,
+        "semantic_finding_codes": _semantic_finding_codes(semantic_findings),
         "pending_api_refs": [],
         "review_queue_entry_id": None,
         "effective_output_artifact_id": None,
@@ -1494,6 +1495,15 @@ def _has_review_findings(findings: list[dict[str, Any]]) -> bool:
         if finding.get("severity") in {"LOW", "MEDIUM", "HIGH"}:
             return True
     return False
+
+
+def _semantic_finding_codes(findings: list[dict[str, Any]]) -> list[str]:
+    codes: list[str] = []
+    for finding in findings:
+        code = finding.get("code")
+        if isinstance(code, str) and code not in codes:
+            codes.append(code)
+    return codes
 
 
 def _finding(code: str, severity: str, evidence: str) -> dict[str, Any]:

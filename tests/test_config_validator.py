@@ -284,6 +284,25 @@ def test_tokenizer_config_semantic_inventory_keeps_baseline_less_result_pending(
     assert inventory["added_tokens"]["normalized_false_count"] == 1
 
 
+def test_tokenizer_config_semantic_findings_are_preserved_in_details_and_reason_entries() -> None:
+    artifact = _make_artifact("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON)
+    payload = {
+        "model_max_length": 2048,
+        "padding_side": "middle",
+    }
+
+    result = validate_config_artifact(artifact, json.dumps(payload), _make_policy())
+
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+    reason_codes = [entry.code for entry in result.reason_entries]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert "TOKENIZER_INVALID_PADDING_SIDE" in finding_codes
+    assert "TOKENIZER_INVALID_PADDING_SIDE" in result.details["semantic_finding_codes"]
+    assert "TOKENIZER_INVALID_PADDING_SIDE" in reason_codes
+
+
 def test_tokenizer_config_hidden_system_semantic_finding_escalates_review() -> None:
     artifact = _make_artifact("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON)
     payload = {

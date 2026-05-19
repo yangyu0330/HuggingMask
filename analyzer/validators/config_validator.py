@@ -169,6 +169,8 @@ def validate_config_artifact(
         "linked_code_results": linked_code_results,
         "linked_code_artifact_ids": linked_artifact_ids,
         "linked_code_statuses": linked_statuses,
+        "semantic_findings": [],
+        "semantic_finding_codes": [],
         "effective_status": effective_status.value,
     }
     if semantic_result is not None:
@@ -378,6 +380,8 @@ def _combine_with_semantic_status(
         return config_status
     if semantic_result.status is ValidationStatus.BLOCK:
         return ValidationStatus.BLOCK
+    if _semantic_check_requires_review(semantic_result):
+        return ValidationStatus.PENDING_REVIEW
     if semantic_result.status in {ValidationStatus.ERROR, ValidationStatus.PENDING_REVIEW}:
         return ValidationStatus.PENDING_REVIEW
     return config_status
@@ -385,10 +389,12 @@ def _combine_with_semantic_status(
 
 def _semantic_details_for_config(semantic_result: ArtifactValidationResult) -> dict[str, Any]:
     semantic_details = semantic_result.details
+    semantic_findings = semantic_details.get("semantic_findings", [])
     return {
         "semantic_check": semantic_details.get("semantic_check", {}),
         "semantic_inventory": semantic_details.get("semantic_inventory", {}),
-        "semantic_findings": semantic_details.get("semantic_findings", []),
+        "semantic_findings": semantic_findings,
+        "semantic_finding_codes": _semantic_finding_codes(semantic_findings),
         "semantic_route_kind": semantic_result.route_kind.value,
         "semantic_status": semantic_result.status.value,
         "semantic_grade": semantic_result.grade.value,
@@ -400,11 +406,16 @@ def _semantic_reason_entries_for_config(
     semantic_result: ArtifactValidationResult | None,
     effective_status: ValidationStatus,
 ) -> list[ReasonEntry]:
-    if semantic_result is None or semantic_result.status is ValidationStatus.PASS:
+    if semantic_result is None:
+        return []
+    if semantic_result.status is ValidationStatus.PASS and not _semantic_check_requires_review(semantic_result):
         return []
 
     entries: list[ReasonEntry] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
     for entry in semantic_result.reason_entries:
+        key = (entry.code, tuple(entry.evidence))
+        seen.add(key)
         entries.append(
             ReasonEntry(
                 code=entry.code,
@@ -414,7 +425,45 @@ def _semantic_reason_entries_for_config(
                 review_required=effective_status is ValidationStatus.PENDING_REVIEW,
             )
         )
+    for finding in semantic_result.details.get("semantic_findings", []):
+        if not isinstance(finding, dict):
+            continue
+        code = str(finding.get("code") or "SEMANTIC_FINDING")
+        evidence = [str(item) for item in finding.get("evidence", [])]
+        key = (code, tuple(evidence))
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(
+            ReasonEntry(
+                code=code,
+                severity=str(finding.get("severity") or "MEDIUM"),
+                message=f"preprocessing semantic finding: {code}",
+                evidence=evidence,
+                review_required=effective_status is ValidationStatus.PENDING_REVIEW,
+            )
+        )
     return entries
+
+
+def _semantic_check_requires_review(semantic_result: ArtifactValidationResult) -> bool:
+    semantic_check = semantic_result.details.get("semantic_check", {})
+    if not isinstance(semantic_check, dict):
+        return False
+    return semantic_check.get("status") in {"REVIEW", "FAILED", "ERROR", "BASELINE_MISSING"}
+
+
+def _semantic_finding_codes(semantic_findings: Any) -> list[str]:
+    if not isinstance(semantic_findings, list):
+        return []
+    codes: list[str] = []
+    for finding in semantic_findings:
+        if not isinstance(finding, dict):
+            continue
+        code = finding.get("code")
+        if isinstance(code, str) and code not in codes:
+            codes.append(code)
+    return codes
 
 
 def _grade_for_config_result(
