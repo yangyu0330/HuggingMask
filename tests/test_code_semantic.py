@@ -2,7 +2,17 @@ import json
 
 from analyzer.classifier import build_artifact_ref
 from analyzer.schemas import CodeGrade, PolicyInfo, ReviewAction, RouteKind, ValidationStatus
-from analyzer.validators.code_semantic import validate_preprocessing_metadata_artifact
+from analyzer.validators.code_semantic import (
+    SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION,
+    SemanticFuzzBaselineDiff,
+    SemanticFuzzCaseEvidence,
+    SemanticFuzzOutputSnapshot,
+    SemanticFuzzPrerequisites,
+    SemanticFuzzResult,
+    SemanticFuzzRunnerConfig,
+    SemanticFuzzRuntimeEvent,
+    validate_preprocessing_metadata_artifact,
+)
 
 
 def _make_policy() -> PolicyInfo:
@@ -12,6 +22,74 @@ def _make_policy() -> PolicyInfo:
         opcode_policy_version="opcode-2026.04.20",
         config_schema_version="cfg-2026.04.20",
         runtime_profile_version="rt-2026.04.20",
+    )
+
+
+def _make_fuzz_result(*, baseline_available: bool = False) -> SemanticFuzzResult:
+    return SemanticFuzzResult(
+        target_kind="tokenizer",
+        runner_config=SemanticFuzzRunnerConfig(
+            revision_pin="main@0123456789abcdef",
+            offline_mode=True,
+            network_disabled=True,
+            read_only_snapshot=True,
+            cpu_budget_cores=1.0,
+            memory_budget_mb=512,
+            time_budget_ms=5_000,
+        ),
+        prerequisites=SemanticFuzzPrerequisites(
+            phase0_static_validation_passed=True,
+            python_import_closure_status="PASS",
+            python_import_closure_artifact_ids=["sha256:closure"],
+            notes=["Phase 0 import closure passed before opt-in fuzz runner eligibility."],
+        ),
+        cases=[
+            SemanticFuzzCaseEvidence(
+                case_id="text-basic",
+                input_kind="text",
+                input_hash="sha256:input",
+                media_placeholder_count=1,
+                outputs=[
+                    SemanticFuzzOutputSnapshot(
+                        output_key="input_ids",
+                        shape=[1, 4],
+                        dtype="int64",
+                        token_count=4,
+                        special_token_mask=[1, 0, 0, 1],
+                        offset_mapping=[[0, 0], [0, 5], [6, 11], [0, 0]],
+                        media_placeholder_count=1,
+                    )
+                ],
+                runtime_events=[
+                    SemanticFuzzRuntimeEvent(
+                        event_type="runner_event",
+                        message="captured tokenizer output snapshot",
+                    )
+                ],
+            )
+        ],
+        baseline_diff=SemanticFuzzBaselineDiff(
+            baseline_available=baseline_available,
+            baseline_revision_pin="baseline@fedcba9876543210" if baseline_available else None,
+            baseline_input_hash="sha256:input" if baseline_available else None,
+            output_diffs=[
+                {
+                    "output_key": "input_ids",
+                    "diff_type": "token_count_delta",
+                    "current": 4,
+                    "baseline": 3,
+                }
+            ]
+            if baseline_available
+            else [],
+        ),
+        runtime_events=[
+            SemanticFuzzRuntimeEvent(
+                event_type="sandbox_config",
+                message="network disabled and read-only snapshot requested",
+                metadata={"network_disabled": True, "read_only_snapshot": True},
+            )
+        ],
     )
 
 
@@ -840,3 +918,159 @@ def test_hidden_system_injection_is_c_pending_review() -> None:
     assert "CHAT_TEMPLATE_HIDDEN_SYSTEM_INJECTION" in [
         item["code"] for item in result.details["semantic_findings"]
     ]
+
+
+def test_sandbox_fuzz_evidence_schema_serializes_tokenizer_outputs() -> None:
+    fuzz_result = _make_fuzz_result(baseline_available=True)
+    payload = fuzz_result.to_dict()
+
+    json.loads(json.dumps(payload))
+
+    assert payload["schema_version"] == SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION
+    assert payload["target_kind"] == "tokenizer"
+    assert payload["cases"][0]["input_hash"] == "sha256:input"
+    assert payload["cases"][0]["outputs"][0]["output_key"] == "input_ids"
+    assert payload["cases"][0]["outputs"][0]["shape"] == [1, 4]
+    assert payload["cases"][0]["outputs"][0]["dtype"] == "int64"
+    assert payload["cases"][0]["outputs"][0]["token_count"] == 4
+    assert payload["cases"][0]["outputs"][0]["special_token_mask"] == [1, 0, 0, 1]
+    assert payload["cases"][0]["outputs"][0]["offset_mapping"] == [[0, 0], [0, 5], [6, 11], [0, 0]]
+    assert payload["cases"][0]["media_placeholder_count"] == 1
+    assert payload["runtime_events"][0]["event_type"] == "sandbox_config"
+    assert payload["baseline_diff"]["baseline_available"] is True
+    assert payload["baseline_diff"]["output_diffs"][0]["output_key"] == "input_ids"
+
+
+def test_sandbox_fuzz_evidence_schema_serializes_processor_outputs() -> None:
+    fuzz_result = SemanticFuzzResult(
+        target_kind="processor",
+        runner_config=SemanticFuzzRunnerConfig(revision_pin="main@0123456789abcdef"),
+        prerequisites=SemanticFuzzPrerequisites(
+            phase0_static_validation_passed=True,
+            python_import_closure_status="PASS",
+            python_import_closure_artifact_ids=["sha256:processor-closure"],
+        ),
+        cases=[
+            SemanticFuzzCaseEvidence(
+                case_id="image-audio-basic",
+                input_kind="image+audio",
+                input_hash="sha256:processor-input",
+                media_placeholder_count=2,
+                outputs=[
+                    SemanticFuzzOutputSnapshot(
+                        output_key="pixel_values",
+                        shape=[1, 3, 224, 224],
+                        dtype="float32",
+                        media_placeholder_count=1,
+                    ),
+                    SemanticFuzzOutputSnapshot(
+                        output_key="input_features",
+                        shape=[1, 80, 3000],
+                        dtype="float32",
+                        token_count=None,
+                        media_placeholder_count=1,
+                    ),
+                ],
+                runtime_events=[
+                    SemanticFuzzRuntimeEvent(
+                        event_type="media_placeholder_count",
+                        message="processor emitted image/audio output snapshots",
+                    )
+                ],
+            )
+        ],
+        baseline_diff=SemanticFuzzBaselineDiff(baseline_available=False),
+    )
+    payload = fuzz_result.to_dict()
+
+    json.loads(json.dumps(payload))
+
+    assert payload["target_kind"] == "processor"
+    assert payload["cases"][0]["input_hash"] == "sha256:processor-input"
+    assert payload["cases"][0]["media_placeholder_count"] == 2
+    assert payload["cases"][0]["outputs"][0]["output_key"] == "pixel_values"
+    assert payload["cases"][0]["outputs"][0]["shape"] == [1, 3, 224, 224]
+    assert payload["cases"][0]["outputs"][1]["output_key"] == "input_features"
+    assert payload["cases"][0]["runtime_events"][0]["event_type"] == "media_placeholder_count"
+
+
+def test_sandbox_fuzz_config_records_isolation_revision_and_budget_fields() -> None:
+    config = SemanticFuzzRunnerConfig(
+        revision_pin="refs/pr/1@0123456789abcdef",
+        offline_mode=True,
+        network_disabled=True,
+        read_only_snapshot=True,
+        cpu_budget_cores=0.5,
+        memory_budget_mb=256,
+        time_budget_ms=2_000,
+    )
+    payload = config.to_dict()
+
+    assert payload["revision_pin"] == "refs/pr/1@0123456789abcdef"
+    assert payload["offline_mode"] is True
+    assert payload["network_disabled"] is True
+    assert payload["read_only_snapshot"] is True
+    assert payload["sandbox_runtime"] == "gvisor"
+    assert payload["cpu_budget_cores"] == 0.5
+    assert payload["memory_budget_mb"] == 256
+    assert payload["time_budget_ms"] == 2_000
+    assert payload["require_phase0_import_closure_passed"] is True
+
+
+def test_sandbox_fuzz_evidence_without_baseline_does_not_create_pass() -> None:
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "model_max_length": 2048,
+            "padding_side": "right",
+            "truncation_side": "right",
+        }
+    )
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        sandbox_fuzz_result=_make_fuzz_result(baseline_available=False),
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert result.details["sandbox_fuzz"]["baseline_diff"]["baseline_available"] is False
+    assert "SANDBOX_FUZZ_EVIDENCE_REVIEW" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_sandbox_fuzz_result_is_exposed_as_semantic_review_evidence() -> None:
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "model_max_length": 2048,
+            "padding_side": "right",
+            "truncation_side": "right",
+        }
+    )
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+        sandbox_fuzz_result=_make_fuzz_result(baseline_available=True),
+    )
+
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "SANDBOX_FUZZ_EVIDENCE_REVIEW" in finding_codes
+    assert "SANDBOX_FUZZ_EVIDENCE_REVIEW" in result.details["semantic_finding_codes"]
+    assert result.details["sandbox_fuzz"]["review_required"] is True
+    assert result.details["sandbox_fuzz"]["prerequisites"]["phase0_static_validation_passed"] is True
+    assert result.details["sandbox_fuzz"]["prerequisites"]["python_import_closure_status"] == "PASS"

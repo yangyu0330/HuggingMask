@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 from analyzer.schemas import (
     ArtifactRef,
@@ -24,6 +25,8 @@ from analyzer.schemas import (
     ValidationStatus,
 )
 
+SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION = "preprocessing-sandbox-fuzz-evidence.v1"
+
 PREPROCESSING_METADATA_FILE_KINDS = {
     FileKind.TOKENIZER_CONFIG_JSON,
     FileKind.TOKENIZER_JSON,
@@ -35,6 +38,124 @@ PREPROCESSING_METADATA_FILE_KINDS = {
     FileKind.PROCESSOR_CONFIG_JSON,
     FileKind.CHAT_TEMPLATE_JINJA,
 }
+
+
+@dataclass(frozen=True)
+class SemanticFuzzRunnerConfig:
+    """Opt-in sandbox fuzz runner contract.
+
+    This config is evidence metadata only. The default semantic validator never
+    imports processor/tokenizer code or executes this runner.
+    """
+
+    revision_pin: str
+    offline_mode: bool = True
+    network_disabled: bool = True
+    read_only_snapshot: bool = True
+    sandbox_runtime: str = "gvisor"
+    cpu_budget_cores: float = 1.0
+    memory_budget_mb: int = 512
+    time_budget_ms: int = 10_000
+    require_phase0_import_closure_passed: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzPrerequisites:
+    """Static gates that must be satisfied before sandbox fuzzing is eligible."""
+
+    phase0_static_validation_passed: bool
+    python_import_closure_status: str
+    python_import_closure_artifact_ids: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzRuntimeEvent:
+    event_type: str
+    message: str
+    severity: str = "INFO"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzOutputSnapshot:
+    output_key: str
+    shape: list[int | str] = field(default_factory=list)
+    dtype: str | None = None
+    token_count: int | None = None
+    special_token_mask: list[int] = field(default_factory=list)
+    offset_mapping: list[list[int]] = field(default_factory=list)
+    media_placeholder_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzCaseEvidence:
+    case_id: str
+    input_kind: str
+    input_hash: str
+    media_placeholder_count: int = 0
+    outputs: list[SemanticFuzzOutputSnapshot] = field(default_factory=list)
+    runtime_events: list[SemanticFuzzRuntimeEvent] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzBaselineDiff:
+    baseline_available: bool = False
+    baseline_revision_pin: str | None = None
+    baseline_input_hash: str | None = None
+    output_diffs: list[dict[str, Any]] = field(default_factory=list)
+    runtime_event_diffs: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzResult:
+    """Serializable evidence produced by a future opt-in sandbox fuzz runner."""
+
+    target_kind: str
+    runner_config: SemanticFuzzRunnerConfig
+    prerequisites: SemanticFuzzPrerequisites
+    cases: list[SemanticFuzzCaseEvidence] = field(default_factory=list)
+    baseline_diff: SemanticFuzzBaselineDiff = field(default_factory=SemanticFuzzBaselineDiff)
+    runtime_events: list[SemanticFuzzRuntimeEvent] = field(default_factory=list)
+    status: str = "EVIDENCE_ONLY"
+    schema_version: str = SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION
+    review_required: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class PreprocessingSemanticFuzzRunner(Protocol):
+    """Interface for a future opt-in tokenizer/processor sandbox fuzz runner."""
+
+    def run(
+        self,
+        *,
+        artifact: ArtifactRef,
+        metadata_source: str | bytes,
+        runner_config: SemanticFuzzRunnerConfig,
+        prerequisites: SemanticFuzzPrerequisites,
+        baseline_metadata_source: str | bytes | None = None,
+    ) -> SemanticFuzzResult:
+        """Return evidence only; this result must not auto-approve validation."""
 
 _JSON_FILE_KINDS = {
     FileKind.TOKENIZER_CONFIG_JSON,
@@ -325,6 +446,7 @@ def validate_preprocessing_metadata_artifact(
     policy: PolicyInfo | None = None,
     *,
     baseline_source: str | bytes | None = None,
+    sandbox_fuzz_result: SemanticFuzzResult | Mapping[str, Any] | None = None,
 ) -> ArtifactValidationResult:
     """Build semantic inventory and keep uncertain metadata in review."""
 
@@ -354,6 +476,10 @@ def validate_preprocessing_metadata_artifact(
         baseline_text=baseline_text,
         parse_error=parse_error,
     )
+    sandbox_fuzz = _normalize_sandbox_fuzz_result(sandbox_fuzz_result)
+    if sandbox_fuzz is not None:
+        semantic_findings.append(_sandbox_fuzz_review_finding(sandbox_fuzz))
+        semantic_findings = _dedupe_findings(semantic_findings)
 
     check_status = _semantic_check_status(
         baseline_text=baseline_text,
@@ -373,6 +499,7 @@ def validate_preprocessing_metadata_artifact(
         "semantic_inventory": inventory,
         "semantic_findings": semantic_findings,
         "semantic_finding_codes": _semantic_finding_codes(semantic_findings),
+        "sandbox_fuzz": sandbox_fuzz or _sandbox_fuzz_not_run(),
         "pending_api_refs": [],
         "review_queue_entry_id": None,
         "effective_output_artifact_id": None,
@@ -1504,6 +1631,60 @@ def _semantic_finding_codes(findings: list[dict[str, Any]]) -> list[str]:
         if isinstance(code, str) and code not in codes:
             codes.append(code)
     return codes
+
+
+def _normalize_sandbox_fuzz_result(
+    sandbox_fuzz_result: SemanticFuzzResult | Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if sandbox_fuzz_result is None:
+        return None
+    if isinstance(sandbox_fuzz_result, SemanticFuzzResult):
+        return sandbox_fuzz_result.to_dict()
+    if isinstance(sandbox_fuzz_result, Mapping):
+        return dict(sandbox_fuzz_result)
+    return {
+        "schema_version": SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION,
+        "status": "ERROR",
+        "review_required": True,
+        "runtime_events": [
+            {
+                "event_type": "invalid_sandbox_fuzz_result",
+                "severity": "HIGH",
+                "message": "sandbox fuzz result must be a SemanticFuzzResult or mapping",
+                "metadata": {},
+            }
+        ],
+    }
+
+
+def _sandbox_fuzz_not_run() -> dict[str, Any]:
+    return {
+        "schema_version": SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION,
+        "status": "NOT_RUN",
+        "review_required": False,
+        "runner_interface": "opt_in_only",
+        "default_validation_path_imports_untrusted_processor": False,
+    }
+
+
+def _sandbox_fuzz_review_finding(sandbox_fuzz: dict[str, Any]) -> dict[str, Any]:
+    status = str(sandbox_fuzz.get("status") or "UNKNOWN")
+    cases = sandbox_fuzz.get("cases", [])
+    case_count = len(cases) if isinstance(cases, list) else 0
+    baseline_diff = sandbox_fuzz.get("baseline_diff", {})
+    baseline_available = (
+        baseline_diff.get("baseline_available")
+        if isinstance(baseline_diff, dict)
+        else None
+    )
+    return _finding(
+        "SANDBOX_FUZZ_EVIDENCE_REVIEW",
+        "MEDIUM",
+        (
+            "Sandbox fuzz evidence is opt-in review evidence only; "
+            f"status={status}, cases={case_count}, baseline_available={baseline_available}."
+        ),
+    )
 
 
 def _finding(code: str, severity: str, evidence: str) -> dict[str, Any]:
