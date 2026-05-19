@@ -228,7 +228,86 @@ def _step1_parse(code: str, result: _InternalResult) -> ast.Module | None:
         return None
 
 
+def _build_import_alias_map(tree: ast.Module) -> dict[str, str]:
+    alias_map: dict[str, str] = {}
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                local_name = alias.asname or root
+                alias_map[local_name] = alias.name if alias.asname else root
+
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None:
+                continue
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                local_name = alias.asname or alias.name
+                alias_map[local_name] = f"{node.module}.{alias.name}"
+
+    return alias_map
+
+
+def _attribute_chain(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        parent = _attribute_chain(node.value)
+        if parent is None:
+            return None
+        return f"{parent}.{node.attr}"
+    return None
+
+
+def _resolve_call_name(func: ast.AST, alias_map: dict[str, str]) -> str | None:
+    raw_name = _attribute_chain(func)
+    if raw_name is None:
+        return None
+
+    parts = raw_name.split(".")
+    root = parts[0]
+    if root not in alias_map:
+        return raw_name
+
+    resolved_root = alias_map[root]
+    if len(parts) == 1:
+        return resolved_root
+    return ".".join([resolved_root, *parts[1:]])
+
+
+def _dangerous_attr_pair(call_name: str) -> tuple[str, str] | None:
+    parts = call_name.split(".")
+    if len(parts) < 2:
+        return None
+
+    direct_pair = (parts[0], parts[1])
+    if direct_pair in DANGEROUS_ATTR_CALLS:
+        return direct_pair
+
+    final_pair = (parts[0], parts[-1])
+    if final_pair in DANGEROUS_ATTR_CALLS:
+        return final_pair
+
+    return None
+
+
+def _is_numpy_load_with_pickle(call_name: str, node: ast.Call) -> bool:
+    parts = call_name.split(".")
+    if len(parts) < 2 or parts[0] != "numpy" or parts[-1] != "load":
+        return False
+
+    for kw in node.keywords:
+        if kw.arg == "allow_pickle":
+            return isinstance(kw.value, ast.Constant) and bool(kw.value.value)
+
+    return False
+
+
 def _step2_danger_scan(tree: ast.Module, result: _InternalResult) -> None:
+    alias_map = _build_import_alias_map(tree)
+
     for node in ast.walk(tree):
 
         if isinstance(node, ast.Import):
@@ -261,9 +340,18 @@ def _step2_danger_scan(tree: ast.Module, result: _InternalResult) -> None:
         if not isinstance(node, ast.Call):
             continue
 
-        if isinstance(node.func, ast.Name):
-            if node.func.id in DANGEROUS_CALL_NAMES:
-                result.block(f"위험 함수 호출: {node.func.id}()")
+        resolved_call = _resolve_call_name(node.func, alias_map)
+        if resolved_call is None:
+            continue
+
+        if resolved_call in DANGEROUS_CALL_NAMES:
+            result.block(f"위험 함수 호출: {resolved_call}()")
+            return
+
+        if "." in resolved_call:
+            root, attr = resolved_call.split(".", 1)
+            if root == "builtins" and attr in DANGEROUS_CALL_NAMES:
+                result.block(f"위험 함수 호출: {resolved_call}()")
                 return
 
         if isinstance(node.func, ast.Name) and node.func.id == "getattr":
@@ -272,44 +360,39 @@ def _step2_danger_scan(tree: ast.Module, result: _InternalResult) -> None:
                 second = node.args[1]
                 obj_name = first.id if isinstance(first, ast.Name) else None
                 attr_val = second.value if isinstance(second, ast.Constant) else None
-                if obj_name in {"os", "subprocess", "sys", "builtins"}:
+                resolved_obj = alias_map.get(obj_name, obj_name) if obj_name else None
+                synthetic_call = (
+                    f"{resolved_obj}.{attr_val}"
+                    if resolved_obj and isinstance(attr_val, str)
+                    else None
+                )
+                if (
+                    resolved_obj
+                    and resolved_obj.split(".")[0] in {"os", "subprocess", "sys", "builtins"}
+                ):
                     result.block(
-                        f"위험한 getattr 탐지: getattr({obj_name}, '{attr_val}') "
+                        f"위험한 getattr 탐지: getattr({resolved_obj}, '{attr_val}') "
+                        f"— 동적 속성 접근으로 탐지 우회 시도"
+                    )
+                    return
+                if synthetic_call is not None and _dangerous_attr_pair(synthetic_call):
+                    result.block(
+                        f"위험한 getattr 탐지: getattr({resolved_obj}, '{attr_val}') "
                         f"— 동적 속성 접근으로 탐지 우회 시도"
                     )
                     return
 
-        if isinstance(node.func, ast.Attribute):
-            if isinstance(node.func.value, ast.Name):
-                pair = (node.func.value.id, node.func.attr)
-                if pair in DANGEROUS_ATTR_CALLS:
-                    if pair == ("os", "environ"):
-                        result.flag("os.environ 접근 탐지 — API 키 탈취 가능성")
-                    else:
-                        result.block(
-                            f"위험 메서드 호출: "
-                            f"{node.func.value.id}.{node.func.attr}()"
-                        )
-                        return
+        pair = _dangerous_attr_pair(resolved_call)
+        if pair is not None:
+            if pair == ("os", "environ"):
+                result.flag("os.environ 접근 탐지 — API 키 탈취 가능성")
+            else:
+                result.block(f"위험 메서드 호출: {resolved_call}()")
+                return
 
-            if isinstance(node.func.value, ast.Attribute):
-                inner = node.func.value
-                if (isinstance(inner.value, ast.Name)
-                        and inner.value.id == "os"
-                        and inner.attr == "environ"):
-                    result.flag("os.environ 체인 접근 탐지 — API 키 탈취 가능성")
-
-        if isinstance(node.func, ast.Attribute):
-            if (isinstance(node.func.value, ast.Name)
-                    and node.func.value.id == "numpy"
-                    and node.func.attr == "load"):
-                for kw in node.keywords:
-                    if kw.arg == "allow_pickle":
-                        if isinstance(kw.value, ast.Constant) and kw.value.value:
-                            result.block(
-                                "numpy.load(allow_pickle=True) — pickle 역직렬화 위험"
-                            )
-                            return
+        if _is_numpy_load_with_pickle(resolved_call, node):
+            result.block("numpy.load(allow_pickle=True) — pickle 역직렬화 위험")
+            return
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Name) and node.id in OBFUSCATION_PATTERNS:
