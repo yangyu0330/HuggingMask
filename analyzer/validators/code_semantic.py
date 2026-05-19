@@ -162,6 +162,16 @@ _SPECIAL_TOKEN_KEYS = (
     "additional_special_tokens",
 )
 
+_CORE_SPECIAL_TOKEN_KEYS = (
+    "bos_token",
+    "eos_token",
+    "unk_token",
+    "sep_token",
+    "pad_token",
+    "cls_token",
+    "mask_token",
+)
+
 _TOKENIZER_OPTION_KEYS = (
     "model_max_length",
     "padding_side",
@@ -169,6 +179,15 @@ _TOKENIZER_OPTION_KEYS = (
     "split_special_tokens",
     "clean_up_tokenization_spaces",
 )
+
+_TOKENIZER_INVARIANT_FILE_KINDS = {
+    FileKind.TOKENIZER_CONFIG_JSON,
+    FileKind.TOKENIZER_JSON,
+    FileKind.SPECIAL_TOKENS_MAP_JSON,
+    FileKind.ADDED_TOKENS_JSON,
+}
+
+_MODEL_MAX_LENGTH_REVIEW_THRESHOLD = 1_000_000
 
 _ADDED_TOKEN_OPTION_KEYS = (
     "id",
@@ -757,6 +776,8 @@ def _build_semantic_findings(
     for template in templates:
         findings.extend(_chat_template_findings(template))
 
+    findings.extend(_tokenizer_invariant_findings(file_kind, payload))
+
     lowered = source_text.lower()
     if any(hint in lowered for hint in _PATH_OR_NETWORK_HINTS):
         findings.append(
@@ -768,6 +789,281 @@ def _build_semantic_findings(
         )
 
     return _dedupe_findings(findings)
+
+
+def _tokenizer_invariant_findings(file_kind: FileKind, payload: Any) -> list[dict[str, Any]]:
+    if file_kind not in _TOKENIZER_INVARIANT_FILE_KINDS:
+        return []
+    if not isinstance(payload, (dict, list)):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        findings.extend(_special_token_collision_findings(payload))
+        findings.extend(_tokenizer_option_invariant_findings(payload))
+    findings.extend(_added_token_invariant_findings(file_kind, payload))
+    return findings
+
+
+def _special_token_collision_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    core_tokens = _collect_core_special_token_contents(payload)
+    by_content: dict[str, list[str]] = {}
+    for key, content in core_tokens.items():
+        if content == "":
+            continue
+        by_content.setdefault(content, []).append(key)
+
+    for content, keys in by_content.items():
+        if len(keys) > 1:
+            findings.append(
+                _finding(
+                    "TOKENIZER_SPECIAL_TOKEN_COLLISION",
+                    "MEDIUM",
+                    f"special token {content!r} is assigned to {', '.join(sorted(keys))}",
+                )
+            )
+
+    additional_tokens = _collect_additional_special_token_contents(payload)
+    core_contents = set(core_tokens.values())
+    collisions = sorted({content for content in additional_tokens if content in core_contents and content != ""})
+    if collisions:
+        findings.append(
+            _finding(
+                "TOKENIZER_ADDITIONAL_SPECIAL_TOKEN_COLLISION",
+                "MEDIUM",
+                f"additional_special_tokens overlap core special tokens: {', '.join(collisions)}",
+            )
+        )
+
+    return findings
+
+
+def _collect_core_special_token_contents(payload: dict[str, Any]) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for key in _CORE_SPECIAL_TOKEN_KEYS:
+        if key not in payload:
+            continue
+        for content in _token_contents(payload[key]):
+            tokens[key] = content
+            break
+    return tokens
+
+
+def _collect_additional_special_token_contents(payload: dict[str, Any]) -> list[str]:
+    if "additional_special_tokens" not in payload:
+        return []
+    return _token_contents(payload["additional_special_tokens"])
+
+
+def _token_contents(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        content = value.get("content") or value.get("token")
+        if isinstance(content, str):
+            return [content]
+        nested_values: list[str] = []
+        for item in value.values():
+            nested_values.extend(_token_contents(item))
+        return nested_values
+    if isinstance(value, list):
+        output: list[str] = []
+        for item in value:
+            output.extend(_token_contents(item))
+        return output
+    return []
+
+
+def _tokenizer_option_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+
+    if payload.get("split_special_tokens") is True:
+        findings.append(
+            _finding(
+                "TOKENIZER_SPLIT_SPECIAL_TOKENS_ENABLED",
+                "MEDIUM",
+                "split_special_tokens=True can change control token boundaries.",
+            )
+        )
+
+    model_max_length = _extract_model_max_length(payload)
+    if model_max_length is not None and not _is_valid_model_max_length(model_max_length):
+        findings.append(
+            _finding(
+                "TOKENIZER_MODEL_MAX_LENGTH_ABNORMAL",
+                "MEDIUM",
+                f"model_max_length is abnormal: {model_max_length!r}",
+            )
+        )
+
+    for key in ("padding_side", "truncation_side"):
+        side = _extract_side_option(payload, key)
+        if side is not None and not _is_valid_side(side):
+            findings.append(
+                _finding(
+                    f"TOKENIZER_INVALID_{key.upper()}",
+                    "MEDIUM",
+                    f"{key} must be left or right, got {side!r}",
+                )
+            )
+
+    return findings
+
+
+def _extract_model_max_length(payload: dict[str, Any]) -> Any:
+    if "model_max_length" in payload:
+        return payload["model_max_length"]
+    truncation = payload.get("truncation")
+    if isinstance(truncation, dict) and "max_length" in truncation:
+        return truncation["max_length"]
+    return None
+
+
+def _is_valid_model_max_length(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        numeric = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        numeric = int(value.strip())
+    else:
+        return False
+    return 0 < numeric <= _MODEL_MAX_LENGTH_REVIEW_THRESHOLD
+
+
+def _extract_side_option(payload: dict[str, Any], key: str) -> Any:
+    if key in payload:
+        return payload[key]
+    if key == "padding_side":
+        padding = payload.get("padding")
+        if isinstance(padding, dict):
+            return padding.get("direction")
+    if key == "truncation_side":
+        truncation = payload.get("truncation")
+        if isinstance(truncation, dict):
+            return truncation.get("direction")
+    return None
+
+
+def _is_valid_side(value: Any) -> bool:
+    return isinstance(value, str) and value.lower() in {"left", "right"}
+
+
+def _added_token_invariant_findings(file_kind: FileKind, payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    tokens = _collect_added_token_records(file_kind, payload)
+    findings.extend(_added_token_duplicate_findings(tokens))
+    findings.extend(_added_token_option_findings(tokens))
+    return findings
+
+
+def _collect_added_token_records(file_kind: FileKind, payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    if file_kind is FileKind.TOKENIZER_JSON and isinstance(payload, dict):
+        return _added_token_records(payload.get("added_tokens"))
+    if file_kind is FileKind.TOKENIZER_CONFIG_JSON and isinstance(payload, dict):
+        return _added_token_records(payload.get("added_tokens_decoder"))
+    if file_kind is FileKind.ADDED_TOKENS_JSON:
+        return _added_token_records(payload)
+    return []
+
+
+def _added_token_records(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [_added_token_record(item, key=None) for item in value]
+    if isinstance(value, dict):
+        return [_added_token_record(item, key=key) for key, item in value.items()]
+    return []
+
+
+def _added_token_record(value: Any, *, key: str | None) -> dict[str, Any]:
+    record: dict[str, Any] = {"key": key, "id": None, "content": None, "options": {}}
+    if key is not None and str(key).isdigit():
+        record["id"] = int(str(key))
+    if isinstance(value, dict):
+        if "id" in value:
+            record["id"] = value["id"]
+        content = value.get("content") or value.get("token")
+        if isinstance(content, str):
+            record["content"] = content
+        record["options"] = {name: value.get(name) for name in _ADDED_TOKEN_OPTION_KEYS if name in value}
+        return record
+    if isinstance(value, str):
+        record["content"] = value
+        return record
+    record["content"] = str(value) if value is not None else None
+    return record
+
+
+def _added_token_duplicate_findings(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    ids: dict[Any, int] = {}
+    contents: dict[str, int] = {}
+    duplicate_ids: set[Any] = set()
+    duplicate_contents: set[str] = set()
+
+    for token in tokens:
+        token_id = token.get("id")
+        if token_id is not None:
+            if token_id in ids:
+                duplicate_ids.add(token_id)
+            ids[token_id] = ids.get(token_id, 0) + 1
+        content = token.get("content")
+        if isinstance(content, str) and content != "":
+            if content in contents:
+                duplicate_contents.add(content)
+            contents[content] = contents.get(content, 0) + 1
+
+    if duplicate_ids:
+        findings.append(
+            _finding(
+                "TOKENIZER_ADDED_TOKEN_DUPLICATE_ID",
+                "MEDIUM",
+                f"added token ids are duplicated: {', '.join(str(item) for item in sorted(duplicate_ids, key=str))}",
+            )
+        )
+    if duplicate_contents:
+        findings.append(
+            _finding(
+                "TOKENIZER_ADDED_TOKEN_DUPLICATE_CONTENT",
+                "MEDIUM",
+                "added token contents are duplicated: "
+                + ", ".join(repr(item) for item in sorted(duplicate_contents)),
+            )
+        )
+
+    return findings
+
+
+def _added_token_option_findings(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    risky_options: dict[str, list[str]] = {"lstrip": [], "rstrip": [], "normalized": []}
+    for token in tokens:
+        options = token.get("options") or {}
+        content = str(token.get("content") or token.get("key") or token.get("id"))
+        if options.get("lstrip") is True:
+            risky_options["lstrip"].append(content)
+        if options.get("rstrip") is True:
+            risky_options["rstrip"].append(content)
+        if options.get("normalized") is False:
+            risky_options["normalized"].append(content)
+
+    findings: list[dict[str, Any]] = []
+    for option, contents in risky_options.items():
+        if not contents:
+            continue
+        finding_code = (
+            "TOKENIZER_ADDED_TOKEN_NORMALIZED_FALSE"
+            if option == "normalized"
+            else f"TOKENIZER_ADDED_TOKEN_{option.upper()}_ENABLED"
+        )
+        findings.append(
+            _finding(
+                finding_code,
+                "MEDIUM",
+                f"AddedToken {option} risk option is present for: {', '.join(contents[:20])}",
+            )
+        )
+    return findings
 
 
 def _extract_chat_templates(file_kind: FileKind, source_text: str, payload: Any) -> list[str]:
@@ -842,6 +1138,8 @@ def _semantic_check_status(
         return "BASELINE_MISSING"
     if _sha256_text(source_text) != _sha256_text(baseline_text):
         return "REVIEW"
+    if _has_review_findings(findings):
+        return "REVIEW"
     return "PASSED"
 
 
@@ -870,6 +1168,16 @@ def _primary_reason_code(findings: list[dict[str, Any]]) -> str:
         if finding.get("severity") == "HIGH":
             return str(finding.get("code"))
     return "SEMANTIC_REVIEW_REQUIRED"
+
+
+def _has_review_findings(findings: list[dict[str, Any]]) -> bool:
+    ignored_codes = {"BASELINE_MISSING", "SEMANTIC_BASELINE_DELTA"}
+    for finding in findings:
+        if finding.get("code") in ignored_codes:
+            continue
+        if finding.get("severity") in {"LOW", "MEDIUM", "HIGH"}:
+            return True
+    return False
 
 
 def _finding(code: str, severity: str, evidence: str) -> dict[str, Any]:

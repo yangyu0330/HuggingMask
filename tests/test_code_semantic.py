@@ -108,6 +108,156 @@ def test_tokenizer_config_json_inventory_records_options_added_tokens_and_chat_t
     assert inventory["chat_template"]["hint_details"]["assistant"] is True
 
 
+def test_special_token_collision_records_invariant_finding() -> None:
+    source = json.dumps({"bos_token": "<s>", "eos_token": "<s>", "unk_token": "<unk>"})
+    artifact = build_artifact_ref("special_tokens_map.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_SPECIAL_TOKEN_COLLISION" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_additional_special_token_collision_records_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "additional_special_tokens": ["<image>", "</s>"],
+        }
+    )
+    artifact = build_artifact_ref("special_tokens_map.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_ADDITIONAL_SPECIAL_TOKEN_COLLISION" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_added_token_duplicate_id_and_content_record_invariant_findings() -> None:
+    source = json.dumps(
+        [
+            {"id": 32000, "content": "<image>", "special": True},
+            {"id": 32000, "content": "<image>", "special": True},
+        ]
+    )
+    artifact = build_artifact_ref("added_tokens.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_ID" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_CONTENT" in finding_codes
+
+
+def test_split_special_tokens_true_records_invariant_finding() -> None:
+    source = json.dumps({"split_special_tokens": True})
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_SPLIT_SPECIAL_TOKENS_ENABLED" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_added_token_lstrip_rstrip_normalized_false_record_invariant_findings() -> None:
+    source = json.dumps(
+        [
+            {
+                "id": 32000,
+                "content": "<control>",
+                "lstrip": True,
+                "rstrip": True,
+                "normalized": False,
+            }
+        ]
+    )
+    artifact = build_artifact_ref("added_tokens.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_ADDED_TOKEN_LSTRIP_ENABLED" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_RSTRIP_ENABLED" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_NORMALIZED_FALSE" in finding_codes
+
+
+def test_model_max_length_abnormal_records_invariant_finding() -> None:
+    source = json.dumps({"model_max_length": 10**30})
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_MODEL_MAX_LENGTH_ABNORMAL" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_invalid_padding_side_and_truncation_side_record_invariant_findings() -> None:
+    source = json.dumps({"padding_side": "middle", "truncation_side": "center"})
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_INVALID_PADDING_SIDE" in finding_codes
+    assert "TOKENIZER_INVALID_TRUNCATION_SIDE" in finding_codes
+
+
 def test_added_tokens_json_inventory_records_added_token_options() -> None:
     source = json.dumps(
         {
