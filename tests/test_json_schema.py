@@ -47,6 +47,14 @@ def test_interface_enum_values_are_stable() -> None:
         "PYTHON",
         "CONFIG_JSON",
         "TOKENIZER_CONFIG_JSON",
+        "TOKENIZER_JSON",
+        "SPECIAL_TOKENS_MAP_JSON",
+        "ADDED_TOKENS_JSON",
+        "VOCAB_JSON",
+        "MERGES_TXT",
+        "PREPROCESSOR_CONFIG_JSON",
+        "PROCESSOR_CONFIG_JSON",
+        "CHAT_TEMPLATE_JINJA",
         "OTHER",
     }
     assert {item.value for item in ValidationStatus} == {
@@ -81,6 +89,7 @@ def test_interface_enum_values_are_stable() -> None:
         "CODE_RESTRICTED_RUNTIME",
         "CODE_SANDBOX_RUNTIME",
         "CONFIG_SCHEMA_VALIDATION",
+        "PREPROCESSING_SEMANTIC_SCAN",
     }
     assert {item.value for item in OverallDecision} == {
         "APPROVE",

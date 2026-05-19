@@ -33,6 +33,22 @@ def classify_file_kind(repo_path: str | Path) -> FileKind:
         return FileKind.CONFIG_JSON
     if name == "tokenizer_config.json":
         return FileKind.TOKENIZER_CONFIG_JSON
+    if name == "tokenizer.json":
+        return FileKind.TOKENIZER_JSON
+    if name == "special_tokens_map.json":
+        return FileKind.SPECIAL_TOKENS_MAP_JSON
+    if name == "added_tokens.json":
+        return FileKind.ADDED_TOKENS_JSON
+    if name == "vocab.json":
+        return FileKind.VOCAB_JSON
+    if name == "merges.txt":
+        return FileKind.MERGES_TXT
+    if name == "preprocessor_config.json":
+        return FileKind.PREPROCESSOR_CONFIG_JSON
+    if name == "processor_config.json":
+        return FileKind.PROCESSOR_CONFIG_JSON
+    if name == "chat_template.jinja":
+        return FileKind.CHAT_TEMPLATE_JINJA
     if suffix == ".safetensors":
         return FileKind.SAFETENSORS
     if suffix in PICKLE_EXTENSIONS:

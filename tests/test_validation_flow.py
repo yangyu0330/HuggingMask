@@ -3,7 +3,7 @@ import json
 from pathlib import PurePosixPath
 
 from analyzer.orchestrator import build_minimal_request, dispatch_artifacts, run_validation_job
-from analyzer.schemas import ArtifactRef, FileKind, PolicyInfo, ValidationStatus
+from analyzer.schemas import ArtifactRef, FileKind, PolicyInfo, RouteKind, ValidationStatus
 
 
 def _make_policy() -> PolicyInfo:
@@ -344,6 +344,62 @@ def test_preprocessing_auxiliary_unknown_are_not_auto_passed_in_orchestrator() -
     assert response.overall_status in {ValidationStatus.PENDING_REVIEW, ValidationStatus.ERROR}
     for item in response.artifact_results:
         assert item.status is not ValidationStatus.PASS
+
+
+def test_preprocessing_metadata_routes_to_semantic_scan_and_stays_pending_without_baseline() -> None:
+    policy = _make_policy()
+    source = json.dumps({"processor_class": "DemoProcessor", "chat_template": "{{ messages }}"})
+    artifact = _make_artifact("processor_config.json", FileKind.PROCESSOR_CONFIG_JSON, source)
+    request = build_minimal_request(
+        request_id="req-preprocessing-metadata",
+        job_id="job-preprocessing-metadata",
+        policy=policy,
+        artifacts=[artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={"processor_config.json": source},
+    )
+
+    result = response.artifact_results[0]
+    assert response.overall_status is ValidationStatus.PENDING_REVIEW
+    assert result.route_kind is RouteKind.PREPROCESSING_SEMANTIC_SCAN
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+
+
+def test_tokenizer_config_dispatch_includes_semantic_inventory_and_stays_pending_without_baseline() -> None:
+    policy = _make_policy()
+    source = json.dumps(
+        {
+            "model_max_length": 2048,
+            "padding_side": "left",
+            "clean_up_tokenization_spaces": False,
+        }
+    )
+    artifact = _make_artifact("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON, source)
+    request = build_minimal_request(
+        request_id="req-tokenizer-config-semantic",
+        job_id="job-tokenizer-config-semantic",
+        policy=policy,
+        artifacts=[artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={"tokenizer_config.json": source},
+    )
+
+    result = response.artifact_results[0]
+    assert response.overall_status is ValidationStatus.PENDING_REVIEW
+    assert result.route_kind is RouteKind.CONFIG_SCHEMA_VALIDATION
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_route_kind"] == "PREPROCESSING_SEMANTIC_SCAN"
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert result.details["semantic_inventory"]["model_max_length"] == 2048
+    assert result.details["semantic_inventory"]["padding_side"] == "left"
+    assert result.details["semantic_inventory"]["clean_up_tokenization_spaces"] is False
 
 
 def test_loader_error_is_reported_as_error_status() -> None:

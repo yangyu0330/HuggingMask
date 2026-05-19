@@ -25,6 +25,10 @@ from analyzer.schemas import (
     ValidationStatus,
 )
 from analyzer.validators.code_api_policy import WhitelistLookup
+from analyzer.validators.code_semantic import (
+    is_preprocessing_metadata_kind,
+    validate_preprocessing_metadata_artifact,
+)
 from analyzer.validators.code_validator import validate_python_artifact
 from analyzer.validators.config_validator import validate_config_artifact
 
@@ -129,6 +133,12 @@ def dispatch_artifacts(
                     source_loader=source_loader,
                     runtime_check_loader=runtime_check_loader,
                     ast_call_metadata_loader=ast_call_metadata_loader,
+                )
+            elif is_preprocessing_metadata_kind(artifact.file_kind):
+                result = validate_preprocessing_metadata_artifact(
+                    artifact=artifact,
+                    source=source,
+                    policy=policy,
                 )
             else:
                 result = _build_skipped_result(
@@ -340,6 +350,8 @@ def _build_error_like_result(
 def _default_route_kind(artifact: ArtifactRef) -> RouteKind:
     if artifact.file_kind.value in {"CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}:
         return RouteKind.CONFIG_SCHEMA_VALIDATION
+    if is_preprocessing_metadata_kind(artifact.file_kind):
+        return RouteKind.PREPROCESSING_SEMANTIC_SCAN
     return RouteKind.CODE_AST_SCAN
 
 
