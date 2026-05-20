@@ -315,6 +315,56 @@ def test_pickle_path_b_request_ignores_path_a_only_cache(
     assert "path_b" in second
 
 
+def test_path_b_block_cache_does_not_poison_default_pickle_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    path = tmp_path / "safe_model.pkl"
+    safe_schema = {
+        "__tensor_dict__": {
+            "linear.weight": {
+                "dtype": "float32",
+                "shape": [2, 2],
+                "data": [1.0, 1.0, 1.0, 1.0],
+            }
+        }
+    }
+
+    with open(path, "wb") as f:
+        pickle.dump(safe_schema, f, protocol=4)
+
+    def fake_run_in_docker(*args, **kwargs):
+        return {
+            "status": "BLOCK",
+            "reason_code": "PICKLE_PATH_B_NOT_AVAILABLE",
+            "reason": "Path B is not available in this environment",
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    policy = "test-path-b-cache-isolated"
+    path_b_result = validate(
+        str(path),
+        policy_fingerprint=policy,
+        file_kind="PICKLE",
+        enable_path_b=True,
+    )
+
+    default_result = validate(
+        str(path),
+        policy_fingerprint=policy,
+        file_kind="PICKLE",
+        enable_path_b=False,
+    )
+
+    assert path_b_result["status"] == "BLOCK"
+    assert path_b_result["stage"] == "PATH_B"
+    assert "PICKLE_PATH_B" in path_b_result["cache_key"]
+    assert default_result["status"] == "PASS"
+    assert "path_b" not in default_result
+    assert "PICKLE_PATH_B" not in default_result["cache_key"]
+
+
 def test_weight_cli_outputs_json(tmp_path: Path):
     path = tmp_path / "model.safetensors"
     save_file(

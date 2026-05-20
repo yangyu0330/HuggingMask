@@ -35,10 +35,17 @@ def _make_cacheable(obj: Any):
 
 
 def _cached_pickle_result_satisfies_request(cached: dict, enable_path_b: bool) -> bool:
-    if not enable_path_b:
+    if enable_path_b:
         return True
 
-    return "path_b" in cached
+    return "path_b" not in cached
+
+
+def _pickle_cache_kind(enable_path_b: bool) -> str:
+    if enable_path_b:
+        return "PICKLE_PATH_B"
+
+    return "PICKLE"
 
 
 def _hash_mismatch_result(
@@ -67,7 +74,11 @@ def validate_pickle_pipeline(
     file_hash: str | None = None,
 ) -> dict:
     file_hash = file_hash or sha256_file(path)
-    cache_key = build_cache_key(file_hash, "PICKLE", policy_fingerprint)
+    cache_key = build_cache_key(
+        file_hash,
+        _pickle_cache_kind(enable_path_b),
+        policy_fingerprint,
+    )
 
     cached = get_cache(cache_key)
     if cached and _cached_pickle_result_satisfies_request(cached, enable_path_b):
@@ -226,7 +237,15 @@ def validate(
         "SAFETENSORS" if path.endswith(".safetensors") else "PICKLE"
     )
 
-    cache_key = build_cache_key(file_hash, normalized_kind, policy_fingerprint)
+    cache_key = build_cache_key(
+        file_hash,
+        (
+            _pickle_cache_kind(enable_path_b)
+            if normalized_kind == "PICKLE"
+            else normalized_kind
+        ),
+        policy_fingerprint,
+    )
 
     # expected_sha256 검증은 cache lookup보다 먼저 수행해야 함.
     # cached PASS가 잘못된 expected hash 요청을 우회하면 안 됨.
