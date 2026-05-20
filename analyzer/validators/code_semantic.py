@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
@@ -834,6 +835,8 @@ def _added_tokens_inventory(value: Any) -> dict[str, Any]:
 
 
 def _summarize_added_token(value: Any, *, key: str | None = None) -> dict[str, Any]:
+    if key is not None and isinstance(value, int) and not isinstance(value, bool):
+        return {"id": value, "content": key}
     if isinstance(value, dict):
         summary = {name: value.get(name) for name in _ADDED_TOKEN_OPTION_KEYS if name in value}
         if key is not None:
@@ -1167,6 +1170,10 @@ def _added_token_records(value: Any) -> list[dict[str, Any]]:
 
 def _added_token_record(value: Any, *, key: str | None) -> dict[str, Any]:
     record: dict[str, Any] = {"key": key, "id": None, "content": None, "options": {}}
+    if key is not None and isinstance(value, int) and not isinstance(value, bool):
+        record["id"] = value
+        record["content"] = key
+        return record
     if key is not None and str(key).isdigit():
         record["id"] = int(str(key))
     if isinstance(value, dict):
@@ -1263,9 +1270,8 @@ def _processor_invariant_findings(file_kind: FileKind, payload: Any) -> list[dic
     if file_kind is FileKind.PROCESSOR_CONFIG_JSON:
         findings.extend(_processor_component_invariant_findings(payload))
         findings.extend(_processor_chat_template_media_findings(payload))
-    if file_kind is FileKind.PREPROCESSOR_CONFIG_JSON:
-        findings.extend(_image_invariant_findings(payload))
-        findings.extend(_audio_invariant_findings(payload))
+    findings.extend(_image_invariant_findings(payload))
+    findings.extend(_audio_invariant_findings(payload))
     return findings
 
 
@@ -1455,9 +1461,8 @@ def _is_valid_image_dimension_spec(value: Any) -> bool:
     if _is_valid_positive_int(value, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD):
         return True
     if isinstance(value, dict):
-        numeric_values = [item for item in value.values() if isinstance(item, (int, float)) and not isinstance(item, bool)]
-        return bool(numeric_values) and all(
-            _is_valid_positive_int(item, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD) for item in numeric_values
+        return bool(value) and all(
+            _is_valid_positive_int(item, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD) for item in value.values()
         )
     if isinstance(value, list):
         return bool(value) and all(
@@ -1498,7 +1503,12 @@ def _is_valid_positive_int(value: Any, *, maximum: int) -> bool:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def _is_valid_image_format(key: str, value: Any) -> bool:

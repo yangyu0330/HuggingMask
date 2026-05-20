@@ -690,6 +690,58 @@ def test_semantic_review_status_cannot_be_job_level_approved() -> None:
     assert _overall_decision_from_status(overall_status) is OverallDecision.REVIEW_REQUIRED
 
 
+def test_tokenizer_config_linked_python_pass_preserves_semantic_review_status() -> None:
+    policy = _make_policy()
+    source = json.dumps(
+        {
+            "auto_map": {"AutoModel": "modeling_demo.DemoModel"},
+            "model_max_length": 2048,
+            "padding_side": "right",
+        }
+    )
+    code_source = (
+        "import torch.nn.functional as F\n"
+        "from torch import nn\n"
+        "class DemoModel:\n"
+        "    def forward(self, x):\n"
+        "        y = nn.Linear(4, 2)\n"
+        "        return F.relu(y)\n"
+    )
+    artifact = _make_artifact("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON, source)
+    request = build_minimal_request(
+        request_id="req-tokenizer-config-linked-pass-semantic",
+        job_id="job-tokenizer-config-linked-pass-semantic",
+        policy=policy,
+        artifacts=[artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={
+            "tokenizer_config.json": source,
+            "modeling_demo.py": code_source,
+        },
+        runtime_check_loader={
+            "modeling_demo.py": {
+                "status": "PASS",
+                "runtime_mode": "RESTRICTED_RUNTIME",
+            }
+        },
+    )
+
+    result = response.artifact_results[0]
+
+    assert response.overall_status is ValidationStatus.PENDING_REVIEW
+    assert response.overall_decision is OverallDecision.REVIEW_REQUIRED
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert result.details["linked_code_statuses"] == ["PASS"]
+    assert result.details["effective_status"] == "PENDING_REVIEW"
+    assert artifact.artifact_id not in response.approved_artifact_ids
+    assert artifact.artifact_id in response.pending_artifact_ids
+
+
 def test_tokenizer_config_linked_python_block_keeps_block_priority_with_semantic_findings() -> None:
     policy = _make_policy()
     source = json.dumps(

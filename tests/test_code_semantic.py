@@ -253,6 +253,27 @@ def test_added_token_duplicate_id_and_content_record_invariant_findings() -> Non
     assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_CONTENT" in finding_codes
 
 
+def test_added_tokens_json_token_to_id_map_duplicate_ids_record_invariant_finding() -> None:
+    source = json.dumps({"<image>": 32000, "<audio>": 32000})
+    artifact = build_artifact_ref("added_tokens.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+    tokens = result.details["semantic_inventory"]["added_tokens"]["tokens"]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert tokens[0]["content"] == "<image>"
+    assert tokens[0]["id"] == 32000
+    assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_ID" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_CONTENT" not in finding_codes
+
+
 def test_split_special_tokens_true_records_invariant_finding() -> None:
     source = json.dumps({"split_special_tokens": True})
     artifact = build_artifact_ref("tokenizer_config.json", source)
@@ -546,6 +567,30 @@ def test_invalid_image_size_and_crop_size_record_invariant_findings() -> None:
     assert "IMAGE_CROP_SIZE_INVALID" in finding_codes
 
 
+def test_image_dimension_dict_rejects_non_numeric_and_bool_values() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 224, "width": "bad"},
+            "crop_size": {"height": 224, "width": True},
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_SIZE_INVALID" in finding_codes
+    assert "IMAGE_CROP_SIZE_INVALID" in finding_codes
+
+
 def test_invalid_image_mean_and_std_record_invariant_findings() -> None:
     source = json.dumps(
         {
@@ -556,6 +601,29 @@ def test_invalid_image_mean_and_std_record_invariant_findings() -> None:
             "image_mean": [0.5, 99.0],
             "image_std": [0.5, 0.0, 0.5],
         }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_MEAN_INVALID" in finding_codes
+    assert "IMAGE_STD_INVALID" in finding_codes
+
+
+def test_nonfinite_image_mean_and_std_record_invariant_findings() -> None:
+    source = (
+        '{"do_resize": true, "size": 224, "crop_size": 224, '
+        '"do_normalize": true, '
+        '"image_mean": [NaN, 0.5, 0.5], '
+        '"image_std": [0.5, 0.5, NaN]}'
     )
     artifact = build_artifact_ref("preprocessor_config.json", source)
 
@@ -699,6 +767,24 @@ def test_invalid_audio_padding_value_feature_size_and_max_length_record_invarian
     assert "AUDIO_FIELD_TYPE_INVALID" in finding_codes
 
 
+def test_nonfinite_audio_padding_value_records_invariant_finding() -> None:
+    source = '{"sampling_rate": 16000, "padding_value": NaN, "feature_size": 80}'
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "AUDIO_PADDING_VALUE_INVALID" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
 def test_invalid_processor_component_refs_record_invariant_findings() -> None:
     source = json.dumps(
         {
@@ -754,6 +840,34 @@ def test_processor_chat_template_media_placeholder_records_invariant_finding() -
     assert "PROCESSOR_CHAT_TEMPLATE_MEDIA_LITERAL" in [
         item["code"] for item in result.details["semantic_findings"]
     ]
+
+
+def test_processor_config_image_and_audio_invariant_findings_are_applied() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "do_resize": True,
+            "size": 0,
+            "crop_size": 224,
+            "sampling_rate": 999999,
+            "feature_size": 0,
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_SIZE_INVALID" in finding_codes
+    assert "AUDIO_SAMPLING_RATE_INVALID" in finding_codes
+    assert "AUDIO_FEATURE_SIZE_INVALID" in finding_codes
 
 
 def test_baseline_match_with_processor_invariant_finding_is_review() -> None:

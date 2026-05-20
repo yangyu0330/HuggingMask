@@ -185,12 +185,6 @@ def dispatch_artifacts(
                     source=source,
                     policy=policy,
                 )
-            elif is_preprocessing_metadata_kind(artifact.file_kind):
-                result = validate_preprocessing_metadata_artifact(
-                    artifact=artifact,
-                    source=source,
-                    policy=policy,
-                )
             else:
                 result = _build_skipped_result(
                     artifact,
@@ -503,9 +497,9 @@ def _refresh_config_linked_results(
         if isinstance(edge, dict)
     ]
 
-    effective_status = _config_status_from_linked_statuses(parent, statuses)
+    effective_status = _refreshed_config_status(parent, statuses)
     parent.status = effective_status
-    parent.review_action = _config_review_action_for_status(effective_status)
+    parent.review_action = _config_review_action_for_refreshed_status(parent, effective_status)
     details["effective_status"] = effective_status.value
     parent.details = details
     return parent
@@ -572,6 +566,31 @@ def _config_status_from_linked_statuses(
     if normalized == {"PASS"}:
         return ValidationStatus.PASS
     return ValidationStatus.PENDING_REVIEW
+
+
+def _refreshed_config_status(
+    parent: ArtifactValidationResult,
+    linked_statuses: list[str],
+) -> ValidationStatus:
+    linked_status = _config_status_from_linked_statuses(parent, linked_statuses)
+    if linked_status in {ValidationStatus.BLOCK, ValidationStatus.ERROR}:
+        return linked_status
+    if _semantic_check_requires_review(parent):
+        return ValidationStatus.PENDING_REVIEW
+    return linked_status
+
+
+def _config_review_action_for_refreshed_status(
+    parent: ArtifactValidationResult,
+    status: ValidationStatus,
+) -> ReviewAction:
+    if status is ValidationStatus.PENDING_REVIEW:
+        semantic_review_action = parent.details.get("semantic_review_action")
+        if semantic_review_action == ReviewAction.MANUAL_REVIEW_REQUIRED.value:
+            return ReviewAction.MANUAL_REVIEW_REQUIRED
+        if parent.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED:
+            return ReviewAction.MANUAL_REVIEW_REQUIRED
+    return _config_review_action_for_status(status)
 
 
 def _config_review_action_for_status(status: ValidationStatus) -> ReviewAction:
