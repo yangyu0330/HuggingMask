@@ -230,6 +230,33 @@ def test_missing_loader_or_reference_keeps_pending_review_with_details() -> None
     }
 
 
+def test_auto_map_rejects_absolute_traversal_and_backslash_python_targets() -> None:
+    artifact = _make_artifact("config.json", FileKind.CONFIG_JSON)
+    payload = {
+        "auto_map": {
+            "AutoModel": "/tmp/evil.py",
+            "AutoModelForCausalLM": "pkg/../evil.py",
+            "AutoModelForSeq2SeqLM": "pkg\\evil.py",
+        }
+    }
+    result = validate_config_artifact(
+        artifact,
+        json.dumps(payload),
+        _make_policy(),
+        source_loader={
+            "tmp/evil.py": "class Evil: pass\n",
+            "pkg/../evil.py": "class Evil: pass\n",
+            "pkg/evil.py": "class Evil: pass\n",
+        },
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["trigger_fields"] == ["auto_map"]
+    assert result.details["config_scan"]["referenced_python_files"] == []
+    assert result.details["linked_code_results"] == []
+    assert result.details["effective_status"] == "PENDING_REVIEW"
+
+
 def test_tokenizer_config_custom_class_reference_is_extracted() -> None:
     artifact = _make_artifact("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON)
     payload = {
