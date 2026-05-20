@@ -333,6 +333,12 @@ def _worker_run_in_subprocess(
         def __getitem__(self, name: str) -> Any:
             if name == "builtins":
                 return restricted_builtins_module
+            # 사용자 코드 fake module — @dataclass 등이
+            # ``sys.modules.get(cls.__module__)``로 조회하므로 보존한다.
+            # preserve stdlib의 ``sys`` 참조를 safe proxy로 바꾼 뒤에도
+            # 정상 ``@dataclass`` 사용이 깨지지 않게 하기 위함 (Issue #25).
+            if name == "__restricted__":
+                return restricted_module
             if _is_denied_import(name):
                 raise KeyError(name)
             if not _matches_module_policy(name, effective_import_allowlist):
@@ -413,9 +419,6 @@ def _worker_run_in_subprocess(
             return safe_sys_proxy
         if _is_denied_import(obj.__name__):
             return _BlockedModuleProxy(obj.__name__)
-        # stdlib 정상 사용 보호 — 모듈은 그대로 반환, 내부 sanitize 안 함
-        if obj.__name__ in _SANITIZE_PRESERVE_STDLIB:
-            return obj
 
         seen = seen or set()
         obj_id = id(obj)
@@ -423,8 +426,19 @@ def _worker_run_in_subprocess(
             return obj
         seen.add(obj_id)
 
+        # preserve stdlib(``dataclasses``/``enum``/``collections`` 등)는
+        # ``__builtins__`` 교체를 면제한다 — ``@dataclass``가 내부 exec로
+        # ``__init__``을 생성할 때 real builtins가 필요하기 때문 (P2 #5).
+        # 단 모듈 globals 안의 real ``sys``/``builtins``/denied 모듈 참조는
+        # preserve 여부와 무관하게 항상 sanitize한다. 그렇지 않으면
+        # ``dataclasses.sys.modules["builtins"].open`` / ``enum.bltns.open`` /
+        # ``collections._sys.modules["builtins"].open`` 으로 restricted
+        # builtins overlay를 우회할 수 있다 (Issue #25 / 양유상 P1).
+        is_preserve = obj.__name__ in _SANITIZE_PRESERVE_STDLIB
+
         module_globals = getattr(obj, "__dict__", {})
-        module_globals["__builtins__"] = safe_builtins
+        if not is_preserve:
+            module_globals["__builtins__"] = safe_builtins
 
         for key, value in list(module_globals.items()):
             if key == "__builtins__":

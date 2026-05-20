@@ -899,6 +899,78 @@ class TestPr17ReviewP2Dataclasses:
         assert result.status == RuntimeStatus.PASS
 
 
+class TestIssue25PreserveStdlibBypass:
+    """Issue #25 / 양유상 P1 — preserve stdlib(``dataclasses``/``enum``/
+    ``collections``)의 내부 real ``sys``/``builtins`` 참조를 통한
+    restricted builtins overlay 우회를 차단해야 한다.
+
+    각 payload는 ``PASS``가 아니어야 하고, 파일 I/O side effect가 없어야 한다.
+    정상 ``@dataclass`` 사용은 계속 PASS (TestPr17ReviewP2Dataclasses 참조).
+    """
+
+    def _run_and_assert_blocked(self, src: str, probe_path):
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status != RuntimeStatus.PASS, (
+            f"우회 payload가 PASS면 안 됨 — got {result.status}"
+        )
+        assert not probe_path.exists(), (
+            f"파일 side effect 발생 — {probe_path} 가 생성됨"
+        )
+
+    def test_dataclasses_sys_modules_builtins_open(self, tmp_path):
+        probe = tmp_path / "probe_dc.txt"
+        p = str(probe).replace("\\", "\\\\")
+        src = (
+            "import dataclasses\n"
+            f"dataclasses.sys.modules['builtins'].open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_enum_bltns_open(self, tmp_path):
+        probe = tmp_path / "probe_enum.txt"
+        p = str(probe).replace("\\", "\\\\")
+        # enum은 builtins를 ``bltns``로 alias 한다.
+        src = (
+            "import enum\n"
+            f"enum.bltns.open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_enum_sys_modules_builtins_open(self, tmp_path):
+        probe = tmp_path / "probe_enum2.txt"
+        p = str(probe).replace("\\", "\\\\")
+        src = (
+            "import enum\n"
+            f"enum.sys.modules['builtins'].open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_collections_sys_modules_builtins_open(self, tmp_path):
+        probe = tmp_path / "probe_coll.txt"
+        p = str(probe).replace("\\", "\\\\")
+        # collections는 sys를 ``_sys``로 alias 한다.
+        src = (
+            "import collections\n"
+            f"collections._sys.modules['builtins'].open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_normal_dataclass_still_passes_after_fix(self):
+        """우회 차단 후에도 정상 ``@dataclass`` 사용은 PASS 유지."""
+        src = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class P:\n"
+            "    x: int = 0\n"
+            "_ = P(5).x\n"
+        )
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.PASS, (
+            f"정상 dataclass가 PASS여야 함 — got {result.status}, "
+            f"exc={result.exception_class}, tb={result.traceback}"
+        )
+
+
 class TestPr17ReviewAstScan:
     """AST 사전 검사 직접 테스트 — 위험 dunder 사용 자체가 차단되는지."""
 
