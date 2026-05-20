@@ -1,9 +1,10 @@
 import hashlib
 import json
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from analyzer.orchestrator import build_minimal_request, dispatch_artifacts, run_validation_job
-from analyzer.schemas import ArtifactRef, FileKind, PolicyInfo, ValidationStatus
+from analyzer.schemas import ArtifactRef, FileKind, PolicyInfo, RouteKind, SnapshotFileRef, ValidationStatus
+from analyzer.snapshot_resolver import SnapshotSourceResolver, build_source_loader
 
 
 def _make_policy() -> PolicyInfo:
@@ -215,6 +216,194 @@ def test_config_reroute_pending_propagates_to_config_and_overall() -> None:
     assert cfg_result.details["linked_code_statuses"] == ["PENDING_REVIEW"]
 
 
+def test_config_auto_map_promotes_linked_python_to_sibling_result() -> None:
+    policy = _make_policy()
+    config_source = json.dumps({"auto_map": {"AutoModelForCausalLM": "modeling_unknown.DemoForCausalLM"}})
+    code_source = (
+        "import torch\n"
+        "class DemoForCausalLM:\n"
+        "    def forward(self, x):\n"
+        "        return torch.special.expit(x)\n"
+    )
+    config_artifact = _make_artifact("config.json", FileKind.CONFIG_JSON, config_source)
+    request = build_minimal_request(
+        request_id="req-cfg-sibling",
+        job_id="job-cfg-sibling",
+        policy=policy,
+        artifacts=[config_artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={
+            "config.json": config_source,
+            "modeling_unknown.py": code_source,
+        },
+    )
+
+    assert [item.artifact.repo_path for item in response.artifact_results] == [
+        "config.json",
+        "modeling_unknown.py",
+    ]
+    cfg_result, sibling_result = response.artifact_results
+    assert cfg_result.status is ValidationStatus.PENDING_REVIEW
+    assert sibling_result.status is ValidationStatus.PENDING_REVIEW
+    assert sibling_result.details["linked_from_config"] == "config.json"
+    assert sibling_result.details["auto_map_key"] == "AutoModelForCausalLM"
+    assert sibling_result.details["target_module"] == "modeling_unknown"
+    assert sibling_result.details["target_class"] == "DemoForCausalLM"
+    assert sibling_result.details["target_repo_path"] == "modeling_unknown.py"
+    assert cfg_result.details["linked_code_results"][0]["artifact_id"] == sibling_result.artifact.artifact_id
+
+
+def test_direct_b2_and_auto_map_sibling_b2_both_receive_sandbox_check(tmp_path: Path) -> None:
+    policy = _make_policy()
+    config_source = json.dumps({"auto_map": {"AutoModel": "modeling_linked.LinkedModel"}})
+    linked_source = (
+        "import torch\n"
+        "class LinkedModel:\n"
+        "    def forward(self, x):\n"
+        "        return torch.special.expit(x)\n"
+    )
+    direct_source = (
+        "import torch.nn.functional as F\n"
+        "from torch import nn\n"
+        "class DirectModel:\n"
+        "    def forward(self, x):\n"
+        "        y = nn.Linear(4, 2)\n"
+        "        return F.relu(y)\n"
+    )
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "config.json").write_text(config_source, encoding="utf-8")
+    (snapshot_root / "modeling_linked.py").write_text(linked_source, encoding="utf-8")
+    (snapshot_root / "modeling_direct.py").write_text(direct_source, encoding="utf-8")
+
+    config_artifact = _make_artifact("config.json", FileKind.CONFIG_JSON, config_source)
+    direct_artifact = _make_artifact("modeling_direct.py", FileKind.PYTHON, direct_source)
+    request = build_minimal_request(
+        request_id="req-direct-and-sibling-b2",
+        job_id="job-direct-and-sibling-b2",
+        policy=policy,
+        artifacts=[config_artifact, direct_artifact],
+    )
+    request.model_snapshot_root = str(snapshot_root)
+    resolver = SnapshotSourceResolver.from_request(request)
+    sandbox_calls: list[str] = []
+
+    def sandbox_loader(result):
+        sandbox_calls.append(result.artifact.repo_path)
+        return {
+            "decision": "B2_POLICY_REVIEW_REQUIRED",
+            "policy_gate": {"reason_code": "SANDBOX_POLICY_GATE_REQUIRED"},
+        }
+
+    response = run_validation_job(
+        request,
+        source_loader=build_source_loader(resolver),
+        source_resolver=resolver,
+        sandbox_check_loader=sandbox_loader,
+    )
+
+    by_path = {item.artifact.repo_path: item for item in response.artifact_results}
+    assert sandbox_calls == ["modeling_linked.py", "modeling_direct.py"]
+    assert by_path["modeling_linked.py"].details["sandbox_check"]["decision"] == "B2_POLICY_REVIEW_REQUIRED"
+    assert by_path["modeling_direct.py"].details["sandbox_check"]["decision"] == "B2_POLICY_REVIEW_REQUIRED"
+    cfg_result = by_path["config.json"]
+    assert cfg_result.status is ValidationStatus.PENDING_REVIEW
+    assert cfg_result.details["linked_code_results"][0]["details"]["sandbox_check"]["decision"] == (
+        "B2_POLICY_REVIEW_REQUIRED"
+    )
+    assert cfg_result.details["linked_code_edges"][0]["sandbox_decision"] == "B2_POLICY_REVIEW_REQUIRED"
+
+
+def test_auto_map_duplicate_references_are_deduped_but_edges_are_preserved() -> None:
+    policy = _make_policy()
+    config_source = json.dumps(
+        {
+            "auto_map": {
+                "AutoModel": "modeling_dup.DemoModel",
+                "AutoModelForCausalLM": "modeling_dup.DemoForCausalLM",
+            }
+        }
+    )
+    code_source = (
+        "import torch\n"
+        "class DemoModel:\n"
+        "    def forward(self, x):\n"
+        "        return torch.special.expit(x)\n"
+    )
+    artifact = _make_artifact("config.json", FileKind.CONFIG_JSON, config_source)
+    request = build_minimal_request(
+        request_id="req-cfg-dedupe",
+        job_id="job-cfg-dedupe",
+        policy=policy,
+        artifacts=[artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={
+            "config.json": config_source,
+            "modeling_dup.py": code_source,
+        },
+    )
+
+    repo_paths = [item.artifact.repo_path for item in response.artifact_results]
+    assert repo_paths.count("modeling_dup.py") == 1
+    cfg_result = response.artifact_results[0]
+    assert len(cfg_result.details["linked_code_results"]) == 1
+    assert len(cfg_result.details["linked_code_edges"]) == 2
+    assert {edge["auto_map_key"] for edge in cfg_result.details["linked_code_edges"]} == {
+        "AutoModel",
+        "AutoModelForCausalLM",
+    }
+
+
+def test_resolver_error_detail_is_preserved_for_auto_map_source(tmp_path: Path) -> None:
+    policy = _make_policy()
+    config_source = json.dumps({"auto_map": {"AutoModel": "modeling_bad_hash.DemoModel"}})
+    linked_source = "class DemoModel:\n    pass\n"
+    linked_bytes = linked_source.encode("utf-8")
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    linked_path = snapshot_root / "modeling_bad_hash.py"
+    (snapshot_root / "config.json").write_text(config_source, encoding="utf-8")
+    linked_path.write_bytes(linked_bytes)
+    bad_ref = SnapshotFileRef(
+        repo_path="modeling_bad_hash.py",
+        temp_local_path=str(linked_path),
+        sha256="0" * 64,
+        size_bytes=len(linked_bytes),
+        file_kind=FileKind.PYTHON,
+    )
+    config_artifact = _make_artifact("config.json", FileKind.CONFIG_JSON, config_source)
+    request = build_minimal_request(
+        request_id="req-cfg-resolver-error",
+        job_id="job-cfg-resolver-error",
+        policy=policy,
+        artifacts=[config_artifact],
+    )
+    request.model_snapshot_root = str(snapshot_root)
+    request.model_snapshot_inventory = [bad_ref]
+    resolver = SnapshotSourceResolver.from_request(request)
+
+    response = run_validation_job(
+        request,
+        source_loader=build_source_loader(resolver),
+        source_resolver=resolver,
+    )
+
+    cfg_result = response.artifact_results[0]
+    linked_result = cfg_result.details["linked_code_results"][0]
+    assert response.overall_status is ValidationStatus.ERROR
+    assert cfg_result.status is ValidationStatus.ERROR
+    assert linked_result["status"] == "ERROR"
+    assert linked_result["error"] == "HASH_MISMATCH"
+    assert linked_result["details"]["source_resolution"]["resolver_error"] == "HASH_MISMATCH"
+    assert cfg_result.details["linked_code_statuses"] == ["ERROR"]
+
+
 def test_stop_on_first_block_stops_remaining_dispatch() -> None:
     policy = _make_policy()
     bad_source = (
@@ -346,6 +535,29 @@ def test_preprocessing_auxiliary_unknown_are_not_auto_passed_in_orchestrator() -
         assert item.status is not ValidationStatus.PASS
 
 
+def test_preprocessing_metadata_routes_to_semantic_scan_and_stays_pending_without_baseline() -> None:
+    policy = _make_policy()
+    source = json.dumps({"processor_class": "DemoProcessor", "chat_template": "{{ messages }}"})
+    artifact = _make_artifact("processor_config.json", FileKind.PROCESSOR_CONFIG_JSON, source)
+    request = build_minimal_request(
+        request_id="req-preprocessing-metadata",
+        job_id="job-preprocessing-metadata",
+        policy=policy,
+        artifacts=[artifact],
+    )
+
+    response = run_validation_job(
+        request,
+        source_loader={"processor_config.json": source},
+    )
+
+    result = response.artifact_results[0]
+    assert response.overall_status is ValidationStatus.PENDING_REVIEW
+    assert result.route_kind is RouteKind.PREPROCESSING_SEMANTIC_SCAN
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+
+
 def test_loader_error_is_reported_as_error_status() -> None:
     policy = _make_policy()
     source = "def f(x):\n    return x\n"
@@ -394,3 +606,32 @@ def test_error_has_priority_over_pending_review_in_overall_status() -> None:
     statuses = {item.artifact.repo_path: item.status for item in response.artifact_results}
     assert statuses["modeling_pending.py"] is ValidationStatus.PENDING_REVIEW
     assert statuses["modeling_missing.py"] is ValidationStatus.ERROR
+
+
+def test_snapshot_missing_auto_map_source_is_fail_closed(tmp_path: Path) -> None:
+    policy = _make_policy()
+    config_source = json.dumps({"auto_map": {"AutoModel": "modeling_missing.DemoModel"}})
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_root.mkdir()
+    (snapshot_root / "config.json").write_text(config_source, encoding="utf-8")
+    config_artifact = _make_artifact("config.json", FileKind.CONFIG_JSON, config_source)
+    request = build_minimal_request(
+        request_id="req-snapshot-missing-auto-map",
+        job_id="job-snapshot-missing-auto-map",
+        policy=policy,
+        artifacts=[config_artifact],
+    )
+    request.model_snapshot_root = str(snapshot_root)
+    resolver = SnapshotSourceResolver.from_request(request)
+
+    response = run_validation_job(
+        request,
+        source_loader=build_source_loader(resolver),
+    )
+
+    result = response.artifact_results[0]
+    assert response.overall_status is ValidationStatus.PENDING_REVIEW
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["linked_code_statuses"] == ["MISSING"]
+    assert result.details["linked_code_results"][0]["error"] == "referenced_source_not_found"
+    assert result.details["effective_status"] == "PENDING_REVIEW"

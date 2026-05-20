@@ -78,6 +78,20 @@ PR 본문 템플릿:
 - 모듈 경계를 넘는 수정이면 이유가 적혀 있는가
 - 테스트 결과가 첨부되어 있는가
 
+## 7-1. GitHub 리뷰 한글 인코딩 주의
+Windows PowerShell에서 한글 리뷰를 남길 때 `ConvertTo-Json | gh api --input -` 방식은 사용하지 않습니다.
+PowerShell 파이프 인코딩 때문에 한글이 `?`로 깨질 수 있습니다.
+
+권장 방식:
+- 짧은 리뷰: `gh pr review` 또는 `gh pr comment`의 `--body` 사용
+- 긴 리뷰: UTF-8 파일을 만든 뒤 `--body-file` 사용
+- 제출 후 `gh pr view` 또는 GitHub 화면에서 한글이 정상 표시되는지 확인
+
+권장 helper:
+```powershell
+.\scripts\gh_review_utf8.ps1 -Repo owner/repo -Pr 23 -Mode request-changes -BodyFile .\review.md
+```
+
 ## 8. 증빙 자료 원칙
 아래 자료를 `evidence/`에 주차별로 누적합니다.
 - 회의록

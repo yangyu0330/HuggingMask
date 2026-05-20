@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 
 from analyzer.schemas import (
     ArtifactRef,
+    ArtifactValidationResult,
     CodeGrade,
     FileKind,
     PolicyInfo,
@@ -40,6 +41,26 @@ def _make_artifact(repo_path: str) -> ArtifactRef:
         temp_local_path=f"/tmp/{file_name}",
         referenced_by=[],
         is_generated=False,
+    )
+
+
+def _b1_modeling_source() -> str:
+    return (
+        "import torch.nn.functional as F\n"
+        "from torch import nn\n"
+        "class DemoModel:\n"
+        "    def forward(self, x):\n"
+        "        y = nn.Linear(4, 2)\n"
+        "        return F.relu(y)\n"
+    )
+
+
+def _validate_b1_candidate(runtime_check: dict) -> ArtifactValidationResult:
+    return validate_python_artifact(
+        _make_artifact("modeling_demo.py"),
+        _b1_modeling_source(),
+        _make_policy(),
+        runtime_check=runtime_check,
     )
 
 
@@ -202,14 +223,7 @@ def test_configuration_top_level_dangerous_call_is_c_block() -> None:
 
 def test_modeling_allowed_api_with_runtime_pass_is_b1_pass() -> None:
     artifact = _make_artifact("modeling_demo.py")
-    source = (
-        "import torch.nn.functional as F\n"
-        "from torch import nn\n"
-        "class DemoModel:\n"
-        "    def forward(self, x):\n"
-        "        y = nn.Linear(4, 2)\n"
-        "        return F.relu(y)\n"
-    )
+    source = _b1_modeling_source()
     runtime_check = {"status": "PASS", "runtime_mode": "RESTRICTED_RUNTIME"}
     result = validate_python_artifact(artifact, source, _make_policy(), runtime_check=runtime_check)
 
@@ -221,20 +235,156 @@ def test_modeling_allowed_api_with_runtime_pass_is_b1_pass() -> None:
 
 def test_modeling_runtime_missing_or_skipped_is_b2_pending_review() -> None:
     artifact = _make_artifact("modeling_demo.py")
-    source = (
-        "import torch.nn.functional as F\n"
-        "from torch import nn\n"
-        "class DemoModel:\n"
-        "    def forward(self, x):\n"
-        "        y = nn.Linear(4, 2)\n"
-        "        return F.relu(y)\n"
-    )
+    source = _b1_modeling_source()
     runtime_check = {"status": "SKIPPED", "runtime_mode": "RESTRICTED_RUNTIME"}
     result = validate_python_artifact(artifact, source, _make_policy(), runtime_check=runtime_check)
 
     assert result.grade is CodeGrade.B2
     assert result.status is ValidationStatus.PENDING_REVIEW
     assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.route_kind is RouteKind.CODE_SANDBOX_RUNTIME
+    assert "RUNTIME_GATE_SKIPPED" in result.details["grade_result"]["reason_codes"]
+
+
+def test_modeling_runtime_error_is_c_error_not_b2() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "ERROR",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "reason_code": "loader_crashed",
+            "message": "runtime loader failed",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.ERROR
+    assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_ERROR" in reason_codes
+    assert "LOADER_CRASHED" in reason_codes
+    assert "RUNTIME_GATE_ERROR" in [entry.code for entry in result.reason_entries]
+    assert any("message=runtime loader failed" in entry.evidence for entry in result.reason_entries)
+
+
+def test_modeling_runtime_fail_with_blocked_import_blocks_not_b2() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "FAIL",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "blocked_imports": ["subprocess"],
+            "reason_code": "blocked_import",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_FAIL" in reason_codes
+    assert "RUNTIME_SECURITY_EVENT" in reason_codes
+    assert "BLOCKED_IMPORT" in reason_codes
+
+
+def test_modeling_runtime_fail_without_security_event_is_manual_review() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "FAIL",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "exception_class": "ZeroDivisionError",
+            "reason_code": "user_exception",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_FAIL" in reason_codes
+    assert "RUNTIME_FUNCTIONAL_REVIEW" in reason_codes
+    assert "USER_EXCEPTION" in reason_codes
+
+
+def test_modeling_runtime_timeout_with_security_event_blocks() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "TIMEOUT",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "security_events": ["network_attempt"],
+            "reason_code": "timeout_after_audit_event",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_TIMEOUT" in reason_codes
+    assert "RUNTIME_SECURITY_EVENT" in reason_codes
+    assert "TIMEOUT_AFTER_AUDIT_EVENT" in reason_codes
+
+
+def test_modeling_runtime_timeout_without_security_event_is_manual_review() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "TIMEOUT",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "exception_class": "TimeoutError",
+            "reason_code": "execution_timeout",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_TIMEOUT" in reason_codes
+    assert "RUNTIME_FUNCTIONAL_REVIEW" in reason_codes
+    assert "EXECUTION_TIMEOUT" in reason_codes
+
+
+def test_modeling_runtime_memory_limit_with_runaway_evidence_blocks() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "MEMORY_LIMIT",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "runaway_detected": True,
+            "reason_code": "memory_runaway",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_MEMORY_LIMIT" in reason_codes
+    assert "RUNTIME_RESOURCE_SECURITY_EVENT" in reason_codes
+    assert "MEMORY_RUNAWAY" in reason_codes
+
+
+def test_modeling_runtime_memory_limit_without_runaway_is_resource_review() -> None:
+    result = _validate_b1_candidate(
+        {
+            "status": "MEMORY_LIMIT",
+            "runtime_mode": "RESTRICTED_RUNTIME",
+            "exception_class": "MemoryError",
+            "reason_code": "memory_limit",
+        }
+    )
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
+    assert result.route_kind is RouteKind.CODE_AST_SCAN
+    reason_codes = result.details["grade_result"]["reason_codes"]
+    assert "RUNTIME_GATE_MEMORY_LIMIT" in reason_codes
+    assert "RUNTIME_RESOURCE_REVIEW" in reason_codes
+    assert "MEMORY_LIMIT" in reason_codes
 
 
 def test_unregistered_api_is_b2_pending_review() -> None:
@@ -297,6 +447,69 @@ def test_torch_load_is_immediate_c_block() -> None:
     assert result.grade is CodeGrade.C
     assert result.status is ValidationStatus.BLOCK
     assert "DANGEROUS_API" in [entry.code for entry in result.reason_entries]
+
+
+def test_torch_load_alias_is_immediate_c_block() -> None:
+    artifact = _make_artifact("tokenization_alias.py")
+    source = (
+        "import torch as t\n"
+        "class DemoTokenizer:\n"
+        "    def load_vocab(self):\n"
+        "        return t.load('weights.pt')\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert "DANGEROUS_CALL" in [entry.code for entry in result.reason_entries]
+
+
+def test_torch_load_from_import_is_immediate_c_block() -> None:
+    artifact = _make_artifact("tokenization_from_import.py")
+    source = (
+        "from torch import load\n"
+        "class DemoTokenizer:\n"
+        "    def load_vocab(self):\n"
+        "        return load('weights.pt')\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert "DANGEROUS_CALL" in [entry.code for entry in result.reason_entries]
+
+
+def test_numpy_load_allow_pickle_is_immediate_c_block() -> None:
+    artifact = _make_artifact("tokenization_np_pickle.py")
+    source = (
+        "import numpy as np\n"
+        "class DemoTokenizer:\n"
+        "    def load_vocab(self):\n"
+        "        return np.load('vocab.npy', allow_pickle=True)\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert result.review_action is ReviewAction.BLOCK_IMMEDIATELY
+    assert "DANGEROUS_CALL" in [entry.code for entry in result.reason_entries]
+
+
+def test_numpy_load_fail_closed_until_allow_pickle_policy_exists() -> None:
+    artifact = _make_artifact("tokenization_np_safe_claim.py")
+    source = (
+        "import numpy as np\n"
+        "class DemoTokenizer:\n"
+        "    def load_vocab(self):\n"
+        "        return np.load('vocab.npy', allow_pickle=False)\n"
+    )
+    result = validate_python_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.BLOCK
+    assert "DANGEROUS_CALL" in [entry.code for entry in result.reason_entries]
 
 
 def test_os_remove_is_immediate_context_block() -> None:

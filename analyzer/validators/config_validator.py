@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any, Callable, Mapping
 
 from analyzer.classifier import build_artifact_ref
@@ -23,12 +24,14 @@ from analyzer.schemas import (
     RouteKind,
     ValidationStatus,
 )
+from analyzer.snapshot_resolver import SnapshotResolveError
 from analyzer.validators.code_api_policy import WhitelistLookup
 from analyzer.validators.code_validator import validate_python_artifact
 
 SourceLoader = Callable[[str], str | bytes | None] | Mapping[str, str | bytes]
 RuntimeCheckLoader = Callable[[str], dict[str, Any] | None] | Mapping[str, dict[str, Any]]
 AstCallMetadataLoader = Callable[[str], list[dict[str, Any]] | None] | Mapping[str, list[dict[str, Any]]]
+LinkedCodeResultCollector = Callable[[ArtifactValidationResult], None]
 
 _TRIGGER_AUTO_MAP = "auto_map"
 _TRIGGER_CUSTOM_PIPELINES = "custom_pipelines"
@@ -44,6 +47,26 @@ _TOKENIZER_CLASS_KEYS = {
 
 
 @dataclass
+class CodeReferenceTarget:
+    repo_path: str
+    trigger_field: str
+    auto_map_key: str | None = None
+    target_module: str | None = None
+    target_class: str | None = None
+    target_repo_path: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "repo_path": self.repo_path,
+            "trigger_field": self.trigger_field,
+            "auto_map_key": self.auto_map_key,
+            "target_module": self.target_module,
+            "target_class": self.target_class,
+            "target_repo_path": self.target_repo_path or self.repo_path,
+        }
+
+
+@dataclass
 class ConfigScanResult:
     schema_valid: bool
     parse_error: str | None = None
@@ -52,6 +75,7 @@ class ConfigScanResult:
     trust_remote_code: bool = False
     unknown_fields: list[str] = field(default_factory=list)
     rerouted_to_code_validation: bool = False
+    referenced_code_targets: list[CodeReferenceTarget] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +85,7 @@ class ConfigScanResult:
             "trigger_fields_detected": list(self.trigger_fields),
             "unknown_fields": list(self.unknown_fields),
             "referenced_python_files": list(self.referenced_python_files),
+            "referenced_code_targets": [target.to_dict() for target in self.referenced_code_targets],
             "trust_remote_code": self.trust_remote_code,
             "rerouted_to_code_validation": self.rerouted_to_code_validation,
         }
@@ -75,6 +100,8 @@ def validate_config_artifact(
     source_loader: SourceLoader | None = None,
     runtime_check_loader: RuntimeCheckLoader | None = None,
     ast_call_metadata_loader: AstCallMetadataLoader | None = None,
+    source_resolver: Any | None = None,
+    linked_code_result_collector: LinkedCodeResultCollector | None = None,
 ) -> ArtifactValidationResult:
     """Validate config/tokenizer_config and route referenced Python code."""
 
@@ -84,12 +111,15 @@ def validate_config_artifact(
     scan_result, config_payload = scan_config_for_routing(artifact, source_text)
     referenced_code: list[dict[str, Any]] = []
     linked_code_results: list[dict[str, Any]] = []
+    linked_code_edges: list[dict[str, Any]] = []
     linked_statuses: list[str] = []
     linked_artifact_ids: list[str] = []
 
     if scan_result.schema_valid and scan_result.referenced_python_files:
         scan_result.rerouted_to_code_validation = True
+        targets_by_repo = _targets_by_repo(scan_result.referenced_code_targets)
         for repo_path in scan_result.referenced_python_files:
+            targets = targets_by_repo.get(repo_path, [])
             ref_entry: dict[str, Any] = {
                 "repo_path": repo_path,
                 "triggered_by": list(scan_result.trigger_fields),
@@ -97,20 +127,28 @@ def validate_config_artifact(
             }
             referenced_code.append(ref_entry)
 
-            loaded = _load_referenced_source(source_loader, repo_path)
+            loaded = _load_referenced_source(source_loader, repo_path, source_resolver=source_resolver)
             if loaded["ok"] is not True:
+                linked_status = _linked_status_for_load_error(str(loaded["error"]))
                 ref_entry["load_status"] = "MISSING"
                 ref_entry["load_error"] = loaded["error"]
+                if loaded.get("resolver_error"):
+                    ref_entry["resolver_error"] = loaded["resolver_error"]
                 linked_code_results.append(
                     {
                         "repo_path": repo_path,
-                        "status": "MISSING",
+                        "status": linked_status,
                         "grade": CodeGrade.NA.value,
                         "review_action": ReviewAction.SECURITY_OWNER_GATE.value,
                         "error": loaded["error"],
+                        "details": _load_error_details(loaded),
                     }
                 )
-                linked_statuses.append("MISSING")
+                linked_statuses.append(linked_status)
+                linked_code_edges.extend(
+                    _edge_for_load_error(target, linked_status=linked_status, error=str(loaded["error"]))
+                    for target in targets
+                )
                 continue
 
             ref_entry["load_status"] = "LOADED"
@@ -131,8 +169,16 @@ def validate_config_artifact(
                 runtime_check=runtime_check,
                 ast_call_metadata=ast_call_metadata,
             )
+            code_result.details = _with_linked_code_details(
+                code_result.details,
+                parent_repo_path=artifact.repo_path,
+                targets=targets,
+                repo_path=repo_path,
+            )
             linked_artifact_ids.append(code_result.artifact.artifact_id)
             linked_statuses.append(code_result.status.value)
+            if linked_code_result_collector is not None:
+                linked_code_result_collector(code_result)
             linked_code_results.append(
                 {
                     "repo_path": repo_path,
@@ -146,6 +192,7 @@ def validate_config_artifact(
                     },
                 }
             )
+            linked_code_edges.extend(_edges_for_code_result(targets=targets, code_result=code_result))
 
     effective_status = _compute_effective_status(scan_result, linked_statuses)
 
@@ -154,6 +201,7 @@ def validate_config_artifact(
         "trigger_fields": list(scan_result.trigger_fields),
         "referenced_code": referenced_code,
         "linked_code_results": linked_code_results,
+        "linked_code_edges": linked_code_edges,
         "linked_code_artifact_ids": linked_artifact_ids,
         "linked_code_statuses": linked_statuses,
         "effective_status": effective_status.value,
@@ -197,18 +245,27 @@ def scan_config_for_routing(artifact: ArtifactRef, source_text: str) -> tuple[Co
 
     if payload.get("auto_map"):
         trigger_fields.append(_TRIGGER_AUTO_MAP)
-        referenced_files.update(_extract_refs_from_auto_map(payload.get("auto_map")))
+        auto_map_targets = _extract_targets_from_auto_map(payload.get("auto_map"))
+        referenced_files.update(target.repo_path for target in auto_map_targets)
+    else:
+        auto_map_targets = []
 
     if payload.get("custom_pipelines"):
         trigger_fields.append(_TRIGGER_CUSTOM_PIPELINES)
-        referenced_files.update(_extract_refs_from_custom_pipelines(payload.get("custom_pipelines")))
+        custom_pipeline_targets = _extract_targets_from_custom_pipelines(payload.get("custom_pipelines"))
+        referenced_files.update(target.repo_path for target in custom_pipeline_targets)
+    else:
+        custom_pipeline_targets = []
 
     trust_remote_code = bool(payload.get("trust_remote_code") is True)
     if trust_remote_code:
         trigger_fields.append(_TRIGGER_TRUST_REMOTE_CODE)
 
     if artifact.file_name == "tokenizer_config.json":
-        referenced_files.update(_extract_refs_from_tokenizer_custom_fields(payload))
+        tokenizer_targets = _extract_targets_from_tokenizer_custom_fields(payload)
+        referenced_files.update(target.repo_path for target in tokenizer_targets)
+    else:
+        tokenizer_targets = []
 
     result = ConfigScanResult(
         schema_valid=True,
@@ -217,36 +274,57 @@ def scan_config_for_routing(artifact: ArtifactRef, source_text: str) -> tuple[Co
         referenced_python_files=sorted(referenced_files),
         trust_remote_code=trust_remote_code,
         unknown_fields=[],
+        referenced_code_targets=sorted(
+            auto_map_targets + custom_pipeline_targets + tokenizer_targets,
+            key=lambda target: (
+                target.repo_path,
+                target.auto_map_key or "",
+                target.target_class or "",
+                target.trigger_field,
+            ),
+        ),
     )
     return result, payload
 
 
-def _extract_refs_from_auto_map(auto_map: Any) -> set[str]:
-    refs: set[str] = set()
+def _extract_targets_from_auto_map(auto_map: Any) -> list[CodeReferenceTarget]:
+    targets: list[CodeReferenceTarget] = []
+    if isinstance(auto_map, dict):
+        for key, value in auto_map.items():
+            for raw in _collect_strings(value):
+                target = _module_ref_to_target(raw, trigger_field=_TRIGGER_AUTO_MAP, auto_map_key=str(key))
+                if target is not None:
+                    targets.append(target)
+        return targets
+
     for raw in _collect_strings(auto_map):
-        resolved = _module_ref_to_repo_path(raw)
-        if resolved:
-            refs.add(resolved)
-    return refs
+        target = _module_ref_to_target(raw, trigger_field=_TRIGGER_AUTO_MAP)
+        if target is not None:
+            targets.append(target)
+    return targets
 
 
-def _extract_refs_from_custom_pipelines(custom_pipelines: Any) -> set[str]:
-    refs: set[str] = set()
+def _extract_targets_from_custom_pipelines(custom_pipelines: Any) -> list[CodeReferenceTarget]:
+    targets: list[CodeReferenceTarget] = []
     for raw in _collect_strings(custom_pipelines):
-        resolved = _module_ref_to_repo_path(raw)
-        if resolved:
-            refs.add(resolved)
-    return refs
+        target = _module_ref_to_target(raw, trigger_field=_TRIGGER_CUSTOM_PIPELINES)
+        if target is not None:
+            targets.append(target)
+    return targets
 
 
-def _extract_refs_from_tokenizer_custom_fields(payload: dict[str, Any]) -> set[str]:
-    refs: set[str] = set()
+def _extract_targets_from_tokenizer_custom_fields(payload: dict[str, Any]) -> list[CodeReferenceTarget]:
+    targets: list[CodeReferenceTarget] = []
     for key, value in payload.items():
         if key in _TOKENIZER_CLASS_KEYS:
-            resolved = _module_ref_to_repo_path(str(value)) if isinstance(value, str) else None
-            if resolved:
-                refs.add(resolved)
-    return refs
+            target = (
+                _module_ref_to_target(str(value), trigger_field=key)
+                if isinstance(value, str)
+                else None
+            )
+            if target is not None:
+                targets.append(target)
+    return targets
 
 
 def _collect_strings(value: Any) -> list[str]:
@@ -266,8 +344,22 @@ def _collect_strings(value: Any) -> list[str]:
 
 
 def _module_ref_to_repo_path(raw: str) -> str | None:
+    target = _module_ref_to_target(raw, trigger_field="")
+    return target.repo_path if target is not None else None
+
+
+def _module_ref_to_target(
+    raw: str,
+    *,
+    trigger_field: str,
+    auto_map_key: str | None = None,
+) -> CodeReferenceTarget | None:
     text = raw.strip()
     if not text:
+        return None
+    if "\x00" in text or "\\" in text or text.startswith("/"):
+        return None
+    if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
         return None
     if text.startswith(("http://", "https://")):
         return None
@@ -282,20 +374,80 @@ def _module_ref_to_repo_path(raw: str) -> str | None:
     normalized = text.replace("\\", "/").strip()
 
     if normalized.endswith(".py"):
-        return normalized.lstrip("/")
+        repo_path = normalized
+        if not _is_safe_repo_py_path(repo_path):
+            return None
+        module = repo_path[:-3].replace("/", ".") if repo_path.endswith(".py") else None
+        return CodeReferenceTarget(
+            repo_path=repo_path,
+            trigger_field=trigger_field,
+            auto_map_key=auto_map_key,
+            target_module=module,
+            target_class=None,
+            target_repo_path=repo_path,
+        )
 
     if "." in normalized:
         module_part = normalized.rsplit(".", 1)[0]
+        target_class = normalized.rsplit(".", 1)[1]
         if not module_part:
             return None
         if any(ch.isspace() for ch in module_part):
             return None
-        return f"{module_part.replace('.', '/')}.py"
+        if "/" in module_part or "\\" in module_part or "\x00" in module_part:
+            return None
+        if not target_class or any(ch.isspace() for ch in target_class):
+            return None
+        repo_path = f"{module_part.replace('.', '/')}.py"
+        if not _is_safe_repo_py_path(repo_path):
+            return None
+        return CodeReferenceTarget(
+            repo_path=repo_path,
+            trigger_field=trigger_field,
+            auto_map_key=auto_map_key,
+            target_module=module_part,
+            target_class=target_class,
+            target_repo_path=repo_path,
+        )
 
     return None
 
 
-def _load_referenced_source(loader: SourceLoader | None, repo_path: str) -> dict[str, Any]:
+def _is_safe_repo_py_path(repo_path: str) -> bool:
+    if not repo_path.endswith(".py"):
+        return False
+    if not repo_path or "\x00" in repo_path or "\\" in repo_path:
+        return False
+    if repo_path.startswith("/"):
+        return False
+    if len(repo_path) >= 2 and repo_path[1] == ":" and repo_path[0].isalpha():
+        return False
+    path = PurePosixPath(repo_path)
+    if path.is_absolute():
+        return False
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return False
+    return True
+
+
+def _load_referenced_source(
+    loader: SourceLoader | None,
+    repo_path: str,
+    *,
+    source_resolver: Any | None = None,
+) -> dict[str, Any]:
+    if source_resolver is not None and hasattr(source_resolver, "read_bytes"):
+        value = source_resolver.read_bytes(repo_path)
+        if isinstance(value, SnapshotResolveError):
+            return {
+                "ok": False,
+                "error": value.value,
+                "resolver_error": value.value,
+            }
+        if isinstance(value, bytes):
+            return {"ok": True, "source": value}
+        return {"ok": False, "error": "invalid_resolver_source_type"}
+
     if loader is None:
         return {"ok": False, "error": "source_loader_not_provided"}
     try:
@@ -340,7 +492,9 @@ def _compute_effective_status(scan_result: ConfigScanResult, linked_statuses: li
         normalized = {item.upper() for item in linked_statuses}
         if "BLOCK" in normalized:
             return ValidationStatus.BLOCK
-        if "PENDING_REVIEW" in normalized or "ERROR" in normalized or "MISSING" in normalized:
+        if "ERROR" in normalized:
+            return ValidationStatus.ERROR
+        if "PENDING_REVIEW" in normalized or "MISSING" in normalized:
             return ValidationStatus.PENDING_REVIEW
         if normalized == {"PASS"}:
             return ValidationStatus.PASS
@@ -365,6 +519,8 @@ def _build_reason_entries(
         codes.append("CONFIG_REFERENCED_CODE_ROUTED")
     if effective_status is ValidationStatus.PENDING_REVIEW:
         codes.append("GRADE_B2_GATE_REQUIRED")
+    if effective_status is ValidationStatus.ERROR:
+        codes.append("VALIDATOR_INFRA_ERROR")
     entries: list[ReasonEntry] = []
     for code in codes:
         entries.append(
@@ -392,6 +548,7 @@ def _reason_message(code: str) -> str:
         "CONFIG_TRIGGER_FIELD_FOUND": "config trigger fields detected",
         "CONFIG_REFERENCED_CODE_ROUTED": "referenced code routed to code validator",
         "GRADE_B2_GATE_REQUIRED": "config requires review gate because linked code is not fully PASS",
+        "VALIDATOR_INFRA_ERROR": "config linked code source resolution failed integrity checks",
     }.get(code, "config routing decision")
 
 
@@ -400,7 +557,92 @@ def _review_action_for_status(status: ValidationStatus) -> ReviewAction:
         return ReviewAction.BLOCK_IMMEDIATELY
     if status is ValidationStatus.PENDING_REVIEW:
         return ReviewAction.SECURITY_OWNER_GATE
+    if status is ValidationStatus.ERROR:
+        return ReviewAction.MANUAL_REVIEW_REQUIRED
     return ReviewAction.NONE
+
+
+def _targets_by_repo(targets: list[CodeReferenceTarget]) -> dict[str, list[CodeReferenceTarget]]:
+    output: dict[str, list[CodeReferenceTarget]] = {}
+    for target in targets:
+        output.setdefault(target.repo_path, []).append(target)
+    return output
+
+
+def _with_linked_code_details(
+    details: dict[str, Any],
+    *,
+    parent_repo_path: str,
+    targets: list[CodeReferenceTarget],
+    repo_path: str,
+) -> dict[str, Any]:
+    updated = dict(details)
+    first = targets[0] if targets else None
+    updated["linked_from_config"] = parent_repo_path
+    updated["auto_map_key"] = first.auto_map_key if first is not None else None
+    updated["auto_map_keys"] = sorted({target.auto_map_key for target in targets if target.auto_map_key})
+    updated["target_module"] = first.target_module if first is not None else None
+    updated["target_class"] = first.target_class if first is not None else None
+    updated["target_repo_path"] = repo_path
+    updated["linked_code_targets"] = [target.to_dict() for target in targets]
+    return updated
+
+
+def _edges_for_code_result(
+    *,
+    targets: list[CodeReferenceTarget],
+    code_result: ArtifactValidationResult,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            **target.to_dict(),
+            "artifact_id": code_result.artifact.artifact_id,
+            "post_sandbox_status": code_result.status.value,
+            "sandbox_decision": _sandbox_decision(code_result),
+        }
+        for target in targets
+    ]
+
+
+def _edge_for_load_error(
+    target: CodeReferenceTarget,
+    *,
+    linked_status: str,
+    error: str,
+) -> dict[str, Any]:
+    return {
+        **target.to_dict(),
+        "artifact_id": None,
+        "post_sandbox_status": linked_status,
+        "sandbox_decision": None,
+        "error": error,
+    }
+
+
+def _load_error_details(loaded: dict[str, Any]) -> dict[str, Any]:
+    details: dict[str, Any] = {
+        "source_resolution": {
+            "status": "ERROR" if _linked_status_for_load_error(str(loaded["error"])) == "ERROR" else "MISSING",
+            "error": loaded["error"],
+        }
+    }
+    if loaded.get("resolver_error"):
+        details["source_resolution"]["resolver_error"] = loaded["resolver_error"]
+    return details
+
+
+def _linked_status_for_load_error(error: str) -> str:
+    if error in {"source_loader_not_provided", "referenced_source_not_found", "MISSING_SOURCE"}:
+        return "MISSING"
+    return "ERROR"
+
+
+def _sandbox_decision(result: ArtifactValidationResult) -> str | None:
+    sandbox_check = result.details.get("sandbox_check")
+    if isinstance(sandbox_check, dict):
+        decision = sandbox_check.get("decision")
+        return str(decision) if decision is not None else None
+    return None
 
 
 def _build_cache_key(artifact: ArtifactRef, policy: PolicyInfo | None) -> str:
