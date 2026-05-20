@@ -4,7 +4,17 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+cache_store.json
+generated/
 *.db
 *.db.backup
 *.sqlite
 *.sqlite3
+.claude/
+
+# mod1 / mod2 임시 출력 (latest_analysis.json은 commit)
+data/crawl_cache/*.json
+data/crawl_output.json
+data/api_inspection.json
+data/api_pytorch.json
+data/org_analysis_output.json

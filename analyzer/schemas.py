@@ -181,20 +181,24 @@ class ArtifactRef(Serializable):
     file_name: str
     file_kind: FileKind
     detected_extension: str
-    media_type: str | None
     size_bytes: int
     sha256: str
     source_url: str
     temp_local_path: str
+    media_type: str | None = None
     referenced_by: list[str] = field(default_factory=list)
     is_generated: bool = False
 
     def __post_init__(self) -> None:
         self.file_kind = FileKind(self.file_kind)
         expected_artifact_id = f"sha256:{self.sha256}"
+
         if self.artifact_id != expected_artifact_id:
             raise ValueError("artifact_id must be 'sha256:' plus sha256")
-        if len(self.sha256) != 64 or any(ch not in "0123456789abcdef" for ch in self.sha256):
+
+        if len(self.sha256) != 64 or any(
+            ch not in "0123456789abcdef" for ch in self.sha256
+        ):
             raise ValueError("sha256 must be a 64-character lowercase hex digest")
 
     @classmethod
@@ -227,10 +231,10 @@ class SnapshotFileRef(Serializable):
 @dataclass
 class ReasonEntry(Serializable):
     code: str
-    severity: str
     message: str
-    evidence: list[str]
-    review_required: bool
+    severity: str = "INFO"
+    evidence: list[str] = field(default_factory=list)
+    review_required: bool = False
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ReasonEntry":
@@ -247,9 +251,10 @@ class ArtifactValidationResult(Serializable):
     cache_key: str
     cache_hit: bool
     reason_entries: list[ReasonEntry]
-    details: dict[str, Any]
     started_at: str
     finished_at: str
+    details: dict[str, Any] = field(default_factory=dict)
+    generated_artifact: ArtifactRef | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.artifact, dict):
@@ -262,6 +267,8 @@ class ArtifactValidationResult(Serializable):
             entry if isinstance(entry, ReasonEntry) else ReasonEntry.from_dict(entry)
             for entry in self.reason_entries
         ]
+        if isinstance(self.generated_artifact, dict):
+            self.generated_artifact = ArtifactRef.from_dict(self.generated_artifact)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ArtifactValidationResult":
@@ -272,12 +279,14 @@ class ArtifactValidationResult(Serializable):
 class ValidationJobRequest(Serializable):
     request_id: str
     job_id: str
-    model: ModelRef
-    policy: PolicyInfo
-    runtime_context: RuntimeContext
-    artifacts: list[ArtifactRef]
-    requested_routes: list[RouteKind]
-    stop_on_first_block: bool
+    model: ModelRef | None = None
+    policy: PolicyInfo | None = None
+    runtime_context: RuntimeContext | None = None
+    artifacts: list[ArtifactRef] = field(default_factory=list)
+    requested_routes: list[RouteKind] = field(default_factory=list)
+    stop_on_first_block: bool = False
+    enable_path_b: bool = False
+    policy_fingerprint: str | None = None
     schema_version: str = SCHEMA_VERSION
     notes: str | None = None
     model_snapshot_root: str | None = None
@@ -290,6 +299,7 @@ class ValidationJobRequest(Serializable):
             self.policy = PolicyInfo.from_dict(self.policy)
         if isinstance(self.runtime_context, dict):
             self.runtime_context = RuntimeContext.from_dict(self.runtime_context)
+
         self.artifacts = [
             artifact if isinstance(artifact, ArtifactRef) else ArtifactRef.from_dict(artifact)
             for artifact in self.artifacts
@@ -299,6 +309,9 @@ class ValidationJobRequest(Serializable):
             item if isinstance(item, SnapshotFileRef) else SnapshotFileRef.from_dict(item)
             for item in self.model_snapshot_inventory
         ]
+
+        if self.policy_fingerprint is None and self.policy is not None:
+            self.policy_fingerprint = self.policy.policy_fingerprint
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ValidationJobRequest":
@@ -344,4 +357,3 @@ class ValidationJobResponse(Serializable):
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ValidationJobResponse":
         return cls(**data)
-

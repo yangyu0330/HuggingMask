@@ -14,6 +14,7 @@ import importlib.util
 import pytest
 
 from analyzer.validators.code_restricted_runtime import (
+    DANGEROUS_DUNDER_ATTRS,
     IMPORT_ALLOWLIST, IMPORT_DENYLIST, RESTRICTED_BUILTINS,
     RestrictedRuntimeResult, RuntimeStatus,
     restricted_exec, runtime_check_loader,
@@ -682,3 +683,352 @@ class TestRuntimeCheckLoader:
         result = loader("modeling.py")
         assert result is not None
         assert result["status"] == RuntimeStatus.PASS
+
+
+# ─────────────────────────────────────────────
+# PR #17 review 응답 — P1 4건 회귀 (양유상 직접 재현 시나리오)
+# ─────────────────────────────────────────────
+
+class TestPr17ReviewP1Bypass:
+    """양유상 PR #17 3차 리뷰에서 직접 재현 확인된 4가지 우회 경로.
+
+    이전 head에서는 모두 ``status=PASS``로 반환되어 B-1 자동 승인 gate를
+    통과했다. AST 사전 검사 + sys proxy 강화 + audit hook 'open' + dataclasses
+    sanitize 완화 후에는 모두 차단되어야 한다.
+    """
+
+    def test_subclasses_chain_to_real_builtins(self):
+        """P1 #2 — object.__subclasses__() 우회로 real builtins 회수."""
+        src = (
+            "for cls in ().__class__.__mro__[1].__subclasses__():\n"
+            "    if cls.__name__ == 'catch_warnings':\n"
+            "        cw = cls()\n"
+            "        cw.__enter__()\n"
+            "        cw._module.__builtins__['eval']('1+1')\n"
+            "        break\n"
+        )
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS, (
+            "object.__subclasses__() 우회가 차단되어야 한다"
+        )
+
+    def test_sys_getframe_to_worker_locals(self):
+        """P1 #3 — _SafeSysProxy._getframe 노출로 worker frame builtins 회수."""
+        src = (
+            "import typing\n"
+            "frame = typing.sys._getframe()\n"
+            "while frame is not None:\n"
+            "    if '_builtins' in frame.f_locals:\n"
+            "        frame.f_locals['_builtins'].eval('1+1')\n"
+            "        break\n"
+            "    frame = frame.f_back\n"
+        )
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS, (
+            "sys._getframe 노출 차단되어야 한다"
+        )
+
+    def test_io_fileio_via_subclasses(self):
+        """P1 #4 — _io.FileIO를 객체 그래프로 찾아 파일 read."""
+        src = (
+            "for cls in object.__subclasses__():\n"
+            "    if cls.__name__ == 'FileIO':\n"
+            "        f = cls('analyzer/schemas.py', 'r')\n"
+            "        f.read(1)\n"
+            "        break\n"
+        )
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS, (
+            "_io.FileIO 우회가 차단되어야 한다"
+        )
+
+    def test_dataclasses_builtins_dict_eval(self):
+        """P1 #2 보조 — 허용 모듈을 통한 real builtins dict 접근 차단.
+
+        양유상 2차 리뷰의 직접 재현 코드. AST 검사가 ``__builtins__``
+        attribute를 잡으므로 자식 spawn 전에 FAIL.
+        """
+        src = "import dataclasses\ndataclasses.__builtins__['eval']('1+1')\n"
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS
+
+    def test_functools_builtins_dict_open(self):
+        """양유상 2차 리뷰 직접 재현 — functools 통한 real open 차단."""
+        src = "import functools\nfunctools.__builtins__['open']('/etc/hosts')\n"
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS
+
+    def test_typing_sys_modules_builtins(self):
+        """양유상 2차 리뷰 직접 재현 — typing.sys.modules['builtins'] 차단."""
+        src = "import typing\ntyping.sys.modules['builtins'].open('/etc/hosts')\n"
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS
+
+    def test_function_globals_builtins(self):
+        """함수 ``__globals__`` 우회 차단 — AST 검사."""
+        src = (
+            "from dataclasses import dataclass\n"
+            "dataclass.__globals__['__builtins__']['eval']('1+1')\n"
+        )
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS
+
+
+class TestPr17ReviewP1OrchestratorOrder:
+    """P1 #1 — orchestrator가 정적 분석 후에만 runtime 호출."""
+
+    def test_static_block_skips_runtime(self):
+        """위험 코드는 정적 BLOCK → runtime check 호출되지 않음."""
+        from analyzer.orchestrator import dispatch_artifacts
+        from analyzer.schemas import ArtifactRef, FileKind, PolicyInfo
+
+        runtime_call_count = {"n": 0}
+
+        def loader(repo_path: str):
+            runtime_call_count["n"] += 1
+            return {"status": "PASS", "runtime_mode": "RESTRICTED_RUNTIME"}
+
+        sources = {
+            "danger.py": "import os\nos.system('rm -rf /')\n",
+        }
+        sha = "a" * 64
+        artifact = ArtifactRef(
+            artifact_id=f"sha256:{sha}",
+            repo_path="danger.py",
+            file_name="danger.py",
+            file_kind=FileKind.PYTHON,
+            detected_extension=".py",
+            media_type="text/x-python",
+            size_bytes=len(sources["danger.py"]),
+            sha256=sha,
+            source_url="hf://test/danger.py",
+            temp_local_path="/tmp/danger.py",
+        )
+        policy = PolicyInfo(
+            policy_version="policy-test",
+            whitelist_version="wl-test",
+            opcode_policy_version="opcode-test",
+            config_schema_version="cfg-test",
+            runtime_profile_version="rt-test",
+        )
+
+        dispatch_artifacts(
+            [artifact],
+            policy=policy,
+            source_loader=sources,
+            runtime_check_loader=loader,
+        )
+        assert runtime_call_count["n"] == 0, (
+            "정적 BLOCK 코드는 runtime check가 호출되면 안 된다"
+        )
+
+    def test_safe_code_calls_runtime(self):
+        """안전 코드는 정적 통과 → runtime check 호출됨."""
+        from analyzer.orchestrator import dispatch_artifacts
+        from analyzer.schemas import ArtifactRef, FileKind, PolicyInfo
+
+        runtime_call_count = {"n": 0}
+
+        def loader(repo_path: str):
+            runtime_call_count["n"] += 1
+            return {"status": "PASS", "runtime_mode": "RESTRICTED_RUNTIME"}
+
+        sources = {"safe.py": "x = 1 + 2\n"}
+        sha = "b" * 64
+        artifact = ArtifactRef(
+            artifact_id=f"sha256:{sha}",
+            repo_path="safe.py",
+            file_name="safe.py",
+            file_kind=FileKind.PYTHON,
+            detected_extension=".py",
+            media_type="text/x-python",
+            size_bytes=len(sources["safe.py"]),
+            sha256=sha,
+            source_url="hf://test/safe.py",
+            temp_local_path="/tmp/safe.py",
+        )
+        policy = PolicyInfo(
+            policy_version="policy-test",
+            whitelist_version="wl-test",
+            opcode_policy_version="opcode-test",
+            config_schema_version="cfg-test",
+            runtime_profile_version="rt-test",
+        )
+
+        dispatch_artifacts(
+            [artifact],
+            policy=policy,
+            source_loader=sources,
+            runtime_check_loader=loader,
+        )
+        assert runtime_call_count["n"] == 1, (
+            "정적 통과 코드는 runtime check가 호출되어야 한다"
+        )
+
+
+class TestPr17ReviewP2Dataclasses:
+    """P2 #5 — dataclasses 정상 사용이 깨지지 않아야 한다."""
+
+    def test_dataclass_decorator_normal_use(self):
+        """``@dataclass``로 정의한 정상 코드가 PASS여야 한다."""
+        src = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class Point:\n"
+            "    x: int\n"
+            "    y: int\n"
+            "p = Point(1, 2)\n"
+            "_ = (p.x, p.y)\n"
+        )
+        result = restricted_exec(src)
+        assert result.status == RuntimeStatus.PASS, (
+            f"dataclass 정상 사용이 PASS여야 한다 — got {result.status}, "
+            f"exc={result.exception_class}, tb={result.traceback}"
+        )
+
+    def test_functools_lru_cache_normal_use(self):
+        """``functools.lru_cache`` 정상 사용도 PASS여야 한다."""
+        src = (
+            "import functools\n"
+            "@functools.lru_cache(maxsize=4)\n"
+            "def f(x):\n"
+            "    return x * 2\n"
+            "_ = f(3) + f(3)\n"
+        )
+        result = restricted_exec(src)
+        assert result.status == RuntimeStatus.PASS
+
+
+class TestIssue25PreserveStdlibBypass:
+    """Issue #25 / 양유상 P1 — preserve stdlib(``dataclasses``/``enum``/
+    ``collections``)의 내부 real ``sys``/``builtins`` 참조를 통한
+    restricted builtins overlay 우회를 차단해야 한다.
+
+    각 payload는 ``PASS``가 아니어야 하고, 파일 I/O side effect가 없어야 한다.
+    정상 ``@dataclass`` 사용은 계속 PASS (TestPr17ReviewP2Dataclasses 참조).
+    """
+
+    def _run_and_assert_blocked(self, src: str, probe_path):
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status != RuntimeStatus.PASS, (
+            f"우회 payload가 PASS면 안 됨 — got {result.status}"
+        )
+        assert not probe_path.exists(), (
+            f"파일 side effect 발생 — {probe_path} 가 생성됨"
+        )
+
+    def test_dataclasses_sys_modules_builtins_open(self, tmp_path):
+        probe = tmp_path / "probe_dc.txt"
+        p = str(probe).replace("\\", "\\\\")
+        src = (
+            "import dataclasses\n"
+            f"dataclasses.sys.modules['builtins'].open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_enum_bltns_open(self, tmp_path):
+        probe = tmp_path / "probe_enum.txt"
+        p = str(probe).replace("\\", "\\\\")
+        # enum은 builtins를 ``bltns``로 alias 한다.
+        src = (
+            "import enum\n"
+            f"enum.bltns.open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_enum_sys_modules_builtins_open(self, tmp_path):
+        probe = tmp_path / "probe_enum2.txt"
+        p = str(probe).replace("\\", "\\\\")
+        src = (
+            "import enum\n"
+            f"enum.sys.modules['builtins'].open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_collections_sys_modules_builtins_open(self, tmp_path):
+        probe = tmp_path / "probe_coll.txt"
+        p = str(probe).replace("\\", "\\\\")
+        # collections는 sys를 ``_sys``로 alias 한다.
+        src = (
+            "import collections\n"
+            f"collections._sys.modules['builtins'].open('{p}', 'w').write('x')\n"
+        )
+        self._run_and_assert_blocked(src, probe)
+
+    def test_normal_dataclass_still_passes_after_fix(self):
+        """우회 차단 후에도 정상 ``@dataclass`` 사용은 PASS 유지."""
+        src = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class P:\n"
+            "    x: int = 0\n"
+            "_ = P(5).x\n"
+        )
+        result = restricted_exec(src, timeout_seconds=10.0)
+        assert result.status == RuntimeStatus.PASS, (
+            f"정상 dataclass가 PASS여야 함 — got {result.status}, "
+            f"exc={result.exception_class}, tb={result.traceback}"
+        )
+
+
+class TestPr17ReviewAstScan:
+    """AST 사전 검사 직접 테스트 — 위험 dunder 사용 자체가 차단되는지."""
+
+    @pytest.mark.parametrize("dunder", [
+        "__class__", "__bases__", "__mro__", "__subclasses__",
+        "__globals__", "__builtins__", "__dict__",
+        "__code__", "__closure__", "__getattribute__",
+    ])
+    def test_dangerous_dunder_attribute_blocked(self, dunder):
+        src = f"x = (1).{dunder}\n"
+        result = restricted_exec(src)
+        assert result.status == RuntimeStatus.FAIL
+        assert result.exception_class == "DangerousDunderAccess"
+        assert dunder in (result.traceback or "")
+
+    def test_safe_dunders_allowed(self):
+        """``__init__`` / ``__name__`` / ``__doc__`` 등 정상 dunder는 허용."""
+        src = (
+            "class Foo:\n"
+            "    def __init__(self, x):\n"
+            "        self.x = x\n"
+            "    def __repr__(self):\n"
+            "        return f'Foo({self.x})'\n"
+            "_ = repr(Foo(1))\n"
+        )
+        result = restricted_exec(src)
+        assert result.status == RuntimeStatus.PASS
+
+    def test_dangerous_dunder_set_is_well_formed(self):
+        """모든 차단 항목이 dunder 형식(``__x__``)이고 빈 셋이 아니다."""
+        assert len(DANGEROUS_DUNDER_ATTRS) > 0
+        for name in DANGEROUS_DUNDER_ATTRS:
+            assert name.startswith("__") and name.endswith("__")
+
+
+class TestPr17ReviewSysProxyFrame:
+    """P1 #3 — _SafeSysProxy의 frame/trace 노출 차단."""
+
+    @pytest.mark.parametrize("attr", [
+        "_getframe", "_current_frames",
+        "settrace", "gettrace", "setprofile", "getprofile",
+    ])
+    def test_sys_proxy_blocks_frame_attrs(self, attr):
+        # AST 검사를 우회해야 sys proxy 동작을 시험할 수 있는데,
+        # ``import typing; typing.sys.<attr>`` 형태는 dunder access가 아니라
+        # 단순 attribute access라 AST 검사를 통과 → sys proxy가 잡아야 한다.
+        src = f"import typing\ntyping.sys.{attr}\n"
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS, (
+            f"sys.{attr} 접근이 차단되어야 한다"
+        )
+
+
+class TestPr17ReviewAuditOpen:
+    """P1 #4 보강 — audit hook의 'open' 이벤트로 파일 open 차단."""
+
+    def test_io_open_via_allowed_module_blocked(self):
+        # io 모듈은 IMPORT_ALLOWLIST에 없으므로 import 자체가 막혀야 함.
+        src = "import io\nf = io.open('/tmp/x.txt', 'w')\n"
+        result = restricted_exec(src)
+        assert result.status != RuntimeStatus.PASS

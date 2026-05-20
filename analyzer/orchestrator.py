@@ -149,16 +149,34 @@ def dispatch_artifacts(
 
         try:
             if artifact.file_kind.value == "PYTHON":
-                runtime_check = _load_optional(runtime_check_loader, artifact.repo_path)
                 ast_call_metadata = _load_optional(ast_call_metadata_loader, artifact.repo_path) or []
-                result = validate_python_artifact(
+
+                # 정적 분석 먼저 — 위험 코드는 격리 방까지 도달하지 않도록 한다.
+                # 이 호출에는 runtime_check를 넘기지 않고 정적 게이트 결과만 본다.
+                # (양유상 PR #17 review P1 #1 — runtime이 정적 분석보다 먼저
+                # 실행되면 catch_warnings 등으로 temp 파일 side effect 발생 가능.)
+                static_preview = validate_python_artifact(
                     artifact=artifact,
                     source=source,
                     policy=policy,
                     whitelist_lookup=whitelist_lookup,
-                    runtime_check=runtime_check,
+                    runtime_check=None,
                     ast_call_metadata=ast_call_metadata,
                 )
+
+                if static_preview.status is ValidationStatus.BLOCK:
+                    # 정적 BLOCK — runtime check 호출하지 않는다.
+                    result = static_preview
+                else:
+                    runtime_check = _load_optional(runtime_check_loader, artifact.repo_path)
+                    result = validate_python_artifact(
+                        artifact=artifact,
+                        source=source,
+                        policy=policy,
+                        whitelist_lookup=whitelist_lookup,
+                        runtime_check=runtime_check,
+                        ast_call_metadata=ast_call_metadata,
+                    )
             elif artifact.file_kind.value in {"CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}:
                 result = validate_config_artifact(
                     artifact=artifact,

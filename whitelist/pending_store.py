@@ -88,7 +88,22 @@ def upsert_pending(
     sample_callsites 갱신. 없으면 신규 레코드 생성.
 
     review_status는 항상 PENDING으로 시작 (자동 승인 권고도 사람 게이트 거쳐야 함).
+
+    호출자가 ``verified_org_count``/``verified_org_list``/``in_official_docs``를
+    명시하지 않은 경우 (기본값) 모듈 2 캐시(``data/org_analysis_cache``)와
+    모듈 1 결과 DB(``ApprovedApi``)에서 자동으로 채운다.
     """
+    # ── mod1/mod2 캐시에서 자동 채움 (호출자가 명시 안 한 경우만) ──
+    if verified_org_count == 0 and verified_org_list is None:
+        from whitelist.cache_loader import get_org_cache
+        org_cache = get_org_cache()
+        verified_org_count = org_cache.lookup_verified_org_count(api_path)
+        if verified_org_count > 0:
+            verified_org_list = org_cache.lookup_org_list(api_path)
+    if not in_official_docs:
+        from whitelist.cache_loader import is_in_official_docs as _is_in_docs
+        in_official_docs = _is_in_docs(db, api_path)
+
     now = datetime.now(timezone.utc)
     existing = get_pending(db, api_path)
 
