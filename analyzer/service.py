@@ -296,6 +296,8 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
             else:
                 approved_artifact_ids.append(artifact.artifact_id)
 
+        elif mapped.status == ValidationStatus.SKIPPED:
+            pass
         else:
             pending_artifact_ids.append(artifact.artifact_id)
 
