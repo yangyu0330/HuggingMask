@@ -17,6 +17,8 @@ from analyzer.validators.weight.pipeline import validate
 
 
 WEIGHT_FILE_KINDS = {"SAFETENSORS", "PICKLE"}
+CONFIG_FILE_KINDS = {"CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
+PYTHON_FILE_KINDS = {"PYTHON"}
 
 
 def _now() -> str:
@@ -62,10 +64,12 @@ def _extract_reason(core_result: dict):
 def _route_kind_for(artifact) -> RouteKind:
     if artifact.file_kind == "SAFETENSORS":
         return RouteKind.SAFETENSORS_FAST_PATH
-
     if artifact.file_kind == "PICKLE":
         return RouteKind.PICKLE_PATH_A
-
+    if str(artifact.file_kind) in CONFIG_FILE_KINDS:
+        return RouteKind.CONFIG_SCHEMA_VALIDATION
+    if str(artifact.file_kind) in PYTHON_FILE_KINDS:
+        return RouteKind.CODE_AST_SCAN
     return RouteKind.CONFIG_SCHEMA_VALIDATION
 
 
@@ -146,6 +150,76 @@ def _map_result(artifact, core_result, policy_fingerprint):
     )
 
 
+def _read_artifact_source(artifact) -> bytes | None:
+    """artifact의 temp_local_path 에서 파일 읽기."""
+    path = Path(artifact.temp_local_path)
+    if not path.exists():
+        return None
+    try:
+        return path.read_bytes()
+    except Exception:
+        return None
+
+
+def _validate_config_artifact(artifact) -> ArtifactValidationResult:
+    """config.json / tokenizer_config.json 검증."""
+    from analyzer.validators.config_validator import validate_config_artifact
+
+    source = _read_artifact_source(artifact)
+    if source is None:
+        return _build_result(
+            artifact=artifact,
+            status="BLOCK",
+            reason_code="SOURCE_READ_ERROR",
+            reason_message="config 파일을 읽을 수 없음",
+            details={"status": "BLOCK", "reason_code": "SOURCE_READ_ERROR"},
+        )
+
+    try:
+        return validate_config_artifact(
+            artifact=artifact,
+            source=source,
+        )
+    except Exception as e:
+        return _build_result(
+            artifact=artifact,
+            status="BLOCK",
+            reason_code="VALIDATOR_ERROR",
+            reason_message=f"config 검증 중 오류: {e}",
+            details={"status": "BLOCK", "reason_code": "VALIDATOR_ERROR", "error": str(e)},
+        )
+
+
+def _validate_python_artifact(artifact) -> ArtifactValidationResult:
+    """preprocessing .py 파일 검증."""
+    from analyzer.validators.preprocessing_validator import validate_preprocessing_artifact
+
+    source = _read_artifact_source(artifact)
+    if source is None:
+        return _build_result(
+            artifact=artifact,
+            status="BLOCK",
+            reason_code="SOURCE_READ_ERROR",
+            reason_message="python 파일을 읽을 수 없음",
+            details={"status": "BLOCK", "reason_code": "SOURCE_READ_ERROR"},
+        )
+
+    try:
+        return validate_preprocessing_artifact(
+            filename=artifact.file_name,
+            source=source,
+            artifact=artifact,
+        )
+    except Exception as e:
+        return _build_result(
+            artifact=artifact,
+            status="BLOCK",
+            reason_code="VALIDATOR_ERROR",
+            reason_message=f"python 검증 중 오류: {e}",
+            details={"status": "BLOCK", "reason_code": "VALIDATOR_ERROR", "error": str(e)},
+        )
+
+
 def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
     results = []
     generated_artifacts = []
@@ -157,31 +231,39 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
     policy_fingerprint = job.policy_fingerprint or "default-policy"
 
     for artifact in job.artifacts:
-        if artifact.file_kind not in WEIGHT_FILE_KINDS:
+
+        # ── config.json / tokenizer_config.json ──────────────────────────────
+        if str(artifact.file_kind) in CONFIG_FILE_KINDS:
+            mapped = _validate_config_artifact(artifact)
+
+        # ── preprocessing .py 파일 ────────────────────────────────────────────
+        elif str(artifact.file_kind) in PYTHON_FILE_KINDS:
+            mapped = _validate_python_artifact(artifact)
+
+        # ── 가중치 파일 (SAFETENSORS / PICKLE) ───────────────────────────────
+        elif str(artifact.file_kind) in WEIGHT_FILE_KINDS:
+            core = validate(
+                path=artifact.temp_local_path,
+                policy_fingerprint=policy_fingerprint,
+                expected_sha256=artifact.sha256,
+                file_kind=artifact.file_kind,
+                enable_path_b=getattr(job, "enable_path_b", False),
+            )
+            mapped = _map_result(artifact, core, policy_fingerprint)
+
+        # ── 그 외 ─────────────────────────────────────────────────────────────
+        else:
             mapped = _build_result(
                 artifact=artifact,
                 status="SKIPPED",
-                reason_code="NOT_WEIGHT_ARTIFACT",
-                reason_message="artifact skipped because it is not a weight artifact",
+                reason_code="UNSUPPORTED_FILE_KIND",
+                reason_message=f"지원하지 않는 파일 종류: {artifact.file_kind}",
                 details={
                     "status": "SKIPPED",
-                    "reason_code": "NOT_WEIGHT_ARTIFACT",
-                    "reason": "artifact skipped because it is not a weight artifact",
+                    "reason_code": "UNSUPPORTED_FILE_KIND",
                 },
             )
 
-            results.append(mapped)
-            continue
-
-        core = validate(
-            path=artifact.temp_local_path,
-            policy_fingerprint=policy_fingerprint,
-            expected_sha256=artifact.sha256,
-            file_kind=artifact.file_kind,
-            enable_path_b=getattr(job, "enable_path_b", False),
-        )
-
-        mapped = _map_result(artifact, core, policy_fingerprint)
         results.append(mapped)
 
         if mapped.generated_artifact is not None:
@@ -192,7 +274,7 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
             blocked_artifact_ids.append(artifact.artifact_id)
 
         elif mapped.status == ValidationStatus.PASS:
-            if artifact.file_kind == "PICKLE":
+            if str(artifact.file_kind) == "PICKLE":
                 # 보안 정책:
                 # 원본 pickle은 release 대상이 아님.
                 # Path A에서 변환된 safetensors artifact만 release 승인.
