@@ -1,28 +1,181 @@
+from __future__ import annotations
+
+import copy
+import hashlib
+import hmac
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-CACHE_FILE = Path("cache_store.json")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+CACHE_FILE = PROJECT_ROOT / ".cache" / "weight_validator_cache.json"
 
 
-def _load() -> dict[str, Any]:
-    if CACHE_FILE.exists():
-        return json.loads(CACHE_FILE.read_text(encoding="utf-8"))
-    return {}
+def _cache_dir() -> Path:
+    return CACHE_FILE.parent
 
 
-def _save(data: dict[str, Any]) -> None:
-    CACHE_FILE.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+def _lock_file() -> Path:
+    return CACHE_FILE.with_suffix(CACHE_FILE.suffix + ".lock")
+
+
+def _hmac_key() -> bytes:
+    # 운영 환경에서는 WEIGHT_CACHE_HMAC_KEY 환경변수를 주입하는 것을 권장.
+    # 없으면 dev/test용 기본 키를 사용한다.
+    return os.getenv(
+        "WEIGHT_CACHE_HMAC_KEY",
+        "dev-only-weight-cache-hmac-key",
+    ).encode("utf-8")
+
+
+def _canonical_json(obj: Any) -> bytes:
+    return json.dumps(
+        obj,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+
+
+def _signature(cache_key: str, result: dict[str, Any]) -> str:
+    payload = {
+        "cache_key": cache_key,
+        "result": result,
+    }
+
+    return hmac.new(
+        _hmac_key(),
+        _canonical_json(payload),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _valid_signature(cache_key: str, result: dict[str, Any], signature: str) -> bool:
+    expected = _signature(cache_key, result)
+    return hmac.compare_digest(expected, signature)
+
+
+@contextmanager
+def _file_lock():
+    _cache_dir().mkdir(parents=True, exist_ok=True)
+
+    lock_path = _lock_file()
+
+    with lock_path.open("a+b") as lock_fp:
+        lock_fp.seek(0)
+        lock_fp.write(b"0")
+        lock_fp.flush()
+        lock_fp.seek(0)
+
+        if os.name == "nt":
+            import msvcrt
+
+            msvcrt.locking(lock_fp.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_fp.seek(0)
+                msvcrt.locking(lock_fp.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_fp.fileno(), fcntl.LOCK_UN)
+
+
+def _empty_store() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "entries": {},
+    }
+
+
+def _load_unlocked() -> dict[str, Any]:
+    if not CACHE_FILE.exists():
+        return _empty_store()
+
+    try:
+        data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return _empty_store()
+
+    if not isinstance(data, dict):
+        return _empty_store()
+
+    if data.get("version") != 1:
+        return _empty_store()
+
+    entries = data.get("entries")
+    if not isinstance(entries, dict):
+        return _empty_store()
+
+    return data
+
+
+def _save_unlocked(data: dict[str, Any]) -> None:
+    _cache_dir().mkdir(parents=True, exist_ok=True)
+
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=".weight-cache-",
+        suffix=".tmp",
+        dir=str(_cache_dir()),
+        text=True,
     )
+
+    tmp_path = Path(tmp_name)
+
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fp:
+            json.dump(data, fp, indent=2, ensure_ascii=False)
+            fp.write("\n")
+
+        os.replace(tmp_path, CACHE_FILE)
+
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 def get_cache(cache_key: str):
-    return _load().get(cache_key)
+    with _file_lock():
+        data = _load_unlocked()
+        entry = data.get("entries", {}).get(cache_key)
+
+        if not isinstance(entry, dict):
+            return None
+
+        result = entry.get("result")
+        signature = entry.get("signature")
+
+        if not isinstance(result, dict):
+            return None
+
+        if not isinstance(signature, str):
+            return None
+
+        if not _valid_signature(cache_key, result, signature):
+            return None
+
+        return copy.deepcopy(result)
 
 
 def set_cache(cache_key: str, result: dict[str, Any]) -> None:
-    data = _load()
-    data[cache_key] = result
-    _save(data)
+    with _file_lock():
+        data = _load_unlocked()
+        entries = data.setdefault("entries", {})
+
+        safe_result = copy.deepcopy(result)
+
+        entries[cache_key] = {
+            "result": safe_result,
+            "signature": _signature(cache_key, safe_result),
+        }
+
+        _save_unlocked(data)

@@ -6,3 +6,9 @@ sqlalchemy>=2.0
 pydantic>=2.0
 beautifulsoup4>=4.12
 lxml>=5.0
+
+safetensors>=0.4.0
+torch>=2.0.0
+
+modelscan>=0.8.0
+yara-python>=4.5.0

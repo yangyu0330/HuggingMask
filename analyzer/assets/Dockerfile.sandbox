@@ -4,4 +4,5 @@ WORKDIR /app
 
 RUN pip install --no-cache-dir torch safetensors numpy
 
+COPY analyzer/validators/weight/dtypes.py /app/dtypes.py
 COPY analyzer/validators/weight/sandbox/load_and_extract.py /app/load_and_extract.py

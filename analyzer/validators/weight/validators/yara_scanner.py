@@ -3,12 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 
 try:
-    import yara
-except Exception:
+    import yara  # type: ignore[import-not-found]
+except ImportError:
     yara = None
 
 
-RULE_PATH = Path("analyzer/assets/malicious_pickle.yar")
+RULE_PATH = Path(__file__).resolve().parents[3] / "assets" / "malicious_pickle.yar"
 
 
 def scan_with_yara(path: str) -> dict:
@@ -44,7 +44,7 @@ def scan_with_yara(path: str) -> dict:
             "reason": "no yara rule matched",
         }
 
-    except Exception as e:
+    except yara.Error as e:
         return {
             "status": "SKIP",
             "reason_code": "YARA_SCAN_ERROR",

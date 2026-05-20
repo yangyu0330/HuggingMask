@@ -35,10 +35,17 @@ def _make_cacheable(obj: Any):
 
 
 def _cached_pickle_result_satisfies_request(cached: dict, enable_path_b: bool) -> bool:
-    if not enable_path_b:
+    if enable_path_b:
         return True
 
-    return "path_b" in cached
+    return "path_b" not in cached
+
+
+def _pickle_cache_kind(enable_path_b: bool) -> str:
+    if enable_path_b:
+        return "PICKLE_PATH_B"
+
+    return "PICKLE"
 
 
 def _hash_mismatch_result(
@@ -63,11 +70,15 @@ def validate_pickle_pipeline(
     policy_fingerprint: str,
     sandbox_image: str = "weight-sandbox",
     enable_path_b: bool = False,
-    runtime: str = "runc",
+    runtime: str = "runsc",
     file_hash: str | None = None,
 ) -> dict:
     file_hash = file_hash or sha256_file(path)
-    cache_key = build_cache_key(file_hash, "PICKLE", policy_fingerprint)
+    cache_key = build_cache_key(
+        file_hash,
+        _pickle_cache_kind(enable_path_b),
+        policy_fingerprint,
+    )
 
     cached = get_cache(cache_key)
     if cached and _cached_pickle_result_satisfies_request(cached, enable_path_b):
@@ -138,6 +149,14 @@ def validate_pickle_pipeline(
         if path_b_result.get("status") == "BLOCK":
             result["status"] = "BLOCK"
             result["stage"] = "PATH_B"
+            result["reason_code"] = path_b_result.get(
+                "reason_code",
+                "PICKLE_PATH_B_BLOCKED",
+            )
+            result["reason"] = path_b_result.get(
+                "reason",
+                "Path B sandbox validation blocked pickle",
+            )
             set_cache(cache_key, _make_cacheable(result))
             return result
 
@@ -156,7 +175,8 @@ def validate_pickle_pipeline(
                 return result
         else:
             result["diff"] = {
-                "status": "SKIP",
+                "status": "SKIPPED",
+                "reason_code": "PICKLE_PATH_AB_COMPARE_SKIPPED",
                 "reason": "PATH_A_OR_PATH_B_TENSORS_MISSING",
             }
 
@@ -174,15 +194,31 @@ def validate_pickle_pipeline(
         if convert_result["status"] == "BLOCK":
             result["status"] = "BLOCK"
             result["stage"] = "CONVERT"
-            result["reason_code"] = convert_result.get("reason_code", "PICKLE_CONVERT_FAILED")
-            result["reason"] = convert_result.get("reason", "pickle to safetensors conversion failed")
+            result["reason_code"] = convert_result.get(
+                "reason_code",
+                "PICKLE_CONVERT_FAILED",
+            )
+            result["reason"] = convert_result.get(
+                "reason",
+                "pickle to safetensors conversion failed",
+            )
             set_cache(cache_key, _make_cacheable(result))
             return result
     else:
+        result["status"] = "BLOCK"
+        result["stage"] = "CONVERT"
+        result["reason_code"] = "PICKLE_PATH_A_NO_CONVERTIBLE_TENSOR_DICT"
+        result["reason"] = (
+            "Path A did not produce a convertible tensor_dict. "
+            "Original pickle cannot be released."
+        )
         result["converted"] = {
-            "status": "SKIP",
+            "status": "BLOCK",
+            "reason_code": "PICKLE_PATH_A_NO_CONVERTIBLE_TENSOR_DICT",
             "reason": "NO_TENSOR_DICT_FROM_PATH_A",
         }
+        set_cache(cache_key, _make_cacheable(result))
+        return result
 
     set_cache(cache_key, _make_cacheable(result))
     return result
@@ -201,10 +237,18 @@ def validate(
         "SAFETENSORS" if path.endswith(".safetensors") else "PICKLE"
     )
 
-    cache_key = build_cache_key(file_hash, normalized_kind, policy_fingerprint)
+    cache_key = build_cache_key(
+        file_hash,
+        (
+            _pickle_cache_kind(enable_path_b)
+            if normalized_kind == "PICKLE"
+            else normalized_kind
+        ),
+        policy_fingerprint,
+    )
 
-    # Validate the expected digest before cache lookup so a cached PASS cannot
-    # hide a request that references a different artifact hash.
+    # expected_sha256 검증은 cache lookup보다 먼저 수행해야 함.
+    # cached PASS가 잘못된 expected hash 요청을 우회하면 안 됨.
     if expected_sha256 and expected_sha256 != file_hash:
         return _hash_mismatch_result(
             file_hash=file_hash,
