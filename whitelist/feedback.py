@@ -68,7 +68,13 @@ def submit_feedback(
     danger = classifier.find_risk_keywords(api_path)
     classification = classifier.escalate(base, danger)
 
-    in_official = (approved is not None and not approved.is_blocked) or matched is not None
+    # 모듈 1·2 캐시 기반 자동 채움
+    # - in_official_docs: ApprovedApi(source=INITIAL/AUTO_CRAWL)에 등록되어 있는가
+    # - verified_org_count: mod2 캐시에서 이 API를 쓰는 verified org 수
+    from whitelist.cache_loader import get_org_cache, is_in_official_docs
+
+    in_official = is_in_official_docs(db, api_path)
+    org_count = get_org_cache().lookup_verified_org_count(api_path)
     auto_rejected = api_path in PERMANENTLY_BLOCKED_APIS
 
     if auto_rejected:
@@ -87,7 +93,7 @@ def submit_feedback(
         reporter_id=reporter_id,
         auto_classification=classification,
         in_official_docs=in_official,
-        verified_org_count=0,  # 모듈 2 결과 캐시 연동은 추후
+        verified_org_count=org_count,
         estimated_response_hours=sla,
         review_status=review_status,
         auto_rejected=auto_rejected,
