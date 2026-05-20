@@ -11,11 +11,14 @@ analyzer/sandbox 라우터는 각 모듈 구현 완료 후 추가 예정.
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
+from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
 from analyzer.service import validate_job
+from whitelist.database import get_db
+from whitelist.full_pipeline import run_full_validation
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
@@ -44,6 +47,17 @@ def health() -> dict[str, str]:
 @app.post("/internal/v1/validation/jobs")
 def validation_jobs(payload: ValidationJobRequest):
     return validate_job(payload)
+
+
+@app.post("/internal/v1/validation/full")
+def validation_full(payload: ValidationJobRequest, db: Session = Depends(get_db)):
+    """통합 검증 — 가중치 + 코드 + config + 화이트리스트 + 제한 런타임을
+    한 요청에서 모두 거쳐 단일 판정으로 응답.
+
+    ``/jobs``(가중치 전용)와 달리 PYTHON/CONFIG_JSON/TOKENIZER_CONFIG_JSON도
+    실제 검증 경로(양유상 orchestrator + 본인 화이트리스트/제한 런타임)로 보낸다.
+    """
+    return run_full_validation(payload, db=db)
 
 
 # ─────────────────────────────────────────────
