@@ -1,8 +1,8 @@
 # HuggingMask PICKLE_PATH_B gVisor Host Evidence 설계서
 
-문서 버전: v1.1  
-작성일: 2026-05-20  
-대상 PR: #24 `[CORE][fix] weight validator 보안 피드백 반영`  
+문서 버전: v1.1
+작성일: 2026-05-20
+대상 PR: #24 `[CORE][fix] weight validator 보안 피드백 반영`
 대상 범위: `PICKLE_PATH_B`의 Docker/runsc(gVisor) 실행 검증과 host-side evidence
 
 ## 0. 문서 구조

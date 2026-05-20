@@ -1,9 +1,9 @@
 # HuggingMask B-2 gVisor 구현 상세 설계서
 
-문서 버전: v1.0  
-작성일: 2026-05-19  
-기준 브랜치: `origin/dev`  
-기준 커밋: `14b3eb5`  
+문서 버전: v1.0
+작성일: 2026-05-19
+기준 브랜치: `origin/dev`
+기준 커밋: `14b3eb5`
 대상 저장소: `C:/Users/andyw/Desktop/HuggingMask`
 
 ## 1. 목적
@@ -201,7 +201,7 @@ service는 weight 결과와 code 결과를 같은 `ValidationJobResponse` 안에
 
 `runtime_check`와 `sandbox_check`는 반드시 분리한다.
 
-`runtime_check`는 B-1 제한 런타임 gate 결과다.  
+`runtime_check`는 B-1 제한 런타임 gate 결과다.
 `sandbox_check`는 B-2 gVisor/runsc evidence 결과다.
 
 두 결과를 하나의 dict로 union하면 다음 문제가 생긴다.
@@ -1045,7 +1045,7 @@ entrypoint는 아래를 하지 않는다.
 }
 ```
 
-host runner는 이 파일을 `runner_diagnostics.json`으로 보관한다.  
+host runner는 이 파일을 `runner_diagnostics.json`으로 보관한다.
 decision builder는 이 값만으로 `BLOCK`을 내리지 않는다.
 
 ## 13. `sandbox/b2/runsc_log_parser.py`
@@ -1424,7 +1424,7 @@ def _requires_b2_sandbox(result: ArtifactValidationResult) -> bool:
 
 ### 16.3 reason code 추가
 
-공통 reason code가 아직 없다면 `details["sandbox_check"]["decision"]`에만 기록한다.  
+공통 reason code가 아직 없다면 `details["sandbox_check"]["decision"]`에만 기록한다.
 추가가 가능하면 아래 reason code를 쓴다.
 
 | reason code | 의미 |

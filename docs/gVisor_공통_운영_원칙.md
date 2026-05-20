@@ -1,7 +1,7 @@
 # HuggingMask gVisor 공통 운영 원칙
 
-문서 버전: v1.0  
-작성일: 2026-05-20  
+문서 버전: v1.0
+작성일: 2026-05-20
 대상 범위: HuggingMask의 Docker/runsc 기반 sandbox 공통 정책
 
 ## 1. 목적

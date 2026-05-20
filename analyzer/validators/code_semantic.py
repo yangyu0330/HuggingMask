@@ -1,6 +1,6 @@
 """Preprocessing metadata semantic inventory and fail-closed gate.
 
-This validator does not import or execute model code.  It records tokenizer /
+This validator does not import or execute model code. It records tokenizer /
 processor metadata that must be reviewed by later semantic checks and keeps
 baseline-less checks out of the PASS path.
 """
@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Mapping, Protocol
 
 from analyzer.schemas import (
     ArtifactRef,
@@ -24,6 +25,8 @@ from analyzer.schemas import (
     ValidationStatus,
 )
 
+SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION = "preprocessing-sandbox-fuzz-evidence.v1"
+
 PREPROCESSING_METADATA_FILE_KINDS = {
     FileKind.TOKENIZER_CONFIG_JSON,
     FileKind.TOKENIZER_JSON,
@@ -35,6 +38,124 @@ PREPROCESSING_METADATA_FILE_KINDS = {
     FileKind.PROCESSOR_CONFIG_JSON,
     FileKind.CHAT_TEMPLATE_JINJA,
 }
+
+
+@dataclass(frozen=True)
+class SemanticFuzzRunnerConfig:
+    """Opt-in sandbox fuzz runner contract.
+
+    This config is evidence metadata only. The default semantic validator never
+    imports processor/tokenizer code or executes this runner.
+    """
+
+    revision_pin: str
+    offline_mode: bool = True
+    network_disabled: bool = True
+    read_only_snapshot: bool = True
+    sandbox_runtime: str = "gvisor"
+    cpu_budget_cores: float = 1.0
+    memory_budget_mb: int = 512
+    time_budget_ms: int = 10_000
+    require_phase0_import_closure_passed: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzPrerequisites:
+    """Static gates that must be satisfied before sandbox fuzzing is eligible."""
+
+    phase0_static_validation_passed: bool
+    python_import_closure_status: str
+    python_import_closure_artifact_ids: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzRuntimeEvent:
+    event_type: str
+    message: str
+    severity: str = "INFO"
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzOutputSnapshot:
+    output_key: str
+    shape: list[int | str] = field(default_factory=list)
+    dtype: str | None = None
+    token_count: int | None = None
+    special_token_mask: list[int] = field(default_factory=list)
+    offset_mapping: list[list[int]] = field(default_factory=list)
+    media_placeholder_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzCaseEvidence:
+    case_id: str
+    input_kind: str
+    input_hash: str
+    media_placeholder_count: int = 0
+    outputs: list[SemanticFuzzOutputSnapshot] = field(default_factory=list)
+    runtime_events: list[SemanticFuzzRuntimeEvent] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzBaselineDiff:
+    baseline_available: bool = False
+    baseline_revision_pin: str | None = None
+    baseline_input_hash: str | None = None
+    output_diffs: list[dict[str, Any]] = field(default_factory=list)
+    runtime_event_diffs: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class SemanticFuzzResult:
+    """Serializable evidence produced by a future opt-in sandbox fuzz runner."""
+
+    target_kind: str
+    runner_config: SemanticFuzzRunnerConfig
+    prerequisites: SemanticFuzzPrerequisites
+    cases: list[SemanticFuzzCaseEvidence] = field(default_factory=list)
+    baseline_diff: SemanticFuzzBaselineDiff = field(default_factory=SemanticFuzzBaselineDiff)
+    runtime_events: list[SemanticFuzzRuntimeEvent] = field(default_factory=list)
+    status: str = "EVIDENCE_ONLY"
+    schema_version: str = SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION
+    review_required: bool = True
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+class PreprocessingSemanticFuzzRunner(Protocol):
+    """Interface for a future opt-in tokenizer/processor sandbox fuzz runner."""
+
+    def run(
+        self,
+        *,
+        artifact: ArtifactRef,
+        metadata_source: str | bytes,
+        runner_config: SemanticFuzzRunnerConfig,
+        prerequisites: SemanticFuzzPrerequisites,
+        baseline_metadata_source: str | bytes | None = None,
+    ) -> SemanticFuzzResult:
+        """Return evidence only; this result must not auto-approve validation."""
 
 _JSON_FILE_KINDS = {
     FileKind.TOKENIZER_CONFIG_JSON,
@@ -96,8 +217,18 @@ _KEY_FIELDS_BY_KIND = {
         "do_normalize",
         "image_mean",
         "image_std",
+        "channel_order",
+        "data_format",
+        "input_data_format",
+        "image_processor_type",
+        "processor_class",
         "sampling_rate",
         "padding_value",
+        "feature_size",
+        "return_attention_mask",
+        "max_length",
+        "truncation",
+        "padding",
     ),
     FileKind.PROCESSOR_CONFIG_JSON: (
         "processor_class",
@@ -152,6 +283,16 @@ _SPECIAL_TOKEN_KEYS = (
     "additional_special_tokens",
 )
 
+_CORE_SPECIAL_TOKEN_KEYS = (
+    "bos_token",
+    "eos_token",
+    "unk_token",
+    "sep_token",
+    "pad_token",
+    "cls_token",
+    "mask_token",
+)
+
 _TOKENIZER_OPTION_KEYS = (
     "model_max_length",
     "padding_side",
@@ -159,6 +300,24 @@ _TOKENIZER_OPTION_KEYS = (
     "split_special_tokens",
     "clean_up_tokenization_spaces",
 )
+
+_TOKENIZER_INVARIANT_FILE_KINDS = {
+    FileKind.TOKENIZER_CONFIG_JSON,
+    FileKind.TOKENIZER_JSON,
+    FileKind.SPECIAL_TOKENS_MAP_JSON,
+    FileKind.ADDED_TOKENS_JSON,
+}
+
+_PROCESSOR_INVARIANT_FILE_KINDS = {
+    FileKind.PREPROCESSOR_CONFIG_JSON,
+    FileKind.PROCESSOR_CONFIG_JSON,
+}
+
+_MODEL_MAX_LENGTH_REVIEW_THRESHOLD = 1_000_000
+_IMAGE_DIMENSION_REVIEW_THRESHOLD = 100_000
+_AUDIO_SAMPLING_RATE_REVIEW_THRESHOLD = 384_000
+_AUDIO_FEATURE_SIZE_REVIEW_THRESHOLD = 100_000
+_AUDIO_MAX_LENGTH_REVIEW_THRESHOLD = 10_000_000
 
 _ADDED_TOKEN_OPTION_KEYS = (
     "id",
@@ -169,6 +328,112 @@ _ADDED_TOKEN_OPTION_KEYS = (
     "rstrip",
     "normalized",
 )
+
+_IMAGE_METADATA_KEYS = (
+    "do_resize",
+    "size",
+    "crop_size",
+    "do_rescale",
+    "rescale_factor",
+    "do_normalize",
+    "image_mean",
+    "image_std",
+    "channel_order",
+    "data_format",
+    "input_data_format",
+    "do_convert_rgb",
+    "resample",
+)
+
+_IMAGE_HINT_KEYS = (
+    "image_processor_type",
+    "processor_class",
+    "image_processor_class",
+    "backend",
+    "use_fast",
+    "data_format",
+    "input_data_format",
+    "channel_order",
+)
+
+_IMAGE_DETECTION_KEYS = (
+    "do_resize",
+    "size",
+    "crop_size",
+    "do_rescale",
+    "rescale_factor",
+    "image_mean",
+    "image_std",
+    "channel_order",
+    "data_format",
+    "input_data_format",
+    "image_processor_type",
+    "image_processor_class",
+    "do_convert_rgb",
+    "resample",
+)
+
+_AUDIO_METADATA_KEYS = (
+    "sampling_rate",
+    "padding_value",
+    "do_normalize",
+    "feature_size",
+    "return_attention_mask",
+    "max_length",
+    "truncation",
+    "padding",
+    "pad_to_multiple_of",
+)
+
+_AUDIO_DETECTION_KEYS = (
+    "sampling_rate",
+    "padding_value",
+    "feature_size",
+    "return_attention_mask",
+    "max_length",
+    "truncation",
+    "padding",
+    "pad_to_multiple_of",
+)
+
+_PROCESSOR_CLASS_KEYS = (
+    "processor_class",
+    "tokenizer_class",
+    "image_processor_class",
+    "feature_extractor_class",
+)
+
+_PROCESSOR_COMPONENT_KEYS = (
+    "tokenizer",
+    "image_processor",
+    "feature_extractor",
+    "audio_processor",
+    "video_processor",
+    "processor",
+)
+
+_PROCESSOR_CLASS_TO_COMPONENT_KEY = {
+    "tokenizer_class": "tokenizer",
+    "image_processor_class": "image_processor",
+    "feature_extractor_class": "feature_extractor",
+}
+
+_MEDIA_TEMPLATE_HINTS = (
+    "<image",
+    "<video",
+    "<audio",
+    "image",
+    "images",
+    "video",
+    "videos",
+    "audio",
+    "audios",
+    "pixel_values",
+    "input_features",
+)
+
+_CHANNEL_ORDER_VALUES = {"rgb", "bgr", "rgba", "grayscale", "gray", "l"}
+_DATA_FORMAT_VALUES = {"channels_first", "channels_last", "none"}
 
 
 def is_preprocessing_metadata_kind(file_kind: FileKind | str) -> bool:
@@ -181,6 +446,7 @@ def validate_preprocessing_metadata_artifact(
     policy: PolicyInfo | None = None,
     *,
     baseline_source: str | bytes | None = None,
+    sandbox_fuzz_result: SemanticFuzzResult | Mapping[str, Any] | None = None,
 ) -> ArtifactValidationResult:
     """Build semantic inventory and keep uncertain metadata in review."""
 
@@ -210,6 +476,10 @@ def validate_preprocessing_metadata_artifact(
         baseline_text=baseline_text,
         parse_error=parse_error,
     )
+    sandbox_fuzz = _normalize_sandbox_fuzz_result(sandbox_fuzz_result)
+    if sandbox_fuzz is not None:
+        semantic_findings.append(_sandbox_fuzz_review_finding(sandbox_fuzz))
+        semantic_findings = _dedupe_findings(semantic_findings)
 
     check_status = _semantic_check_status(
         baseline_text=baseline_text,
@@ -228,6 +498,8 @@ def validate_preprocessing_metadata_artifact(
         },
         "semantic_inventory": inventory,
         "semantic_findings": semantic_findings,
+        "semantic_finding_codes": _semantic_finding_codes(semantic_findings),
+        "sandbox_fuzz": sandbox_fuzz or _sandbox_fuzz_not_run(),
         "pending_api_refs": [],
         "review_queue_entry_id": None,
         "effective_output_artifact_id": None,
@@ -282,6 +554,9 @@ def _build_inventory(
         "split_special_tokens": None,
         "clean_up_tokenization_spaces": None,
         "tokenizer_options": {},
+        "image": _empty_image_inventory(),
+        "audio": _empty_audio_inventory(),
+        "processor": _empty_processor_inventory(),
     }
 
     if parse_error is not None:
@@ -290,6 +565,7 @@ def _build_inventory(
     if isinstance(payload, dict):
         inventory["key_fields"] = _extract_key_fields(file_kind, payload)
         inventory.update(_extract_tokenizer_metadata_inventory(file_kind, payload))
+        inventory.update(_extract_processor_metadata_inventory(file_kind, payload))
         chat_template = payload.get("chat_template")
         if isinstance(chat_template, str):
             inventory["chat_template"] = _chat_template_inventory(chat_template)
@@ -340,7 +616,7 @@ def _extract_tokenizer_metadata_inventory(file_kind: FileKind, payload: dict[str
     added_tokens = _added_tokens_for_file_kind(file_kind, payload)
     vocab_size = _vocab_size_for_file_kind(file_kind, payload)
     merge_rule_count = _merge_rule_count_for_file_kind(file_kind, payload)
-    tokenizer_options = _tokenizer_options_inventory(file_kind, payload)
+    tokenizer_options = _tokenizer_options_inventory(payload)
 
     return {
         "special_token_map": special_token_map,
@@ -354,6 +630,106 @@ def _extract_tokenizer_metadata_inventory(file_kind: FileKind, payload: dict[str
         "clean_up_tokenization_spaces": tokenizer_options["clean_up_tokenization_spaces"],
         "tokenizer_options": tokenizer_options,
     }
+
+
+def _extract_processor_metadata_inventory(file_kind: FileKind, payload: dict[str, Any]) -> dict[str, Any]:
+    if file_kind not in {FileKind.PREPROCESSOR_CONFIG_JSON, FileKind.PROCESSOR_CONFIG_JSON}:
+        return {
+            "image": _empty_image_inventory(),
+            "audio": _empty_audio_inventory(),
+            "processor": _empty_processor_inventory(),
+        }
+
+    return {
+        "image": _image_inventory(payload),
+        "audio": _audio_inventory(payload),
+        "processor": _processor_inventory(payload),
+    }
+
+
+def _empty_image_inventory() -> dict[str, Any]:
+    return {
+        "fields": {},
+        "hints": {},
+    }
+
+
+def _empty_audio_inventory() -> dict[str, Any]:
+    return {
+        "fields": {},
+    }
+
+
+def _empty_processor_inventory() -> dict[str, Any]:
+    return {
+        "classes": {},
+        "component_refs": {},
+        "has_chat_template": False,
+        "chat_template": None,
+    }
+
+
+def _image_inventory(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fields": _select_present_fields(payload, _IMAGE_METADATA_KEYS),
+        "hints": _select_present_fields(payload, _IMAGE_HINT_KEYS),
+    }
+
+
+def _audio_inventory(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fields": _select_present_fields(payload, _AUDIO_METADATA_KEYS),
+    }
+
+
+def _processor_inventory(payload: dict[str, Any]) -> dict[str, Any]:
+    chat_template = payload.get("chat_template")
+    inventory = _empty_processor_inventory()
+    inventory["classes"] = _select_present_fields(payload, _PROCESSOR_CLASS_KEYS)
+    inventory["component_refs"] = _processor_component_refs(payload)
+    inventory["has_chat_template"] = isinstance(chat_template, str)
+    if isinstance(chat_template, str):
+        inventory["chat_template"] = _chat_template_inventory(chat_template)
+    return inventory
+
+
+def _processor_component_refs(payload: dict[str, Any]) -> dict[str, Any]:
+    refs: dict[str, Any] = {}
+    for key in _PROCESSOR_COMPONENT_KEYS:
+        if key not in payload:
+            continue
+        refs[key] = _summarize_component_ref(payload[key])
+    return refs
+
+
+def _summarize_component_ref(value: Any) -> Any:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        class_keys = (
+            "type",
+            "class",
+            "processor_class",
+            "tokenizer_class",
+            "image_processor_class",
+            "feature_extractor_class",
+            "pretrained_model_name_or_path",
+            "name_or_path",
+        )
+        summary = {key: value.get(key) for key in class_keys if key in value}
+        if not summary:
+            summary["keys"] = sorted(value.keys())[:20]
+        return summary
+    if isinstance(value, list):
+        return {
+            "count": len(value),
+            "values": [_summarize_component_ref(item) for item in value[:20]],
+        }
+    return {"value": value}
+
+
+def _select_present_fields(payload: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    return {key: payload[key] for key in keys if key in payload}
 
 
 def _empty_special_token_map_inventory() -> dict[str, Any]:
@@ -513,7 +889,7 @@ def _merge_rules_inventory(source_text: str) -> dict[str, Any]:
     }
 
 
-def _tokenizer_options_inventory(file_kind: FileKind, payload: dict[str, Any]) -> dict[str, Any]:
+def _tokenizer_options_inventory(payload: dict[str, Any]) -> dict[str, Any]:
     options = {key: payload.get(key) for key in _TOKENIZER_OPTION_KEYS}
 
     truncation = payload.get("truncation")
@@ -544,17 +920,13 @@ def _chat_template_inventory(template: str) -> dict[str, Any]:
 
 def _chat_template_hint_details(lowered_template: str) -> dict[str, bool]:
     return {
-        "system": _contains_hint(lowered_template, "system"),
-        "user": _contains_hint(lowered_template, "user"),
-        "assistant": _contains_hint(lowered_template, "assistant"),
-        "tool": _contains_hint(lowered_template, "tool") or _contains_hint(lowered_template, "tools"),
-        "document": _contains_hint(lowered_template, "document") or _contains_hint(lowered_template, "documents"),
+        "system": "system" in lowered_template,
+        "user": "user" in lowered_template,
+        "assistant": "assistant" in lowered_template,
+        "tool": "tool" in lowered_template or "tools" in lowered_template,
+        "document": "document" in lowered_template or "documents" in lowered_template,
         "add_generation_prompt": "add_generation_prompt" in lowered_template,
     }
-
-
-def _contains_hint(text: str, hint: str) -> bool:
-    return hint in text
 
 
 def _build_semantic_findings(
@@ -592,6 +964,9 @@ def _build_semantic_findings(
     for template in templates:
         findings.extend(_chat_template_findings(template))
 
+    findings.extend(_tokenizer_invariant_findings(file_kind, payload))
+    findings.extend(_processor_invariant_findings(file_kind, payload))
+
     lowered = source_text.lower()
     if any(hint in lowered for hint in _PATH_OR_NETWORK_HINTS):
         findings.append(
@@ -603,6 +978,536 @@ def _build_semantic_findings(
         )
 
     return _dedupe_findings(findings)
+
+
+def _tokenizer_invariant_findings(file_kind: FileKind, payload: Any) -> list[dict[str, Any]]:
+    if file_kind not in _TOKENIZER_INVARIANT_FILE_KINDS:
+        return []
+    if not isinstance(payload, (dict, list)):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if isinstance(payload, dict):
+        findings.extend(_special_token_collision_findings(payload))
+        findings.extend(_tokenizer_option_invariant_findings(payload))
+    findings.extend(_added_token_invariant_findings(file_kind, payload))
+    return findings
+
+
+def _special_token_collision_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    core_tokens = _collect_core_special_token_contents(payload)
+    by_content: dict[str, list[str]] = {}
+    for key, content in core_tokens.items():
+        if content == "":
+            continue
+        by_content.setdefault(content, []).append(key)
+
+    for content, keys in by_content.items():
+        if len(keys) > 1:
+            findings.append(
+                _finding(
+                    "TOKENIZER_SPECIAL_TOKEN_COLLISION",
+                    "MEDIUM",
+                    f"special token {content!r} is assigned to {', '.join(sorted(keys))}",
+                )
+            )
+
+    additional_tokens = _collect_additional_special_token_contents(payload)
+    core_contents = set(core_tokens.values())
+    collisions = sorted({content for content in additional_tokens if content in core_contents and content != ""})
+    if collisions:
+        findings.append(
+            _finding(
+                "TOKENIZER_ADDITIONAL_SPECIAL_TOKEN_COLLISION",
+                "MEDIUM",
+                f"additional_special_tokens overlap core special tokens: {', '.join(collisions)}",
+            )
+        )
+
+    return findings
+
+
+def _collect_core_special_token_contents(payload: dict[str, Any]) -> dict[str, str]:
+    tokens: dict[str, str] = {}
+    for key in _CORE_SPECIAL_TOKEN_KEYS:
+        if key not in payload:
+            continue
+        for content in _token_contents(payload[key]):
+            tokens[key] = content
+            break
+    return tokens
+
+
+def _collect_additional_special_token_contents(payload: dict[str, Any]) -> list[str]:
+    if "additional_special_tokens" not in payload:
+        return []
+    return _token_contents(payload["additional_special_tokens"])
+
+
+def _token_contents(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        content = value.get("content") or value.get("token")
+        if isinstance(content, str):
+            return [content]
+        nested_values: list[str] = []
+        for item in value.values():
+            nested_values.extend(_token_contents(item))
+        return nested_values
+    if isinstance(value, list):
+        output: list[str] = []
+        for item in value:
+            output.extend(_token_contents(item))
+        return output
+    return []
+
+
+def _tokenizer_option_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+
+    if payload.get("split_special_tokens") is True:
+        findings.append(
+            _finding(
+                "TOKENIZER_SPLIT_SPECIAL_TOKENS_ENABLED",
+                "MEDIUM",
+                "split_special_tokens=True can change control token boundaries.",
+            )
+        )
+
+    model_max_length = _extract_model_max_length(payload)
+    if model_max_length is not None and not _is_valid_model_max_length(model_max_length):
+        findings.append(
+            _finding(
+                "TOKENIZER_MODEL_MAX_LENGTH_ABNORMAL",
+                "MEDIUM",
+                f"model_max_length is abnormal: {model_max_length!r}",
+            )
+        )
+
+    for key in ("padding_side", "truncation_side"):
+        side = _extract_side_option(payload, key)
+        if side is not None and not _is_valid_side(side):
+            findings.append(
+                _finding(
+                    f"TOKENIZER_INVALID_{key.upper()}",
+                    "MEDIUM",
+                    f"{key} must be left or right, got {side!r}",
+                )
+            )
+
+    return findings
+
+
+def _extract_model_max_length(payload: dict[str, Any]) -> Any:
+    if "model_max_length" in payload:
+        return payload["model_max_length"]
+    truncation = payload.get("truncation")
+    if isinstance(truncation, dict) and "max_length" in truncation:
+        return truncation["max_length"]
+    return None
+
+
+def _is_valid_model_max_length(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        numeric = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        numeric = int(value.strip())
+    else:
+        return False
+    return 0 < numeric <= _MODEL_MAX_LENGTH_REVIEW_THRESHOLD
+
+
+def _extract_side_option(payload: dict[str, Any], key: str) -> Any:
+    if key in payload:
+        return payload[key]
+    if key == "padding_side":
+        padding = payload.get("padding")
+        if isinstance(padding, dict):
+            return padding.get("direction")
+    if key == "truncation_side":
+        truncation = payload.get("truncation")
+        if isinstance(truncation, dict):
+            return truncation.get("direction")
+    return None
+
+
+def _is_valid_side(value: Any) -> bool:
+    return isinstance(value, str) and value.lower() in {"left", "right"}
+
+
+def _added_token_invariant_findings(file_kind: FileKind, payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    tokens = _collect_added_token_records(file_kind, payload)
+    findings.extend(_added_token_duplicate_findings(tokens))
+    findings.extend(_added_token_option_findings(tokens))
+    return findings
+
+
+def _collect_added_token_records(file_kind: FileKind, payload: dict[str, Any] | list[Any]) -> list[dict[str, Any]]:
+    if file_kind is FileKind.TOKENIZER_JSON and isinstance(payload, dict):
+        return _added_token_records(payload.get("added_tokens"))
+    if file_kind is FileKind.TOKENIZER_CONFIG_JSON and isinstance(payload, dict):
+        return _added_token_records(payload.get("added_tokens_decoder"))
+    if file_kind is FileKind.ADDED_TOKENS_JSON:
+        return _added_token_records(payload)
+    return []
+
+
+def _added_token_records(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [_added_token_record(item, key=None) for item in value]
+    if isinstance(value, dict):
+        return [_added_token_record(item, key=key) for key, item in value.items()]
+    return []
+
+
+def _added_token_record(value: Any, *, key: str | None) -> dict[str, Any]:
+    record: dict[str, Any] = {"key": key, "id": None, "content": None, "options": {}}
+    if key is not None and str(key).isdigit():
+        record["id"] = int(str(key))
+    if isinstance(value, dict):
+        if "id" in value:
+            record["id"] = value["id"]
+        content = value.get("content") or value.get("token")
+        if isinstance(content, str):
+            record["content"] = content
+        record["options"] = {name: value.get(name) for name in _ADDED_TOKEN_OPTION_KEYS if name in value}
+        return record
+    if isinstance(value, str):
+        record["content"] = value
+        return record
+    record["content"] = str(value) if value is not None else None
+    return record
+
+
+def _added_token_duplicate_findings(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+    ids: dict[Any, int] = {}
+    contents: dict[str, int] = {}
+    duplicate_ids: set[Any] = set()
+    duplicate_contents: set[str] = set()
+
+    for token in tokens:
+        token_id = token.get("id")
+        if token_id is not None:
+            if token_id in ids:
+                duplicate_ids.add(token_id)
+            ids[token_id] = ids.get(token_id, 0) + 1
+        content = token.get("content")
+        if isinstance(content, str) and content != "":
+            if content in contents:
+                duplicate_contents.add(content)
+            contents[content] = contents.get(content, 0) + 1
+
+    if duplicate_ids:
+        findings.append(
+            _finding(
+                "TOKENIZER_ADDED_TOKEN_DUPLICATE_ID",
+                "MEDIUM",
+                f"added token ids are duplicated: {', '.join(str(item) for item in sorted(duplicate_ids, key=str))}",
+            )
+        )
+    if duplicate_contents:
+        findings.append(
+            _finding(
+                "TOKENIZER_ADDED_TOKEN_DUPLICATE_CONTENT",
+                "MEDIUM",
+                "added token contents are duplicated: "
+                + ", ".join(repr(item) for item in sorted(duplicate_contents)),
+            )
+        )
+
+    return findings
+
+
+def _added_token_option_findings(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    risky_options: dict[str, list[str]] = {"lstrip": [], "rstrip": [], "normalized": []}
+    for token in tokens:
+        options = token.get("options") or {}
+        content = str(token.get("content") or token.get("key") or token.get("id"))
+        if options.get("lstrip") is True:
+            risky_options["lstrip"].append(content)
+        if options.get("rstrip") is True:
+            risky_options["rstrip"].append(content)
+        if options.get("normalized") is False:
+            risky_options["normalized"].append(content)
+
+    findings: list[dict[str, Any]] = []
+    for option, contents in risky_options.items():
+        if not contents:
+            continue
+        finding_code = (
+            "TOKENIZER_ADDED_TOKEN_NORMALIZED_FALSE"
+            if option == "normalized"
+            else f"TOKENIZER_ADDED_TOKEN_{option.upper()}_ENABLED"
+        )
+        findings.append(
+            _finding(
+                finding_code,
+                "MEDIUM",
+                f"AddedToken {option} risk option is present for: {', '.join(contents[:20])}",
+            )
+        )
+    return findings
+
+
+def _processor_invariant_findings(file_kind: FileKind, payload: Any) -> list[dict[str, Any]]:
+    if file_kind not in _PROCESSOR_INVARIANT_FILE_KINDS or not isinstance(payload, dict):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if file_kind is FileKind.PROCESSOR_CONFIG_JSON:
+        findings.extend(_processor_component_invariant_findings(payload))
+        findings.extend(_processor_chat_template_media_findings(payload))
+    if file_kind is FileKind.PREPROCESSOR_CONFIG_JSON:
+        findings.extend(_image_invariant_findings(payload))
+        findings.extend(_audio_invariant_findings(payload))
+    return findings
+
+
+def _processor_component_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    findings: list[dict[str, Any]] = []
+
+    invalid_class_keys = [
+        key for key in _PROCESSOR_CLASS_KEYS if key in payload and not _is_non_empty_string(payload[key])
+    ]
+    if invalid_class_keys:
+        findings.append(
+            _finding(
+                "PROCESSOR_CLASS_REFERENCE_INVALID",
+                "MEDIUM",
+                f"processor class fields must be non-empty strings: {', '.join(sorted(invalid_class_keys))}",
+            )
+        )
+
+    missing_components = [
+        component_key
+        for class_key, component_key in _PROCESSOR_CLASS_TO_COMPONENT_KEY.items()
+        if class_key in payload and component_key not in payload
+    ]
+    if missing_components:
+        findings.append(
+            _finding(
+                "PROCESSOR_COMPONENT_REF_MISSING",
+                "MEDIUM",
+                f"declared processor classes are missing component refs: {', '.join(sorted(missing_components))}",
+            )
+        )
+
+    invalid_components = [
+        key
+        for key in _PROCESSOR_COMPONENT_KEYS
+        if key in payload and not _is_valid_component_ref(payload[key])
+    ]
+    if invalid_components:
+        findings.append(
+            _finding(
+                "PROCESSOR_COMPONENT_REF_INVALID",
+                "MEDIUM",
+                f"processor component refs have invalid type/value: {', '.join(sorted(invalid_components))}",
+            )
+        )
+
+    return findings
+
+
+def _processor_chat_template_media_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    template = payload.get("chat_template")
+    if not isinstance(template, str):
+        return []
+    lowered = template.lower()
+    hints = sorted({hint for hint in _MEDIA_TEMPLATE_HINTS if hint in lowered})
+    if not hints:
+        return []
+    return [
+        _finding(
+            "PROCESSOR_CHAT_TEMPLATE_MEDIA_LITERAL",
+            "MEDIUM",
+            f"processor chat_template contains media-related literals: {', '.join(hints[:20])}",
+        )
+    ]
+
+
+def _image_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not _looks_like_image_config(payload):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if not _is_valid_image_dimension_spec(payload.get("size")):
+        findings.append(_finding("IMAGE_SIZE_INVALID", "MEDIUM", "image size is missing or invalid."))
+    if not _is_valid_image_dimension_spec(payload.get("crop_size")):
+        findings.append(_finding("IMAGE_CROP_SIZE_INVALID", "MEDIUM", "image crop_size is missing or invalid."))
+
+    if payload.get("do_normalize") is True or "image_mean" in payload:
+        if not _is_valid_image_stat(payload.get("image_mean"), allow_zero=True):
+            findings.append(_finding("IMAGE_MEAN_INVALID", "MEDIUM", "image_mean length or value range is invalid."))
+    if payload.get("do_normalize") is True or "image_std" in payload:
+        if not _is_valid_image_stat(payload.get("image_std"), allow_zero=False):
+            findings.append(_finding("IMAGE_STD_INVALID", "MEDIUM", "image_std length or value range is invalid."))
+
+    if payload.get("do_rescale") is True or "rescale_factor" in payload:
+        if not _is_valid_positive_number(payload.get("rescale_factor"), maximum=10.0):
+            findings.append(
+                _finding("IMAGE_RESCALE_FACTOR_INVALID", "MEDIUM", "rescale_factor is missing or invalid.")
+            )
+
+    invalid_bool_fields = [
+        key for key in ("do_resize", "do_rescale", "do_normalize") if key in payload and not isinstance(payload[key], bool)
+    ]
+    if invalid_bool_fields:
+        findings.append(
+            _finding(
+                "IMAGE_BOOL_FIELD_INVALID",
+                "MEDIUM",
+                f"image boolean fields have invalid type: {', '.join(sorted(invalid_bool_fields))}",
+            )
+        )
+
+    invalid_format_fields = [
+        key
+        for key in ("channel_order", "data_format", "input_data_format")
+        if key in payload and not _is_valid_image_format(key, payload[key])
+    ]
+    if invalid_format_fields:
+        findings.append(
+            _finding(
+                "IMAGE_FORMAT_INVALID",
+                "MEDIUM",
+                f"image channel/data format fields are invalid: {', '.join(sorted(invalid_format_fields))}",
+            )
+        )
+
+    return findings
+
+
+def _audio_invariant_findings(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    if not _looks_like_audio_config(payload):
+        return []
+
+    findings: list[dict[str, Any]] = []
+    if not _is_valid_positive_int(payload.get("sampling_rate"), maximum=_AUDIO_SAMPLING_RATE_REVIEW_THRESHOLD):
+        findings.append(
+            _finding("AUDIO_SAMPLING_RATE_INVALID", "MEDIUM", "sampling_rate is missing or invalid.")
+        )
+    if "padding_value" in payload and not _is_number(payload["padding_value"]):
+        findings.append(
+            _finding("AUDIO_PADDING_VALUE_INVALID", "MEDIUM", "padding_value must be numeric.")
+        )
+    if "feature_size" in payload and not _is_valid_positive_int(
+        payload["feature_size"], maximum=_AUDIO_FEATURE_SIZE_REVIEW_THRESHOLD
+    ):
+        findings.append(
+            _finding("AUDIO_FEATURE_SIZE_INVALID", "MEDIUM", "feature_size must be a positive bounded integer.")
+        )
+    if "max_length" in payload and not _is_valid_positive_int(
+        payload["max_length"], maximum=_AUDIO_MAX_LENGTH_REVIEW_THRESHOLD
+    ):
+        findings.append(
+            _finding("AUDIO_MAX_LENGTH_INVALID", "MEDIUM", "max_length must be a positive bounded integer.")
+        )
+
+    invalid_type_fields: list[str] = []
+    if "truncation" in payload and not isinstance(payload["truncation"], (bool, str)):
+        invalid_type_fields.append("truncation")
+    if "padding" in payload and not isinstance(payload["padding"], (bool, str)):
+        invalid_type_fields.append("padding")
+    if "return_attention_mask" in payload and not isinstance(payload["return_attention_mask"], bool):
+        invalid_type_fields.append("return_attention_mask")
+    if invalid_type_fields:
+        findings.append(
+            _finding(
+                "AUDIO_FIELD_TYPE_INVALID",
+                "MEDIUM",
+                f"audio option fields have invalid type: {', '.join(sorted(invalid_type_fields))}",
+            )
+        )
+
+    return findings
+
+
+def _looks_like_image_config(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in _IMAGE_DETECTION_KEYS)
+
+
+def _looks_like_audio_config(payload: dict[str, Any]) -> bool:
+    return any(key in payload for key in _AUDIO_DETECTION_KEYS)
+
+
+def _is_valid_component_ref(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return bool(value)
+    if isinstance(value, list):
+        return bool(value)
+    return False
+
+
+def _is_non_empty_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _is_valid_image_dimension_spec(value: Any) -> bool:
+    if _is_valid_positive_int(value, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD):
+        return True
+    if isinstance(value, dict):
+        numeric_values = [item for item in value.values() if isinstance(item, (int, float)) and not isinstance(item, bool)]
+        return bool(numeric_values) and all(
+            _is_valid_positive_int(item, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD) for item in numeric_values
+        )
+    if isinstance(value, list):
+        return bool(value) and all(
+            _is_valid_positive_int(item, maximum=_IMAGE_DIMENSION_REVIEW_THRESHOLD) for item in value
+        )
+    return False
+
+
+def _is_valid_image_stat(value: Any, *, allow_zero: bool) -> bool:
+    if not isinstance(value, list) or len(value) not in {1, 3, 4}:
+        return False
+    for item in value:
+        if not _is_number(item):
+            return False
+        numeric = float(item)
+        if allow_zero:
+            if numeric < -10.0 or numeric > 10.0:
+                return False
+        elif numeric <= 0.0 or numeric > 10.0:
+            return False
+    return True
+
+
+def _is_valid_positive_number(value: Any, *, maximum: float) -> bool:
+    return _is_number(value) and 0.0 < float(value) <= maximum
+
+
+def _is_valid_positive_int(value: Any, *, maximum: int) -> bool:
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        numeric = value
+    elif isinstance(value, str) and value.strip().isdigit():
+        numeric = int(value.strip())
+    else:
+        return False
+    return 0 < numeric <= maximum
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_valid_image_format(key: str, value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.lower()
+    if key == "channel_order":
+        return normalized in _CHANNEL_ORDER_VALUES
+    return normalized in _DATA_FORMAT_VALUES
 
 
 def _extract_chat_templates(file_kind: FileKind, source_text: str, payload: Any) -> list[str]:
@@ -677,6 +1582,8 @@ def _semantic_check_status(
         return "BASELINE_MISSING"
     if _sha256_text(source_text) != _sha256_text(baseline_text):
         return "REVIEW"
+    if _has_review_findings(findings):
+        return "REVIEW"
     return "PASSED"
 
 
@@ -705,6 +1612,79 @@ def _primary_reason_code(findings: list[dict[str, Any]]) -> str:
         if finding.get("severity") == "HIGH":
             return str(finding.get("code"))
     return "SEMANTIC_REVIEW_REQUIRED"
+
+
+def _has_review_findings(findings: list[dict[str, Any]]) -> bool:
+    ignored_codes = {"BASELINE_MISSING", "SEMANTIC_BASELINE_DELTA"}
+    for finding in findings:
+        if finding.get("code") in ignored_codes:
+            continue
+        if finding.get("severity") in {"LOW", "MEDIUM", "HIGH"}:
+            return True
+    return False
+
+
+def _semantic_finding_codes(findings: list[dict[str, Any]]) -> list[str]:
+    codes: list[str] = []
+    for finding in findings:
+        code = finding.get("code")
+        if isinstance(code, str) and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _normalize_sandbox_fuzz_result(
+    sandbox_fuzz_result: SemanticFuzzResult | Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    if sandbox_fuzz_result is None:
+        return None
+    if isinstance(sandbox_fuzz_result, SemanticFuzzResult):
+        return sandbox_fuzz_result.to_dict()
+    if isinstance(sandbox_fuzz_result, Mapping):
+        return dict(sandbox_fuzz_result)
+    return {
+        "schema_version": SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION,
+        "status": "ERROR",
+        "review_required": True,
+        "runtime_events": [
+            {
+                "event_type": "invalid_sandbox_fuzz_result",
+                "severity": "HIGH",
+                "message": "sandbox fuzz result must be a SemanticFuzzResult or mapping",
+                "metadata": {},
+            }
+        ],
+    }
+
+
+def _sandbox_fuzz_not_run() -> dict[str, Any]:
+    return {
+        "schema_version": SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION,
+        "status": "NOT_RUN",
+        "review_required": False,
+        "runner_interface": "opt_in_only",
+        "default_validation_path_imports_untrusted_processor": False,
+    }
+
+
+def _sandbox_fuzz_review_finding(sandbox_fuzz: dict[str, Any]) -> dict[str, Any]:
+    status = str(sandbox_fuzz.get("status") or "UNKNOWN")
+    cases = sandbox_fuzz.get("cases", [])
+    case_count = len(cases) if isinstance(cases, list) else 0
+    baseline_diff = sandbox_fuzz.get("baseline_diff", {})
+    baseline_available = (
+        baseline_diff.get("baseline_available")
+        if isinstance(baseline_diff, dict)
+        else None
+    )
+    return _finding(
+        "SANDBOX_FUZZ_EVIDENCE_REVIEW",
+        "MEDIUM",
+        (
+            "Sandbox fuzz evidence is opt-in review evidence only; "
+            f"status={status}, cases={case_count}, baseline_available={baseline_available}."
+        ),
+    )
 
 
 def _finding(code: str, severity: str, evidence: str) -> dict[str, Any]:

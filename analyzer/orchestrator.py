@@ -83,12 +83,20 @@ def run_validation_job(
     overall_decision = _overall_decision_from_status(overall_status)
     release_action = _release_action_from_status(overall_status)
 
-    approved_artifact_ids = [item.artifact.artifact_id for item in artifact_results if item.status is ValidationStatus.PASS]
-    blocked_artifact_ids = [item.artifact.artifact_id for item in artifact_results if item.status is ValidationStatus.BLOCK]
+    approved_artifact_ids = [
+        item.artifact.artifact_id
+        for item in artifact_results
+        if _effective_artifact_status(item) is ValidationStatus.PASS
+    ]
+    blocked_artifact_ids = [
+        item.artifact.artifact_id
+        for item in artifact_results
+        if _effective_artifact_status(item) is ValidationStatus.BLOCK
+    ]
     pending_artifact_ids = [
         item.artifact.artifact_id
         for item in artifact_results
-        if item.status in {ValidationStatus.PENDING_REVIEW, ValidationStatus.ERROR}
+        if _effective_artifact_status(item) in {ValidationStatus.PENDING_REVIEW, ValidationStatus.ERROR}
     ]
 
     summary_reason_entries = _build_summary_reason_entries(overall_status, artifact_results)
@@ -170,6 +178,12 @@ def dispatch_artifacts(
                     ast_call_metadata_loader=ast_call_metadata_loader,
                     source_resolver=source_resolver,
                     linked_code_result_collector=_collect_linked_code_result,
+                )
+            elif is_preprocessing_metadata_kind(artifact.file_kind):
+                result = validate_preprocessing_metadata_artifact(
+                    artifact=artifact,
+                    source=source,
+                    policy=policy,
                 )
             elif is_preprocessing_metadata_kind(artifact.file_kind):
                 result = validate_preprocessing_metadata_artifact(
@@ -590,13 +604,14 @@ def _dedupe(items: list[str]) -> list[str]:
 
 
 def _compute_overall_status(artifact_results: list[ArtifactValidationResult]) -> ValidationStatus:
-    if any(item.status is ValidationStatus.BLOCK for item in artifact_results):
+    effective_statuses = [_effective_artifact_status(item) for item in artifact_results]
+    if any(status is ValidationStatus.BLOCK for status in effective_statuses):
         return ValidationStatus.BLOCK
-    if any(item.status is ValidationStatus.ERROR for item in artifact_results):
+    if any(status is ValidationStatus.ERROR for status in effective_statuses):
         return ValidationStatus.ERROR
-    if any(item.status is ValidationStatus.PENDING_REVIEW for item in artifact_results):
+    if any(status is ValidationStatus.PENDING_REVIEW for status in effective_statuses):
         return ValidationStatus.PENDING_REVIEW
-    if artifact_results and all(item.status is ValidationStatus.PASS for item in artifact_results):
+    if artifact_results and all(status is ValidationStatus.PASS for status in effective_statuses):
         return ValidationStatus.PASS
     return ValidationStatus.ERROR
 
@@ -637,15 +652,31 @@ def _build_summary_reason_entries(
             )
         ]
     if overall_status is ValidationStatus.PENDING_REVIEW:
-        return [
+        entries = [
             ReasonEntry(
                 code="GRADE_B2_GATE_REQUIRED",
                 severity="MEDIUM",
                 message="at least one artifact requires review",
-                evidence=[item.artifact.repo_path for item in artifact_results if item.status is ValidationStatus.PENDING_REVIEW],
+                evidence=[
+                    item.artifact.repo_path
+                    for item in artifact_results
+                    if _effective_artifact_status(item) is ValidationStatus.PENDING_REVIEW
+                ],
                 review_required=True,
             )
         ]
+        semantic_evidence = _semantic_finding_evidence(artifact_results)
+        if semantic_evidence:
+            entries.append(
+                ReasonEntry(
+                    code="SEMANTIC_FINDING_REVIEW_REQUIRED",
+                    severity="MEDIUM",
+                    message="preprocessing semantic findings require review",
+                    evidence=semantic_evidence,
+                    review_required=True,
+                )
+            )
+        return entries
     if overall_status is ValidationStatus.ERROR:
         return [
             ReasonEntry(
@@ -657,6 +688,40 @@ def _build_summary_reason_entries(
             )
         ]
     return []
+
+
+def _effective_artifact_status(result: ArtifactValidationResult) -> ValidationStatus:
+    if result.status is ValidationStatus.BLOCK:
+        return ValidationStatus.BLOCK
+    if result.status is ValidationStatus.ERROR:
+        return ValidationStatus.ERROR
+    if _semantic_check_requires_review(result):
+        return ValidationStatus.PENDING_REVIEW
+    return result.status
+
+
+def _semantic_check_requires_review(result: ArtifactValidationResult) -> bool:
+    semantic_check = result.details.get("semantic_check", {})
+    if not isinstance(semantic_check, dict):
+        return False
+    return semantic_check.get("status") in {"REVIEW", "FAILED", "ERROR", "BASELINE_MISSING"}
+
+
+def _semantic_finding_evidence(artifact_results: list[ArtifactValidationResult]) -> list[str]:
+    evidence: list[str] = []
+    for result in artifact_results:
+        if _effective_artifact_status(result) is not ValidationStatus.PENDING_REVIEW:
+            continue
+        findings = result.details.get("semantic_findings", [])
+        if not isinstance(findings, list):
+            continue
+        for finding in findings:
+            if not isinstance(finding, dict):
+                continue
+            code = finding.get("code")
+            if isinstance(code, str):
+                evidence.append(f"{result.artifact.repo_path}:{code}")
+    return evidence
 
 
 def _has_context_block(artifact_results: list[ArtifactValidationResult]) -> bool:

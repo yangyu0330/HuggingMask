@@ -18,6 +18,7 @@ from analyzer.schemas import (
     ArtifactRef,
     ArtifactValidationResult,
     CodeGrade,
+    FileKind,
     PolicyInfo,
     ReasonEntry,
     ReviewAction,
@@ -26,6 +27,7 @@ from analyzer.schemas import (
 )
 from analyzer.snapshot_resolver import SnapshotResolveError
 from analyzer.validators.code_api_policy import WhitelistLookup
+from analyzer.validators.code_semantic import validate_preprocessing_metadata_artifact
 from analyzer.validators.code_validator import validate_python_artifact
 
 SourceLoader = Callable[[str], str | bytes | None] | Mapping[str, str | bytes]
@@ -114,6 +116,14 @@ def validate_config_artifact(
     linked_code_edges: list[dict[str, Any]] = []
     linked_statuses: list[str] = []
     linked_artifact_ids: list[str] = []
+    semantic_result: ArtifactValidationResult | None = None
+
+    if artifact.file_kind is FileKind.TOKENIZER_CONFIG_JSON:
+        semantic_result = validate_preprocessing_metadata_artifact(
+            artifact=artifact,
+            source=source,
+            policy=policy,
+        )
 
     if scan_result.schema_valid and scan_result.referenced_python_files:
         scan_result.rerouted_to_code_validation = True
@@ -194,7 +204,10 @@ def validate_config_artifact(
             )
             linked_code_edges.extend(_edges_for_code_result(targets=targets, code_result=code_result))
 
-    effective_status = _compute_effective_status(scan_result, linked_statuses)
+    effective_status = _combine_with_semantic_status(
+        _compute_effective_status(scan_result, linked_statuses),
+        semantic_result,
+    )
 
     details = {
         "config_scan": scan_result.to_dict(),
@@ -204,8 +217,12 @@ def validate_config_artifact(
         "linked_code_edges": linked_code_edges,
         "linked_code_artifact_ids": linked_artifact_ids,
         "linked_code_statuses": linked_statuses,
+        "semantic_findings": [],
+        "semantic_finding_codes": [],
         "effective_status": effective_status.value,
     }
+    if semantic_result is not None:
+        details.update(_semantic_details_for_config(semantic_result))
     if isinstance(config_payload, dict):
         details["config_field_count"] = len(config_payload)
 
@@ -214,13 +231,14 @@ def validate_config_artifact(
         rerouted=scan_result.rerouted_to_code_validation,
         effective_status=effective_status,
     )
+    reason_entries.extend(_semantic_reason_entries_for_config(semantic_result, effective_status))
 
     result = ArtifactValidationResult(
         artifact=artifact,
         route_kind=RouteKind.CONFIG_SCHEMA_VALIDATION,
         status=effective_status,
-        grade=CodeGrade.NA,
-        review_action=_review_action_for_status(effective_status),
+        grade=_grade_for_config_result(effective_status, semantic_result),
+        review_action=_review_action_for_config_result(effective_status, semantic_result),
         cache_key=_build_cache_key(artifact, policy),
         cache_hit=False,
         reason_entries=reason_entries,
@@ -504,6 +522,124 @@ def _compute_effective_status(scan_result: ConfigScanResult, linked_statuses: li
         return ValidationStatus.PENDING_REVIEW
 
     return ValidationStatus.PASS
+
+
+def _combine_with_semantic_status(
+    config_status: ValidationStatus,
+    semantic_result: ArtifactValidationResult | None,
+) -> ValidationStatus:
+    if config_status is ValidationStatus.BLOCK:
+        return ValidationStatus.BLOCK
+    if semantic_result is None:
+        return config_status
+    if semantic_result.status is ValidationStatus.BLOCK:
+        return ValidationStatus.BLOCK
+    if _semantic_check_requires_review(semantic_result):
+        return ValidationStatus.PENDING_REVIEW
+    if semantic_result.status in {ValidationStatus.ERROR, ValidationStatus.PENDING_REVIEW}:
+        return ValidationStatus.PENDING_REVIEW
+    return config_status
+
+
+def _semantic_details_for_config(semantic_result: ArtifactValidationResult) -> dict[str, Any]:
+    semantic_details = semantic_result.details
+    semantic_findings = semantic_details.get("semantic_findings", [])
+    return {
+        "semantic_check": semantic_details.get("semantic_check", {}),
+        "semantic_inventory": semantic_details.get("semantic_inventory", {}),
+        "semantic_findings": semantic_findings,
+        "semantic_finding_codes": _semantic_finding_codes(semantic_findings),
+        "semantic_route_kind": semantic_result.route_kind.value,
+        "semantic_status": semantic_result.status.value,
+        "semantic_grade": semantic_result.grade.value,
+        "semantic_review_action": semantic_result.review_action.value,
+    }
+
+
+def _semantic_reason_entries_for_config(
+    semantic_result: ArtifactValidationResult | None,
+    effective_status: ValidationStatus,
+) -> list[ReasonEntry]:
+    if semantic_result is None:
+        return []
+    if semantic_result.status is ValidationStatus.PASS and not _semantic_check_requires_review(semantic_result):
+        return []
+
+    entries: list[ReasonEntry] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for entry in semantic_result.reason_entries:
+        key = (entry.code, tuple(entry.evidence))
+        seen.add(key)
+        entries.append(
+            ReasonEntry(
+                code=entry.code,
+                severity=entry.severity,
+                message=entry.message,
+                evidence=list(entry.evidence),
+                review_required=effective_status is ValidationStatus.PENDING_REVIEW,
+            )
+        )
+    for finding in semantic_result.details.get("semantic_findings", []):
+        if not isinstance(finding, dict):
+            continue
+        code = str(finding.get("code") or "SEMANTIC_FINDING")
+        evidence = [str(item) for item in finding.get("evidence", [])]
+        key = (code, tuple(evidence))
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(
+            ReasonEntry(
+                code=code,
+                severity=str(finding.get("severity") or "MEDIUM"),
+                message=f"preprocessing semantic finding: {code}",
+                evidence=evidence,
+                review_required=effective_status is ValidationStatus.PENDING_REVIEW,
+            )
+        )
+    return entries
+
+
+def _semantic_check_requires_review(semantic_result: ArtifactValidationResult) -> bool:
+    semantic_check = semantic_result.details.get("semantic_check", {})
+    if not isinstance(semantic_check, dict):
+        return False
+    return semantic_check.get("status") in {"REVIEW", "FAILED", "ERROR", "BASELINE_MISSING"}
+
+
+def _semantic_finding_codes(semantic_findings: Any) -> list[str]:
+    if not isinstance(semantic_findings, list):
+        return []
+    codes: list[str] = []
+    for finding in semantic_findings:
+        if not isinstance(finding, dict):
+            continue
+        code = finding.get("code")
+        if isinstance(code, str) and code not in codes:
+            codes.append(code)
+    return codes
+
+
+def _grade_for_config_result(
+    effective_status: ValidationStatus,
+    semantic_result: ArtifactValidationResult | None,
+) -> CodeGrade:
+    if effective_status is ValidationStatus.BLOCK:
+        return CodeGrade.NA
+    if semantic_result is not None and semantic_result.grade is CodeGrade.C:
+        return CodeGrade.C
+    return CodeGrade.NA
+
+
+def _review_action_for_config_result(
+    effective_status: ValidationStatus,
+    semantic_result: ArtifactValidationResult | None,
+) -> ReviewAction:
+    if effective_status is ValidationStatus.BLOCK:
+        return ReviewAction.BLOCK_IMMEDIATELY
+    if semantic_result is not None and semantic_result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED:
+        return ReviewAction.MANUAL_REVIEW_REQUIRED
+    return _review_action_for_status(effective_status)
 
 
 def _build_reason_entries(

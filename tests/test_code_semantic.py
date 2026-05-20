@@ -2,7 +2,17 @@ import json
 
 from analyzer.classifier import build_artifact_ref
 from analyzer.schemas import CodeGrade, PolicyInfo, ReviewAction, RouteKind, ValidationStatus
-from analyzer.validators.code_semantic import validate_preprocessing_metadata_artifact
+from analyzer.validators.code_semantic import (
+    SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION,
+    SemanticFuzzBaselineDiff,
+    SemanticFuzzCaseEvidence,
+    SemanticFuzzOutputSnapshot,
+    SemanticFuzzPrerequisites,
+    SemanticFuzzResult,
+    SemanticFuzzRunnerConfig,
+    SemanticFuzzRuntimeEvent,
+    validate_preprocessing_metadata_artifact,
+)
 
 
 def _make_policy() -> PolicyInfo:
@@ -12,6 +22,74 @@ def _make_policy() -> PolicyInfo:
         opcode_policy_version="opcode-2026.04.20",
         config_schema_version="cfg-2026.04.20",
         runtime_profile_version="rt-2026.04.20",
+    )
+
+
+def _make_fuzz_result(*, baseline_available: bool = False) -> SemanticFuzzResult:
+    return SemanticFuzzResult(
+        target_kind="tokenizer",
+        runner_config=SemanticFuzzRunnerConfig(
+            revision_pin="main@0123456789abcdef",
+            offline_mode=True,
+            network_disabled=True,
+            read_only_snapshot=True,
+            cpu_budget_cores=1.0,
+            memory_budget_mb=512,
+            time_budget_ms=5_000,
+        ),
+        prerequisites=SemanticFuzzPrerequisites(
+            phase0_static_validation_passed=True,
+            python_import_closure_status="PASS",
+            python_import_closure_artifact_ids=["sha256:closure"],
+            notes=["Phase 0 import closure passed before opt-in fuzz runner eligibility."],
+        ),
+        cases=[
+            SemanticFuzzCaseEvidence(
+                case_id="text-basic",
+                input_kind="text",
+                input_hash="sha256:input",
+                media_placeholder_count=1,
+                outputs=[
+                    SemanticFuzzOutputSnapshot(
+                        output_key="input_ids",
+                        shape=[1, 4],
+                        dtype="int64",
+                        token_count=4,
+                        special_token_mask=[1, 0, 0, 1],
+                        offset_mapping=[[0, 0], [0, 5], [6, 11], [0, 0]],
+                        media_placeholder_count=1,
+                    )
+                ],
+                runtime_events=[
+                    SemanticFuzzRuntimeEvent(
+                        event_type="runner_event",
+                        message="captured tokenizer output snapshot",
+                    )
+                ],
+            )
+        ],
+        baseline_diff=SemanticFuzzBaselineDiff(
+            baseline_available=baseline_available,
+            baseline_revision_pin="baseline@fedcba9876543210" if baseline_available else None,
+            baseline_input_hash="sha256:input" if baseline_available else None,
+            output_diffs=[
+                {
+                    "output_key": "input_ids",
+                    "diff_type": "token_count_delta",
+                    "current": 4,
+                    "baseline": 3,
+                }
+            ]
+            if baseline_available
+            else [],
+        ),
+        runtime_events=[
+            SemanticFuzzRuntimeEvent(
+                event_type="sandbox_config",
+                message="network disabled and read-only snapshot requested",
+                metadata={"network_disabled": True, "read_only_snapshot": True},
+            )
+        ],
     )
 
 
@@ -108,6 +186,156 @@ def test_tokenizer_config_json_inventory_records_options_added_tokens_and_chat_t
     assert inventory["chat_template"]["hint_details"]["assistant"] is True
 
 
+def test_special_token_collision_records_invariant_finding() -> None:
+    source = json.dumps({"bos_token": "<s>", "eos_token": "<s>", "unk_token": "<unk>"})
+    artifact = build_artifact_ref("special_tokens_map.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_SPECIAL_TOKEN_COLLISION" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_additional_special_token_collision_records_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "additional_special_tokens": ["<image>", "</s>"],
+        }
+    )
+    artifact = build_artifact_ref("special_tokens_map.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_ADDITIONAL_SPECIAL_TOKEN_COLLISION" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_added_token_duplicate_id_and_content_record_invariant_findings() -> None:
+    source = json.dumps(
+        [
+            {"id": 32000, "content": "<image>", "special": True},
+            {"id": 32000, "content": "<image>", "special": True},
+        ]
+    )
+    artifact = build_artifact_ref("added_tokens.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_ID" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_DUPLICATE_CONTENT" in finding_codes
+
+
+def test_split_special_tokens_true_records_invariant_finding() -> None:
+    source = json.dumps({"split_special_tokens": True})
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_SPLIT_SPECIAL_TOKENS_ENABLED" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_added_token_lstrip_rstrip_normalized_false_record_invariant_findings() -> None:
+    source = json.dumps(
+        [
+            {
+                "id": 32000,
+                "content": "<control>",
+                "lstrip": True,
+                "rstrip": True,
+                "normalized": False,
+            }
+        ]
+    )
+    artifact = build_artifact_ref("added_tokens.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_ADDED_TOKEN_LSTRIP_ENABLED" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_RSTRIP_ENABLED" in finding_codes
+    assert "TOKENIZER_ADDED_TOKEN_NORMALIZED_FALSE" in finding_codes
+
+
+def test_model_max_length_abnormal_records_invariant_finding() -> None:
+    source = json.dumps({"model_max_length": 10**30})
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_MODEL_MAX_LENGTH_ABNORMAL" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_invalid_padding_side_and_truncation_side_record_invariant_findings() -> None:
+    source = json.dumps({"padding_side": "middle", "truncation_side": "center"})
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "TOKENIZER_INVALID_PADDING_SIDE" in finding_codes
+    assert "TOKENIZER_INVALID_TRUNCATION_SIDE" in finding_codes
+
+
 def test_added_tokens_json_inventory_records_added_token_options() -> None:
     source = json.dumps(
         {
@@ -155,6 +383,452 @@ def test_merges_txt_inventory_records_merge_rule_count() -> None:
     assert inventory["merge_rule_count"] == 3
     assert inventory["key_fields"]["merge_rule_count"] == 3
     assert inventory["merge_rules"]["sample"] == ["h e", "he llo", "w orld"]
+
+
+def test_preprocessor_config_image_inventory_records_image_fields_and_hints() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 336, "width": 336},
+            "crop_size": {"height": 224, "width": 224},
+            "do_rescale": True,
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": True,
+            "image_mean": [0.48145466, 0.4578275, 0.40821073],
+            "image_std": [0.26862954, 0.26130258, 0.27577711],
+            "channel_order": "RGB",
+            "data_format": "channels_first",
+            "input_data_format": "channels_last",
+            "image_processor_type": "CLIPImageProcessor",
+            "backend": "pil",
+            "use_fast": False,
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    inventory = result.details["semantic_inventory"]
+    image = inventory["image"]
+    assert image["fields"]["do_resize"] is True
+    assert image["fields"]["size"] == {"height": 336, "width": 336}
+    assert image["fields"]["crop_size"] == {"height": 224, "width": 224}
+    assert image["fields"]["do_rescale"] is True
+    assert image["fields"]["rescale_factor"] == 0.00392156862745098
+    assert image["fields"]["do_normalize"] is True
+    assert image["fields"]["image_mean"] == [0.48145466, 0.4578275, 0.40821073]
+    assert image["fields"]["image_std"] == [0.26862954, 0.26130258, 0.27577711]
+    assert image["fields"]["channel_order"] == "RGB"
+    assert image["fields"]["data_format"] == "channels_first"
+    assert image["fields"]["input_data_format"] == "channels_last"
+    assert image["hints"]["image_processor_type"] == "CLIPImageProcessor"
+    assert image["hints"]["backend"] == "pil"
+    assert image["hints"]["use_fast"] is False
+
+
+def test_preprocessor_config_audio_inventory_records_audio_fields() -> None:
+    source = json.dumps(
+        {
+            "sampling_rate": 16000,
+            "padding_value": 0.0,
+            "do_normalize": True,
+            "feature_size": 80,
+            "return_attention_mask": True,
+            "max_length": 3000,
+            "truncation": True,
+            "padding": "max_length",
+            "pad_to_multiple_of": 8,
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    audio = result.details["semantic_inventory"]["audio"]
+    assert audio["fields"]["sampling_rate"] == 16000
+    assert audio["fields"]["padding_value"] == 0.0
+    assert audio["fields"]["do_normalize"] is True
+    assert audio["fields"]["feature_size"] == 80
+    assert audio["fields"]["return_attention_mask"] is True
+    assert audio["fields"]["max_length"] == 3000
+    assert audio["fields"]["truncation"] is True
+    assert audio["fields"]["padding"] == "max_length"
+    assert audio["fields"]["pad_to_multiple_of"] == 8
+
+
+def test_processor_config_class_reference_inventory_records_components() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "tokenizer_class": "DemoTokenizer",
+            "image_processor_class": "DemoImageProcessor",
+            "feature_extractor_class": "DemoFeatureExtractor",
+            "tokenizer": {"tokenizer_class": "DemoTokenizer", "name_or_path": "org/demo-tokenizer"},
+            "image_processor": {"image_processor_class": "DemoImageProcessor"},
+            "feature_extractor": {"feature_extractor_class": "DemoFeatureExtractor"},
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    processor = result.details["semantic_inventory"]["processor"]
+    assert processor["classes"] == {
+        "processor_class": "DemoProcessor",
+        "tokenizer_class": "DemoTokenizer",
+        "image_processor_class": "DemoImageProcessor",
+        "feature_extractor_class": "DemoFeatureExtractor",
+    }
+    assert processor["component_refs"]["tokenizer"]["tokenizer_class"] == "DemoTokenizer"
+    assert processor["component_refs"]["tokenizer"]["name_or_path"] == "org/demo-tokenizer"
+    assert processor["component_refs"]["image_processor"]["image_processor_class"] == "DemoImageProcessor"
+    assert processor["component_refs"]["feature_extractor"]["feature_extractor_class"] == "DemoFeatureExtractor"
+
+
+def test_processor_config_chat_template_records_processor_inventory_and_findings() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "chat_template": (
+                "{% for message in messages %}"
+                "{% if message['role'] == 'system' %}<|system|>{{ message['content'] }}"
+                "{% elif message['role'] == 'user' %}<|user|>{{ message['content'] }}"
+                "{% endif %}{% endfor %}"
+                "{% if add_generation_prompt %}<|assistant|>{% endif %}"
+            ),
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    processor = result.details["semantic_inventory"]["processor"]
+    assert processor["has_chat_template"] is True
+    assert processor["chat_template"]["hint_details"]["system"] is True
+    assert processor["chat_template"]["hint_details"]["user"] is True
+    assert processor["chat_template"]["hint_details"]["assistant"] is True
+    assert processor["chat_template"]["hint_details"]["add_generation_prompt"] is True
+    assert "CHAT_TEMPLATE_PRESENT" in finding_codes
+    assert "CHAT_TEMPLATE_SYSTEM_ROLE_LITERAL" in finding_codes
+    assert "CHAT_TEMPLATE_USER_ROLE_LITERAL" in finding_codes
+    assert "CHAT_TEMPLATE_ASSISTANT_ROLE_LITERAL" in finding_codes
+    assert "CHAT_TEMPLATE_ADD_GENERATION_PROMPT_PRESENT" in finding_codes
+
+
+def test_invalid_image_size_and_crop_size_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 0, "width": 224},
+            "crop_size": "large",
+            "do_rescale": True,
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": True,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_SIZE_INVALID" in finding_codes
+    assert "IMAGE_CROP_SIZE_INVALID" in finding_codes
+
+
+def test_invalid_image_mean_and_std_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": 224,
+            "crop_size": 224,
+            "do_normalize": True,
+            "image_mean": [0.5, 99.0],
+            "image_std": [0.5, 0.0, 0.5],
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_MEAN_INVALID" in finding_codes
+    assert "IMAGE_STD_INVALID" in finding_codes
+
+
+def test_invalid_rescale_factor_records_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": 224,
+            "crop_size": 224,
+            "do_rescale": True,
+            "rescale_factor": 0,
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_RESCALE_FACTOR_INVALID" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_invalid_image_bool_type_fields_record_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "do_resize": "yes",
+            "size": 224,
+            "crop_size": 224,
+            "do_rescale": "true",
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": "false",
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_BOOL_FIELD_INVALID" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_invalid_channel_and_data_format_record_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": 224,
+            "crop_size": 224,
+            "channel_order": "CMYK",
+            "data_format": "NHWC",
+            "input_data_format": "NCHW",
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_FORMAT_INVALID" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_invalid_audio_sampling_rate_records_invariant_finding() -> None:
+    source = json.dumps({"sampling_rate": 999999, "padding_value": 0.0, "feature_size": 80})
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "AUDIO_SAMPLING_RATE_INVALID" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_invalid_audio_padding_value_feature_size_and_max_length_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "sampling_rate": 16000,
+            "padding_value": "0",
+            "feature_size": 0,
+            "max_length": -1,
+            "truncation": {"enabled": True},
+            "padding": {"strategy": "max_length"},
+            "return_attention_mask": "yes",
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "AUDIO_PADDING_VALUE_INVALID" in finding_codes
+    assert "AUDIO_FEATURE_SIZE_INVALID" in finding_codes
+    assert "AUDIO_MAX_LENGTH_INVALID" in finding_codes
+    assert "AUDIO_FIELD_TYPE_INVALID" in finding_codes
+
+
+def test_invalid_processor_component_refs_record_invariant_findings() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "tokenizer_class": "DemoTokenizer",
+            "image_processor_class": 123,
+            "image_processor": [],
+            "feature_extractor_class": "DemoFeatureExtractor",
+            "feature_extractor": 42,
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "PROCESSOR_CLASS_REFERENCE_INVALID" in finding_codes
+    assert "PROCESSOR_COMPONENT_REF_MISSING" in finding_codes
+    assert "PROCESSOR_COMPONENT_REF_INVALID" in finding_codes
+
+
+def test_processor_chat_template_media_placeholder_records_invariant_finding() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "chat_template": (
+                "{% for message in messages %}<|user|>{{ message['content'] }}{% endfor %}"
+                "{% if image %}<image>{{ image }}{% endif %}"
+                "{% if video %}<video>{{ video }}{% endif %}"
+                "{% if audio %}<audio>{{ audio }}{% endif %}"
+            ),
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "PROCESSOR_CHAT_TEMPLATE_MEDIA_LITERAL" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_baseline_match_with_processor_invariant_finding_is_review() -> None:
+    source = json.dumps({"do_resize": True, "size": 0, "crop_size": 224})
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "IMAGE_SIZE_INVALID" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_baseline_match_without_processor_invariant_finding_can_pass() -> None:
+    source = json.dumps(
+        {
+            "do_resize": True,
+            "size": {"height": 224, "width": 224},
+            "crop_size": {"height": 224, "width": 224},
+            "do_rescale": True,
+            "rescale_factor": 0.00392156862745098,
+            "do_normalize": True,
+            "image_mean": [0.5, 0.5, 0.5],
+            "image_std": [0.5, 0.5, 0.5],
+            "channel_order": "RGB",
+            "data_format": "channels_first",
+            "input_data_format": "channels_last",
+        }
+    )
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+    )
+
+    assert result.grade is CodeGrade.B1
+    assert result.status is ValidationStatus.PASS
+    assert result.details["semantic_check"]["status"] == "PASSED"
+
+
+def test_metadata_url_or_path_like_literal_records_network_or_path_finding() -> None:
+    source = json.dumps(
+        {
+            "processor_class": "DemoProcessor",
+            "tokenizer": {"name_or_path": "https://huggingface.co/org/demo"},
+            "local_resource": "../relative/path/resource.json",
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert "NETWORK_OR_PATH_REVIEW" in [item["code"] for item in result.details["semantic_findings"]]
+
+
+def test_preprocessor_config_without_baseline_is_b2_pending_review() -> None:
+    source = json.dumps({"do_resize": True, "size": 224})
+    artifact = build_artifact_ref("preprocessor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.B2
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert "BASELINE_MISSING" in [item["code"] for item in result.details["semantic_findings"]]
 
 
 def test_baseline_match_can_pass_semantic_metadata_gate() -> None:
@@ -244,3 +918,159 @@ def test_hidden_system_injection_is_c_pending_review() -> None:
     assert "CHAT_TEMPLATE_HIDDEN_SYSTEM_INJECTION" in [
         item["code"] for item in result.details["semantic_findings"]
     ]
+
+
+def test_sandbox_fuzz_evidence_schema_serializes_tokenizer_outputs() -> None:
+    fuzz_result = _make_fuzz_result(baseline_available=True)
+    payload = fuzz_result.to_dict()
+
+    json.loads(json.dumps(payload))
+
+    assert payload["schema_version"] == SANDBOX_FUZZ_EVIDENCE_SCHEMA_VERSION
+    assert payload["target_kind"] == "tokenizer"
+    assert payload["cases"][0]["input_hash"] == "sha256:input"
+    assert payload["cases"][0]["outputs"][0]["output_key"] == "input_ids"
+    assert payload["cases"][0]["outputs"][0]["shape"] == [1, 4]
+    assert payload["cases"][0]["outputs"][0]["dtype"] == "int64"
+    assert payload["cases"][0]["outputs"][0]["token_count"] == 4
+    assert payload["cases"][0]["outputs"][0]["special_token_mask"] == [1, 0, 0, 1]
+    assert payload["cases"][0]["outputs"][0]["offset_mapping"] == [[0, 0], [0, 5], [6, 11], [0, 0]]
+    assert payload["cases"][0]["media_placeholder_count"] == 1
+    assert payload["runtime_events"][0]["event_type"] == "sandbox_config"
+    assert payload["baseline_diff"]["baseline_available"] is True
+    assert payload["baseline_diff"]["output_diffs"][0]["output_key"] == "input_ids"
+
+
+def test_sandbox_fuzz_evidence_schema_serializes_processor_outputs() -> None:
+    fuzz_result = SemanticFuzzResult(
+        target_kind="processor",
+        runner_config=SemanticFuzzRunnerConfig(revision_pin="main@0123456789abcdef"),
+        prerequisites=SemanticFuzzPrerequisites(
+            phase0_static_validation_passed=True,
+            python_import_closure_status="PASS",
+            python_import_closure_artifact_ids=["sha256:processor-closure"],
+        ),
+        cases=[
+            SemanticFuzzCaseEvidence(
+                case_id="image-audio-basic",
+                input_kind="image+audio",
+                input_hash="sha256:processor-input",
+                media_placeholder_count=2,
+                outputs=[
+                    SemanticFuzzOutputSnapshot(
+                        output_key="pixel_values",
+                        shape=[1, 3, 224, 224],
+                        dtype="float32",
+                        media_placeholder_count=1,
+                    ),
+                    SemanticFuzzOutputSnapshot(
+                        output_key="input_features",
+                        shape=[1, 80, 3000],
+                        dtype="float32",
+                        token_count=None,
+                        media_placeholder_count=1,
+                    ),
+                ],
+                runtime_events=[
+                    SemanticFuzzRuntimeEvent(
+                        event_type="media_placeholder_count",
+                        message="processor emitted image/audio output snapshots",
+                    )
+                ],
+            )
+        ],
+        baseline_diff=SemanticFuzzBaselineDiff(baseline_available=False),
+    )
+    payload = fuzz_result.to_dict()
+
+    json.loads(json.dumps(payload))
+
+    assert payload["target_kind"] == "processor"
+    assert payload["cases"][0]["input_hash"] == "sha256:processor-input"
+    assert payload["cases"][0]["media_placeholder_count"] == 2
+    assert payload["cases"][0]["outputs"][0]["output_key"] == "pixel_values"
+    assert payload["cases"][0]["outputs"][0]["shape"] == [1, 3, 224, 224]
+    assert payload["cases"][0]["outputs"][1]["output_key"] == "input_features"
+    assert payload["cases"][0]["runtime_events"][0]["event_type"] == "media_placeholder_count"
+
+
+def test_sandbox_fuzz_config_records_isolation_revision_and_budget_fields() -> None:
+    config = SemanticFuzzRunnerConfig(
+        revision_pin="refs/pr/1@0123456789abcdef",
+        offline_mode=True,
+        network_disabled=True,
+        read_only_snapshot=True,
+        cpu_budget_cores=0.5,
+        memory_budget_mb=256,
+        time_budget_ms=2_000,
+    )
+    payload = config.to_dict()
+
+    assert payload["revision_pin"] == "refs/pr/1@0123456789abcdef"
+    assert payload["offline_mode"] is True
+    assert payload["network_disabled"] is True
+    assert payload["read_only_snapshot"] is True
+    assert payload["sandbox_runtime"] == "gvisor"
+    assert payload["cpu_budget_cores"] == 0.5
+    assert payload["memory_budget_mb"] == 256
+    assert payload["time_budget_ms"] == 2_000
+    assert payload["require_phase0_import_closure_passed"] is True
+
+
+def test_sandbox_fuzz_evidence_without_baseline_does_not_create_pass() -> None:
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "model_max_length": 2048,
+            "padding_side": "right",
+            "truncation_side": "right",
+        }
+    )
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        sandbox_fuzz_result=_make_fuzz_result(baseline_available=False),
+    )
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.SECURITY_OWNER_GATE
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    assert result.details["sandbox_fuzz"]["baseline_diff"]["baseline_available"] is False
+    assert "SANDBOX_FUZZ_EVIDENCE_REVIEW" in [
+        item["code"] for item in result.details["semantic_findings"]
+    ]
+
+
+def test_sandbox_fuzz_result_is_exposed_as_semantic_review_evidence() -> None:
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "model_max_length": 2048,
+            "padding_side": "right",
+            "truncation_side": "right",
+        }
+    )
+    artifact = build_artifact_ref("tokenizer_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(
+        artifact,
+        source,
+        _make_policy(),
+        baseline_source=source,
+        sandbox_fuzz_result=_make_fuzz_result(baseline_available=True),
+    )
+
+    finding_codes = [item["code"] for item in result.details["semantic_findings"]]
+
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "REVIEW"
+    assert "SANDBOX_FUZZ_EVIDENCE_REVIEW" in finding_codes
+    assert "SANDBOX_FUZZ_EVIDENCE_REVIEW" in result.details["semantic_finding_codes"]
+    assert result.details["sandbox_fuzz"]["review_required"] is True
+    assert result.details["sandbox_fuzz"]["prerequisites"]["phase0_static_validation_passed"] is True
+    assert result.details["sandbox_fuzz"]["prerequisites"]["python_import_closure_status"] == "PASS"
