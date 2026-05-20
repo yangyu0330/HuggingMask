@@ -128,6 +128,23 @@ def test_overlapping_input_and_output_mounts_are_rejected(tmp_path: Path) -> Non
         build_docker_create_command(job)
 
 
+def test_overlapping_input_and_output_mounts_are_rejected_without_repo_root(tmp_path: Path) -> None:
+    shared_dir = tmp_path / "shared"
+    shared_dir.mkdir()
+    job = B2SandboxJob(
+        request_id="req",
+        job_id="job",
+        input_dir=shared_dir,
+        output_dir=shared_dir,
+        nonce="nonce",
+        config=_config(),
+        repo_root=None,
+    )
+
+    with pytest.raises(ValueError, match="separate input and output mounts"):
+        build_docker_create_command(job)
+
+
 def test_env_uses_explicit_allowlist_without_pythonpath_or_host_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HF_TOKEN", "host-secret")
     monkeypatch.setenv("PYTHONPATH", "/host/repo")

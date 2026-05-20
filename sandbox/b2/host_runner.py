@@ -277,15 +277,15 @@ def _validate_env_allowlist(env: Mapping[str, str]) -> None:
 
 
 def _validate_job_mounts(job: B2SandboxJob) -> None:
+    input_dir = job.input_dir.resolve(strict=False)
+    output_dir = job.output_dir.resolve(strict=False)
+    if _paths_overlap(input_dir, output_dir):
+        raise ValueError("B-2 host runner requires separate input and output mounts")
     if job.repo_root is None:
         return
     repo_root = job.repo_root.resolve(strict=False)
-    input_dir = job.input_dir.resolve(strict=False)
-    output_dir = job.output_dir.resolve(strict=False)
     if input_dir == repo_root or output_dir == repo_root:
         raise ValueError("B-2 host runner refuses to mount the whole repository root")
-    if _paths_overlap(input_dir, output_dir):
-        raise ValueError("B-2 host runner requires separate input and output mounts")
 
 
 def _bind_mount_arg(host_path: Path, container_path: str, mode: str) -> str:
