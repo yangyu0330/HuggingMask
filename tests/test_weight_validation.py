@@ -845,15 +845,49 @@ def test_modelscan_wrapper_normalizes_issue_shapes(monkeypatch: pytest.MonkeyPat
     class FakeModelScanModule:
         ModelScan = FakeScanner
 
+    import_calls = []
+
     def fake_import_module(name: str):
-        assert name == "modelscan"
+        import_calls.append(name)
+        assert name == "modelscan.modelscan"
         return FakeModelScanModule
 
     monkeypatch.setattr(modelscan_wrapper, "import_module", fake_import_module)
 
     result = modelscan_wrapper.scan_with_modelscan("dummy.pkl")
 
+    assert import_calls == ["modelscan.modelscan"]
     assert result["status"] == "BLOCK"
     assert result["reason_code"] == "PICKLE_MODELSCAN_BLOCKED"
     assert result["severities"] == ["HIGH"]
     assert result["issues"][0]["category"] == "pickle"
+
+
+def test_modelscan_wrapper_falls_back_to_legacy_top_level_import(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    class FakeScanner:
+        def scan(self, path: str):
+            return {"issues": []}
+
+    class FakeModelScanModule:
+        ModelScan = FakeScanner
+
+    import_calls = []
+
+    def fake_import_module(name: str):
+        import_calls.append(name)
+        if name == "modelscan.modelscan":
+            raise ImportError("no submodule")
+        if name == "modelscan":
+            return FakeModelScanModule
+
+        raise AssertionError(f"unexpected module import: {name}")
+
+    monkeypatch.setattr(modelscan_wrapper, "import_module", fake_import_module)
+
+    result = modelscan_wrapper.scan_with_modelscan("dummy.pkl")
+
+    assert import_calls == ["modelscan.modelscan", "modelscan"]
+    assert result["status"] == "PASS"
+    assert result["reason_code"] == "MODELSCAN_NO_ISSUE"

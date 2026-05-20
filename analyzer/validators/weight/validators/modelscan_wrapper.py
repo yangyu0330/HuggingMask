@@ -5,12 +5,17 @@ from typing import Any
 
 
 def _load_modelscan():
-    try:
-        module = import_module("modelscan")
-    except ImportError:
-        return None
+    for module_name in ("modelscan.modelscan", "modelscan"):
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            continue
 
-    return getattr(module, "ModelScan", None)
+        model_scan = getattr(module, "ModelScan", None)
+        if model_scan is not None:
+            return model_scan
+
+    return None
 
 
 def _get_value(obj: Any, name: str):
