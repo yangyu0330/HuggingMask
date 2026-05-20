@@ -218,6 +218,137 @@ class TestBulkScripts:
 
 
 # ─────────────────────────────────────────────
+# PR #20 리뷰 응답 회귀 — bulk 스크립트 논리 오류 2건
+#   (양유상 2026-05-18 inline: bulk_approve.py:66 응답 미검증 /
+#    bulk_conditional.py:110 pagination offset 버그)
+# ─────────────────────────────────────────────
+
+import httpx
+
+
+class _FakeWhitelistAPI:
+    """httpx.MockTransport용 가짜 화이트리스트 서버.
+
+    /pending 은 offset/limit 페이지네이션을 실제로 수행하고,
+    /review approve 는 해당 api_path를 pending에서 제거한다.
+    fail_paths 에 든 api_path는 500을 반환하고 pending에 그대로 남긴다.
+    """
+
+    def __init__(self, pending: list[dict], fail_paths: set[str] | None = None):
+        # api_path -> item
+        self.pending = {it["api_path"]: it for it in pending}
+        self.fail_paths = fail_paths or set()
+        self.review_calls = 0
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        url = request.url
+        if url.path.endswith("/stats"):
+            return httpx.Response(200, json={
+                "approved_active": 0, "pending_review": len(self.pending),
+                "blocked": 0, "whitelist_version": 1,
+            })
+        if url.path.endswith("/pending"):
+            offset = int(url.params.get("offset", 0))
+            limit = int(url.params.get("limit", 50))
+            items = list(self.pending.values())[offset:offset + limit]
+            return httpx.Response(200, json={"items": items})
+        if url.path.endswith("/review"):
+            import json as _json
+            body = _json.loads(request.content)
+            path = body["api_path"]
+            self.review_calls += 1
+            if path in self.fail_paths:
+                return httpx.Response(500, json={"applied": False})
+            # 승인 → pending에서 제거 (목록이 줄어든다)
+            self.pending.pop(path, None)
+            return httpx.Response(200, json={"applied": True})
+        return httpx.Response(404)
+
+
+class TestBulkApproveResponseValidation:
+    """bulk_approve.py:66 — /review 응답을 검증해야 한다."""
+
+    def _client(self, api: _FakeWhitelistAPI) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(api.handler))
+
+    def test_failed_approval_not_counted(self):
+        """500 응답 항목은 승인 카운트에 포함되지 않는다."""
+        import scripts.bulk_approve as ba
+        items = [
+            {"api_path": f"torch.nn.Ok{i}"} for i in range(3)
+        ] + [{"api_path": "torch.nn.Bad"}]
+        api = _FakeWhitelistAPI(items, fail_paths={"torch.nn.Bad"})
+        with self._client(api) as c:
+            n = ba.bulk_approve_auto(c, "http://x/internal/v1")
+        assert n == 3, "실패 항목까지 카운트하면 안 됨"
+
+    def test_failed_item_does_not_loop_forever(self):
+        """실패해 pending에 남는 항목이 무한 재시도되지 않는다."""
+        import scripts.bulk_approve as ba
+        api = _FakeWhitelistAPI(
+            [{"api_path": "torch.nn.Bad"}], fail_paths={"torch.nn.Bad"},
+        )
+        with self._client(api) as c:
+            n = ba.bulk_approve_auto(c, "http://x/internal/v1")
+        assert n == 0
+        # 한 번만 시도하고 종료 (무한 루프 아님)
+        assert api.review_calls == 1
+
+    def test_all_success_counted(self):
+        import scripts.bulk_approve as ba
+        api = _FakeWhitelistAPI([{"api_path": f"torch.nn.L{i}"} for i in range(120)])
+        with self._client(api) as c:
+            n = ba.bulk_approve_auto(c, "http://x/internal/v1")
+        assert n == 120
+
+
+class TestBulkConditionalPagination:
+    """bulk_conditional.py:110 — pagination offset 버그.
+
+    승인하면서 목록이 줄어드는데 offset += 50 하면 항목을 건너뛴다.
+    collect-then-process로 모든 안전 대상이 처리돼야 한다.
+    """
+
+    def _client(self, api: _FakeWhitelistAPI) -> httpx.Client:
+        return httpx.Client(transport=httpx.MockTransport(api.handler))
+
+    def test_all_safe_targets_approved_across_pages(self):
+        import scripts.bulk_conditional as bc
+        # 60개 전부 안전 namespace → 두 페이지에 걸침. 옛 버그면 일부 누락.
+        items = [{"api_path": f"torch.optim.Opt{i}", "risk_keywords": []}
+                 for i in range(60)]
+        api = _FakeWhitelistAPI(items)
+        with self._client(api) as c:
+            collected = bc.collect_pending(c, "http://x/internal/v1")
+            approved = sum(
+                1 for it in collected
+                if bc._is_safe_conditional(it)
+                and bc._apply_review(c, "http://x/internal/v1",
+                                     it["api_path"], "tester")
+            )
+        assert approved == 60, "pagination 누락 — 60개 전부 승인돼야 함"
+
+    def test_collect_pending_paginates_fully(self):
+        import scripts.bulk_conditional as bc
+        items = [{"api_path": f"torch.optim.Opt{i}", "risk_keywords": []}
+                 for i in range(130)]
+        api = _FakeWhitelistAPI(items)
+        with self._client(api) as c:
+            collected = bc.collect_pending(c, "http://x/internal/v1")
+        assert len(collected) == 130
+
+    def test_unsafe_namespace_skipped(self):
+        import scripts.bulk_conditional as bc
+        item = {"api_path": "evil.module.run", "risk_keywords": []}
+        assert bc._is_safe_conditional(item) is False
+
+    def test_risk_keyword_skipped(self):
+        import scripts.bulk_conditional as bc
+        item = {"api_path": "torch.optim.load_state", "risk_keywords": []}
+        assert bc._is_safe_conditional(item) is False  # load 키워드
+
+
+# ─────────────────────────────────────────────
 # 데모 시나리오 — 대시보드 흐름 (TestClient로 Pending → review)
 # ─────────────────────────────────────────────
 

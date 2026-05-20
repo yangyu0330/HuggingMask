@@ -42,6 +42,71 @@ SKIP_KEYWORDS: frozenset[str] = frozenset({
 })
 
 
+def collect_pending(client: httpx.Client, base: str) -> list[dict]:
+    """CONDITIONAL + PENDING 전체를 read-only로 수집.
+
+    승인 작업을 수집과 분리한다. 같은 루프에서 승인하면 PENDING 목록이
+    줄어들면서 ``offset += 50``이 아직 처리 안 한 항목을 건너뛴다.
+    수집 단계는 목록을 변경하지 않으므로 offset 페이지네이션이 안정적이다.
+    """
+    collected: list[dict] = []
+    offset = 0
+    while True:
+        r = client.get(
+            f"{base}/pending",
+            params={
+                "classification": "CONDITIONAL",
+                "review_status": "PENDING",
+                "limit": 50,
+                "offset": offset,
+            },
+        )
+        r.raise_for_status()
+        items = r.json().get("items", [])
+        if not items:
+            break
+        collected.extend(items)
+        offset += 50
+    return collected
+
+
+def _is_safe_conditional(item: dict) -> bool:
+    path = item["api_path"]
+    if not any(path.startswith(ns) for ns in SAFE_NAMESPACES):
+        return False
+    func_name = path.rsplit(".", 1)[-1].lower()
+    tokens = set(func_name.split("_"))
+    if tokens & SKIP_KEYWORDS:
+        return False
+    if item.get("risk_keywords"):
+        return False
+    return True
+
+
+def _apply_review(
+    client: httpx.Client, base: str, api_path: str, reviewer_id: str,
+) -> bool:
+    """단건 승인 후 실제 적용 여부 반환 (HTTP 상태 + applied 플래그 확인)."""
+    resp = client.post(
+        f"{base}/review",
+        json={
+            "api_path": api_path,
+            "decision": "approve",
+            "reviewer_id": reviewer_id,
+            "review_note": "safe conditional namespace - bulk approved",
+        },
+    )
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return False
+    try:
+        body = resp.json()
+    except ValueError:
+        return False
+    return body.get("applied") is True
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="HuggingMask CONDITIONAL 안전 namespace 일괄 승인",
@@ -63,51 +128,23 @@ def main() -> int:
             f"version={stats.get('whitelist_version', '-')}",
         )
 
-        approved, skipped, offset = 0, 0, 0
-        while True:
-            r = client.get(
-                f"{args.api}/pending",
-                params={
-                    "classification": "CONDITIONAL",
-                    "review_status": "PENDING",
-                    "limit": 50,
-                    "offset": offset,
-                },
-            )
-            r.raise_for_status()
-            items = r.json().get("items", [])
-            if not items:
-                break
+        # 1단계: 대상 목록을 먼저 안정적으로 수집 (read-only).
+        pending = collect_pending(client, args.api)
 
-            for item in items:
-                path = item["api_path"]
-                # 안전 namespace 체크
-                if not any(path.startswith(ns) for ns in SAFE_NAMESPACES):
-                    skipped += 1
-                    continue
-                # 위험 키워드 체크 (함수명 last component)
-                func_name = path.rsplit(".", 1)[-1].lower()
-                tokens = set(func_name.split("_"))
-                if tokens & SKIP_KEYWORDS:
-                    skipped += 1
-                    continue
-                # risk_keywords 필드(있으면) 직접 검사
-                if item.get("risk_keywords"):
-                    skipped += 1
-                    continue
-
-                client.post(
-                    f"{args.api}/review",
-                    json={
-                        "api_path": path,
-                        "decision": "approve",
-                        "reviewer_id": args.reviewer_id,
-                        "review_note": "safe conditional namespace - bulk approved",
-                    },
-                )
+        approved, skipped, failed = 0, 0, 0
+        # 2단계: 수집한 목록을 필터링 후 승인.
+        for item in pending:
+            if not _is_safe_conditional(item):
+                skipped += 1
+                continue
+            if _apply_review(client, args.api, item["api_path"], args.reviewer_id):
                 approved += 1
-
-            offset += 50
+            else:
+                failed += 1
+                print(
+                    f"  경고: 승인 실패 — {item['api_path']}",
+                    file=sys.stderr,
+                )
             if approved and approved % 500 == 0:
                 print(f"  진행: {approved}개 승인, {skipped}개 스킵")
 
@@ -115,7 +152,7 @@ def main() -> int:
         print(
             f"\n완료! 승인={stats['approved_active']} | "
             f"대기={stats['pending_review']} | "
-            f"신규승인={approved}개 | 스킵={skipped}개",
+            f"신규승인={approved}개 | 스킵={skipped}개 | 실패={failed}개",
         )
     return 0
 

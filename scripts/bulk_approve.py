@@ -37,11 +37,42 @@ def get_stats(client: httpx.Client, base: str) -> dict:
     return r.json()
 
 
+def _apply_review(
+    client: httpx.Client, base: str, api_path: str, reviewer_id: str, note: str,
+) -> bool:
+    """단건 승인 요청 후 실제 적용 여부 반환.
+
+    HTTP 상태와 응답의 ``applied`` 플래그를 모두 확인한다. 500 응답이나
+    ``applied: false``를 성공으로 잘못 카운트하지 않기 위함.
+    """
+    resp = client.post(
+        f"{base}/review",
+        json={
+            "api_path": api_path,
+            "decision": "approve",
+            "reviewer_id": reviewer_id,
+            "review_note": note,
+        },
+    )
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPError:
+        return False
+    try:
+        body = resp.json()
+    except ValueError:
+        return False
+    return body.get("applied") is True
+
+
 def bulk_approve_auto(
     client: httpx.Client, base: str, reviewer_id: str = "auto_system",
 ) -> int:
     """AUTO_APPROVE 분류된 PENDING API만 일괄 승인."""
     total_approved = 0
+    # 승인에 실패한 api_path는 PENDING에 그대로 남아 offset 0 재조회 시 다시 잡힌다.
+    # 무한 재시도를 막기 위해 실패 항목을 기록하고 대상에서 제외한다.
+    failed: set[str] = set()
     page = 0
     while True:
         # PENDING + AUTO_APPROVE만 조회. 승인하면 PENDING에서 빠지니 항상 offset 0.
@@ -56,23 +87,28 @@ def bulk_approve_auto(
         )
         r.raise_for_status()
         items = r.json().get("items", [])
-        if not items:
+        # 아직 실패하지 않은 항목만 이번 페이지 대상으로.
+        targets = [it for it in items if it["api_path"] not in failed]
+        if not targets:
+            # 남은 PENDING이 없거나 전부 실패 항목 → 진행 불가, 종료.
             break
 
         page += 1
-        print(f"  페이지 {page}: {len(items)}개 자동 승인 중...")
+        print(f"  페이지 {page}: {len(targets)}개 자동 승인 중...")
 
-        for item in items:
-            client.post(
-                f"{base}/review",
-                json={
-                    "api_path": item["api_path"],
-                    "decision": "approve",
-                    "reviewer_id": reviewer_id,
-                    "review_note": "namespace rule auto-approved (AUTO_APPROVE)",
-                },
+        for item in targets:
+            applied = _apply_review(
+                client, base, item["api_path"], reviewer_id,
+                "namespace rule auto-approved (AUTO_APPROVE)",
             )
-            total_approved += 1
+            if applied:
+                total_approved += 1
+            else:
+                failed.add(item["api_path"])
+                print(
+                    f"    경고: 승인 실패 — {item['api_path']} (스킵)",
+                    file=sys.stderr,
+                )
     return total_approved
 
 
