@@ -205,6 +205,26 @@ class ArtifactRef(Serializable):
 
 
 @dataclass
+class SnapshotFileRef(Serializable):
+    repo_path: str
+    temp_local_path: str
+    sha256: str
+    size_bytes: int
+    file_kind: FileKind = FileKind.OTHER
+
+    def __post_init__(self) -> None:
+        self.file_kind = FileKind(self.file_kind)
+        if len(self.sha256) != 64 or any(ch not in "0123456789abcdef" for ch in self.sha256):
+            raise ValueError("sha256 must be a 64-character lowercase hex digest")
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "SnapshotFileRef":
+        payload = dict(data)
+        payload["file_kind"] = FileKind(payload.get("file_kind", FileKind.OTHER))
+        return cls(**payload)
+
+
+@dataclass
 class ReasonEntry(Serializable):
     code: str
     severity: str
@@ -260,6 +280,8 @@ class ValidationJobRequest(Serializable):
     stop_on_first_block: bool
     schema_version: str = SCHEMA_VERSION
     notes: str | None = None
+    model_snapshot_root: str | None = None
+    model_snapshot_inventory: list[SnapshotFileRef] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if isinstance(self.model, dict):
@@ -273,6 +295,10 @@ class ValidationJobRequest(Serializable):
             for artifact in self.artifacts
         ]
         self.requested_routes = [RouteKind(route) for route in self.requested_routes]
+        self.model_snapshot_inventory = [
+            item if isinstance(item, SnapshotFileRef) else SnapshotFileRef.from_dict(item)
+            for item in self.model_snapshot_inventory
+        ]
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ValidationJobRequest":

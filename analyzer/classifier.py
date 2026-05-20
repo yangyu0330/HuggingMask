@@ -119,4 +119,3 @@ def build_artifact_ref_from_file(
         referenced_by=referenced_by,
         is_generated=is_generated,
     )
-

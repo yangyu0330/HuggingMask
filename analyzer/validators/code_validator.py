@@ -35,6 +35,24 @@ _RUNTIME_MODE_REGENERATE = "REGENERATE"
 _RUNTIME_MODE_RESTRICTED = "RESTRICTED_RUNTIME"
 _RUNTIME_MODE_SANDBOX = "SANDBOX"
 _RUNTIME_MODE_NONE = "NONE"
+_RUNTIME_STATUS_PASS = "PASS"
+_RUNTIME_STATUS_SKIPPED = "SKIPPED"
+_RUNTIME_STATUS_ERROR = "ERROR"
+_RUNTIME_STATUS_FAIL = "FAIL"
+_RUNTIME_STATUS_TIMEOUT = "TIMEOUT"
+_RUNTIME_STATUS_MEMORY_LIMIT = "MEMORY_LIMIT"
+_RUNTIME_FAILURE_REASON_CODES = {
+    "RUNTIME_GATE_SKIPPED",
+    "RUNTIME_GATE_ERROR",
+    "RUNTIME_GATE_FAIL",
+    "RUNTIME_GATE_TIMEOUT",
+    "RUNTIME_GATE_MEMORY_LIMIT",
+    "RUNTIME_GATE_UNKNOWN_STATUS",
+    "RUNTIME_SECURITY_EVENT",
+    "RUNTIME_FUNCTIONAL_REVIEW",
+    "RUNTIME_RESOURCE_REVIEW",
+    "RUNTIME_RESOURCE_SECURITY_EVENT",
+}
 
 
 @dataclass
@@ -100,6 +118,7 @@ def validate_python_artifact(
                 ast_scan=None,
                 api_scan=None,
                 context_scan=None,
+                runtime_check=runtime_detail,
                 status=decision.status,
             ),
             details=details,
@@ -158,6 +177,7 @@ def validate_python_artifact(
             ast_scan=ast_scan,
             api_scan=api_scan,
             context_scan=context_scan,
+            runtime_check=runtime_detail,
             status=decision.status,
         ),
         details=details,
@@ -272,26 +292,7 @@ def _decide_grade(
         )
 
     if _is_b1_candidate(role, ast_scan, api_scan, context_scan):
-        if _runtime_gate_passed(runtime_check):
-            return _GradeDecision(
-                grade=CodeGrade.B1,
-                status=ValidationStatus.PASS,
-                review_action=ReviewAction.AUTO_APPROVE,
-                runtime_mode=_RUNTIME_MODE_RESTRICTED,
-                reason_codes=["GRADE_B1_RUNTIME_OK"],
-                grade_reasons=["structured_modeling_runtime_gate_passed"],
-                requires_runtime_gate=True,
-            )
-        return _GradeDecision(
-            grade=CodeGrade.B2,
-            status=ValidationStatus.PENDING_REVIEW,
-            review_action=ReviewAction.SECURITY_OWNER_GATE,
-            runtime_mode=_RUNTIME_MODE_SANDBOX,
-            reason_codes=["GRADE_B2_GATE_REQUIRED"],
-            grade_reasons=["runtime_gate_missing_or_not_passed"],
-            requires_runtime_gate=True,
-            requires_security_review=True,
-        )
+        return _decide_b1_runtime_gate(runtime_check)
 
     # 8. 그 외 -> B-2 또는 C/PENDING_REVIEW
     normalized_role = role.role.value
@@ -374,7 +375,125 @@ def _is_b1_candidate(
 
 
 def _runtime_gate_passed(runtime_check: dict[str, Any]) -> bool:
-    return str(runtime_check.get("status", "")).upper() == "PASS"
+    return _runtime_status(runtime_check) == _RUNTIME_STATUS_PASS
+
+
+def _decide_b1_runtime_gate(runtime_check: dict[str, Any]) -> _GradeDecision:
+    status = _runtime_status(runtime_check)
+    runtime_reason_codes = _runtime_detail_reason_codes(runtime_check)
+
+    if status == _RUNTIME_STATUS_PASS:
+        return _GradeDecision(
+            grade=CodeGrade.B1,
+            status=ValidationStatus.PASS,
+            review_action=ReviewAction.AUTO_APPROVE,
+            runtime_mode=_RUNTIME_MODE_RESTRICTED,
+            reason_codes=["GRADE_B1_RUNTIME_OK"],
+            grade_reasons=["structured_modeling_runtime_gate_passed"],
+            requires_runtime_gate=True,
+        )
+
+    if status in {"", _RUNTIME_STATUS_SKIPPED}:
+        return _GradeDecision(
+            grade=CodeGrade.B2,
+            status=ValidationStatus.PENDING_REVIEW,
+            review_action=ReviewAction.SECURITY_OWNER_GATE,
+            runtime_mode=_RUNTIME_MODE_SANDBOX,
+            reason_codes=_dedupe(["RUNTIME_GATE_SKIPPED", "GRADE_B2_GATE_REQUIRED"] + runtime_reason_codes),
+            grade_reasons=["runtime_gate_missing_or_skipped"],
+            requires_runtime_gate=True,
+            requires_security_review=True,
+        )
+
+    if status == _RUNTIME_STATUS_ERROR:
+        return _GradeDecision(
+            grade=CodeGrade.C,
+            status=ValidationStatus.ERROR,
+            review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+            runtime_mode=_RUNTIME_MODE_NONE,
+            reason_codes=_dedupe(["RUNTIME_GATE_ERROR"] + runtime_reason_codes),
+            grade_reasons=["runtime_gate_infra_or_unknown_error"],
+            requires_runtime_gate=True,
+        )
+
+    if status == _RUNTIME_STATUS_FAIL:
+        if _has_runtime_security_event(runtime_check):
+            return _GradeDecision(
+                grade=CodeGrade.C,
+                status=ValidationStatus.BLOCK,
+                review_action=ReviewAction.BLOCK_IMMEDIATELY,
+                runtime_mode=_RUNTIME_MODE_NONE,
+                reason_codes=_dedupe(["RUNTIME_GATE_FAIL", "RUNTIME_SECURITY_EVENT"] + runtime_reason_codes),
+                grade_reasons=["runtime_gate_fail_security_event"],
+                requires_runtime_gate=True,
+            )
+        return _GradeDecision(
+            grade=CodeGrade.C,
+            status=ValidationStatus.PENDING_REVIEW,
+            review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+            runtime_mode=_RUNTIME_MODE_NONE,
+            reason_codes=_dedupe(["RUNTIME_GATE_FAIL", "RUNTIME_FUNCTIONAL_REVIEW"] + runtime_reason_codes),
+            grade_reasons=["runtime_gate_fail_functional_review"],
+            requires_runtime_gate=True,
+        )
+
+    if status == _RUNTIME_STATUS_TIMEOUT:
+        if _has_runtime_security_event(runtime_check):
+            return _GradeDecision(
+                grade=CodeGrade.C,
+                status=ValidationStatus.BLOCK,
+                review_action=ReviewAction.BLOCK_IMMEDIATELY,
+                runtime_mode=_RUNTIME_MODE_NONE,
+                reason_codes=_dedupe(["RUNTIME_GATE_TIMEOUT", "RUNTIME_SECURITY_EVENT"] + runtime_reason_codes),
+                grade_reasons=["runtime_gate_timeout_security_event"],
+                requires_runtime_gate=True,
+            )
+        return _GradeDecision(
+            grade=CodeGrade.C,
+            status=ValidationStatus.PENDING_REVIEW,
+            review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+            runtime_mode=_RUNTIME_MODE_NONE,
+            reason_codes=_dedupe(["RUNTIME_GATE_TIMEOUT", "RUNTIME_FUNCTIONAL_REVIEW"] + runtime_reason_codes),
+            grade_reasons=["runtime_gate_timeout_functional_review"],
+            requires_runtime_gate=True,
+        )
+
+    if status == _RUNTIME_STATUS_MEMORY_LIMIT:
+        if _has_runtime_resource_security_event(runtime_check):
+            return _GradeDecision(
+                grade=CodeGrade.C,
+                status=ValidationStatus.BLOCK,
+                review_action=ReviewAction.BLOCK_IMMEDIATELY,
+                runtime_mode=_RUNTIME_MODE_NONE,
+                reason_codes=_dedupe(
+                    ["RUNTIME_GATE_MEMORY_LIMIT", "RUNTIME_RESOURCE_SECURITY_EVENT"] + runtime_reason_codes
+                ),
+                grade_reasons=["runtime_gate_memory_limit_runaway_or_fork_evidence"],
+                requires_runtime_gate=True,
+            )
+        return _GradeDecision(
+            grade=CodeGrade.C,
+            status=ValidationStatus.PENDING_REVIEW,
+            review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+            runtime_mode=_RUNTIME_MODE_NONE,
+            reason_codes=_dedupe(["RUNTIME_GATE_MEMORY_LIMIT", "RUNTIME_RESOURCE_REVIEW"] + runtime_reason_codes),
+            grade_reasons=["runtime_gate_memory_limit_resource_review"],
+            requires_runtime_gate=True,
+        )
+
+    return _GradeDecision(
+        grade=CodeGrade.C,
+        status=ValidationStatus.PENDING_REVIEW,
+        review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+        runtime_mode=_RUNTIME_MODE_NONE,
+        reason_codes=_dedupe(["RUNTIME_GATE_UNKNOWN_STATUS"] + runtime_reason_codes),
+        grade_reasons=["runtime_gate_unknown_status_manual_review"],
+        requires_runtime_gate=True,
+    )
+
+
+def _runtime_status(runtime_check: dict[str, Any]) -> str:
+    return str(runtime_check.get("status", "")).upper()
 
 
 def _dangerous_api_blocked_list(api_scan: ApiScanResult) -> list[str]:
@@ -413,17 +532,116 @@ def _normalize_runtime_check(runtime_check: dict[str, Any] | None) -> dict[str, 
     return normalized
 
 
+def _runtime_detail_reason_codes(runtime_check: dict[str, Any]) -> list[str]:
+    codes: list[str] = []
+    for key in ("reason_code", "error_code"):
+        code = _normalize_reason_code(runtime_check.get(key))
+        if code:
+            codes.append(code)
+    for key in ("reason_codes", "error_codes"):
+        value = runtime_check.get(key)
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                code = _normalize_reason_code(item)
+                if code:
+                    codes.append(code)
+        else:
+            code = _normalize_reason_code(value)
+            if code:
+                codes.append(code)
+    return _dedupe(codes)
+
+
+def _normalize_reason_code(value: Any) -> str | None:
+    if value is None:
+        return None
+    raw = str(value).strip().upper()
+    if not raw:
+        return None
+    normalized = "".join(char if char.isalnum() else "_" for char in raw).strip("_")
+    return normalized or None
+
+
+def _has_runtime_security_event(runtime_check: dict[str, Any]) -> bool:
+    security_keys = {
+        "security_event",
+        "security_events",
+        "security_event_detected",
+        "blocked_import",
+        "blocked_imports",
+        "denied_import",
+        "denied_imports",
+        "blocked_audit_event",
+        "blocked_audit_events",
+        "audit_security_event",
+        "audit_security_events",
+        "audit_events",
+        "policy_violation",
+        "policy_violations",
+        "syscall_anomaly_detected",
+    }
+    if any(_runtime_value_has_signal(runtime_check.get(key)) for key in security_keys):
+        return True
+
+    traceback = str(runtime_check.get("traceback") or "")
+    return any(token in traceback.lower() for token in ("blocked", "denylist", "security", "audit"))
+
+
+def _has_runtime_resource_security_event(runtime_check: dict[str, Any]) -> bool:
+    resource_keys = {
+        "runaway_detected",
+        "runaway_process",
+        "runaway_processes",
+        "fork_detected",
+        "fork_events",
+        "thread_detected",
+        "thread_events",
+        "thread_runaway_detected",
+        "resource_security_event",
+        "resource_security_events",
+    }
+    if any(_runtime_value_has_signal(runtime_check.get(key)) for key in resource_keys):
+        return True
+
+    haystack = " ".join(
+        _runtime_evidence_value(runtime_check.get(key))
+        for key in ("audit_events", "security_events", "traceback", "message", "reason", "reason_code")
+    ).lower()
+    return any(token in haystack for token in ("fork", "thread", "runaway"))
+
+
+def _runtime_value_has_signal(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "false", "0", "none", "null", "no"}
+    if isinstance(value, dict):
+        return any(_runtime_value_has_signal(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_runtime_value_has_signal(item) for item in value)
+    return bool(value)
+
+
 def _build_reason_entries(
     *,
     reason_codes: list[str],
     ast_scan: AstScanResult | None,
     api_scan: ApiScanResult | None,
     context_scan: ContextApiScanResult | None,
+    runtime_check: dict[str, Any] | None,
     status: ValidationStatus,
 ) -> list[ReasonEntry]:
     entries: list[ReasonEntry] = []
     for code in _dedupe(reason_codes):
-        evidence = _reason_evidence(code, ast_scan=ast_scan, api_scan=api_scan, context_scan=context_scan)
+        evidence = _reason_evidence(
+            code,
+            ast_scan=ast_scan,
+            api_scan=api_scan,
+            context_scan=context_scan,
+            runtime_check=runtime_check,
+        )
         severity, review_required = _severity_and_review_flag(code, status)
         entries.append(
             ReasonEntry(
@@ -443,6 +661,7 @@ def _reason_evidence(
     ast_scan: AstScanResult | None,
     api_scan: ApiScanResult | None,
     context_scan: ContextApiScanResult | None,
+    runtime_check: dict[str, Any] | None,
 ) -> list[str]:
     if code == "DANGEROUS_IMPORT" and ast_scan is not None:
         return list(ast_scan.dangerous_imports)
@@ -459,7 +678,45 @@ def _reason_evidence(
     if code in {"CONTEXT_API_REVIEW", "CONTEXT_API_BLOCKED"} and context_scan is not None:
         target = "review" if code == "CONTEXT_API_REVIEW" else "block"
         return _context_apis_by_decision(context_scan, target)
+    if runtime_check is not None and (
+        code in _RUNTIME_FAILURE_REASON_CODES or code in _runtime_detail_reason_codes(runtime_check)
+    ):
+        return _runtime_reason_evidence(runtime_check)
     return []
+
+
+def _runtime_reason_evidence(runtime_check: dict[str, Any]) -> list[str]:
+    evidence: list[str] = []
+    for key in (
+        "status",
+        "reason_code",
+        "reason_codes",
+        "error_code",
+        "error_codes",
+        "message",
+        "exception_class",
+        "blocked_imports",
+        "audit_events",
+        "security_events",
+        "resource_security_events",
+        "syscall_anomaly_detected",
+        "logs_ref",
+    ):
+        if key not in runtime_check:
+            continue
+        value = runtime_check.get(key)
+        if not _runtime_value_has_signal(value):
+            continue
+        evidence.append(f"{key}={_runtime_evidence_value(value)}")
+    return evidence
+
+
+def _runtime_evidence_value(value: Any) -> str:
+    if isinstance(value, dict):
+        return ",".join(f"{key}:{_runtime_evidence_value(item)}" for key, item in sorted(value.items()))
+    if isinstance(value, (list, tuple, set)):
+        return ",".join(_runtime_evidence_value(item) for item in value)
+    return str(value)
 
 
 def _context_apis_by_decision(context_scan: ContextApiScanResult, decision: str) -> list[str]:
@@ -478,8 +735,18 @@ def _context_apis_by_decision(context_scan: ContextApiScanResult, decision: str)
 def _severity_and_review_flag(code: str, status: ValidationStatus) -> tuple[str, bool]:
     if status is ValidationStatus.BLOCK:
         return "HIGH", False
+    if status is ValidationStatus.ERROR:
+        return "HIGH", True
     if status is ValidationStatus.PENDING_REVIEW:
-        if code in {"DYNAMIC_PATTERN", "OBFUSCATION_PATTERN", "GRADE_C_MANUAL_REVIEW"}:
+        if code in {
+            "DYNAMIC_PATTERN",
+            "OBFUSCATION_PATTERN",
+            "GRADE_C_MANUAL_REVIEW",
+            "RUNTIME_GATE_FAIL",
+            "RUNTIME_GATE_TIMEOUT",
+            "RUNTIME_GATE_MEMORY_LIMIT",
+            "RUNTIME_GATE_UNKNOWN_STATUS",
+        }:
             return "HIGH", True
         return "MEDIUM", True
     return "LOW", False
@@ -500,6 +767,16 @@ def _reason_message(code: str) -> str:
         "GRADE_B1_RUNTIME_OK": "restricted runtime gate passed for B-1",
         "GRADE_B2_GATE_REQUIRED": "B-2 security owner gate required",
         "GRADE_C_MANUAL_REVIEW": "manual review required for C-grade candidate",
+        "RUNTIME_GATE_SKIPPED": "restricted runtime gate was skipped or not provided",
+        "RUNTIME_GATE_ERROR": "restricted runtime gate returned an infrastructure or unknown error",
+        "RUNTIME_GATE_FAIL": "restricted runtime gate failed",
+        "RUNTIME_GATE_TIMEOUT": "restricted runtime gate timed out",
+        "RUNTIME_GATE_MEMORY_LIMIT": "restricted runtime gate hit a memory limit",
+        "RUNTIME_GATE_UNKNOWN_STATUS": "restricted runtime gate returned an unknown status",
+        "RUNTIME_SECURITY_EVENT": "restricted runtime failure included security evidence",
+        "RUNTIME_FUNCTIONAL_REVIEW": "restricted runtime failure requires functional review",
+        "RUNTIME_RESOURCE_REVIEW": "restricted runtime memory failure requires resource review",
+        "RUNTIME_RESOURCE_SECURITY_EVENT": "restricted runtime memory failure included runaway or fork/thread evidence",
     }.get(code, "policy decision")
 
 

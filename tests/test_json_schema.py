@@ -14,6 +14,7 @@ from analyzer.schemas import (
     ReviewAction,
     RouteKind,
     RuntimeContext,
+    SnapshotFileRef,
     ValidationJobRequest,
     ValidationJobResponse,
     ValidationStatus,
@@ -187,12 +188,25 @@ def test_validation_job_request_and_response_roundtrip() -> None:
         requested_routes=[RouteKind.CODE_AST_SCAN],
         stop_on_first_block=False,
         notes=None,
+        model_snapshot_root="/tmp/job/snapshot",
+        model_snapshot_inventory=[
+            {
+                "repo_path": "modeling_demo.py",
+                "temp_local_path": "/tmp/job/snapshot/modeling_demo.py",
+                "sha256": SHA256_ZERO,
+                "size_bytes": 12,
+                "file_kind": "PYTHON",
+            }
+        ],
     )
 
     request_payload = request.to_dict()
     restored_request = ValidationJobRequest.from_dict(request_payload)
     assert restored_request.artifacts[0].file_kind is FileKind.PYTHON
     assert restored_request.requested_routes == [RouteKind.CODE_AST_SCAN]
+    assert restored_request.model_snapshot_root == "/tmp/job/snapshot"
+    assert isinstance(restored_request.model_snapshot_inventory[0], SnapshotFileRef)
+    assert restored_request.model_snapshot_inventory[0].file_kind is FileKind.PYTHON
     assert restored_request.to_dict() == request_payload
 
     result = ArtifactValidationResult(
@@ -248,4 +262,3 @@ def test_artifact_ref_rejects_invalid_artifact_id() -> None:
             referenced_by=[],
             is_generated=False,
         )
-

@@ -93,4 +93,3 @@ def test_artifact_ref_can_read_local_file_without_importing_code(tmp_path) -> No
 def test_build_artifact_ref_requires_content_or_local_path() -> None:
     with pytest.raises(ValueError):
         build_artifact_ref("missing.py")
-
