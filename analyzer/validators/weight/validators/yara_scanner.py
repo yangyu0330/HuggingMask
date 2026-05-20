@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 try:
-    import yara_scanner as yara
+    import yara  # type: ignore[import-not-found]
 except ImportError:
     yara = None
 
