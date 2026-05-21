@@ -502,6 +502,30 @@ PR을 만들고 끝이 아니다. 아래까지 해야 한다.
 - **이 코드가 실제로 실행되는가**
 - **작업 설명과 코드 내용이 일치하는가**
 
+### GitHub 리뷰 한글 인코딩 주의
+
+Windows PowerShell에서 한글 리뷰나 코멘트를 남길 때는 아래 방식은 사용하지 않는다.
+
+```powershell
+ConvertTo-Json | gh api --input -
+```
+
+PowerShell 파이프 인코딩 때문에 GitHub API에 전달되는 JSON 본문에서 한글이 `?`로 깨질 수 있다.
+
+권장 방식은 다음과 같다.
+
+1. 짧은 리뷰는 `gh pr review` 또는 `gh pr comment`의 `--body` 옵션을 사용한다.
+2. 긴 리뷰는 UTF-8 파일로 저장한 뒤 `--body-file` 옵션을 사용한다.
+3. 제출 후 `gh pr view` 또는 GitHub 화면에서 한글이 정상 표시되는지 확인한다.
+
+예시:
+
+```powershell
+.\scripts\gh_review_utf8.ps1 -Repo yangyu0330/HuggingMask -Pr 23 -Mode request-changes -BodyFile .\review.md
+```
+
+리뷰 본문 파일은 UTF-8로 저장한다. helper 스크립트는 PowerShell 출력 인코딩을 UTF-8로 맞춘 뒤 `gh`에 `--body-file`로 전달한다.
+
 ---
 
 ## 6-9. 리뷰 의견이 달렸을 때 수정 방법

@@ -24,6 +24,14 @@ from analyzer.schemas import FileKind
         ("nested/config.json", FileKind.CONFIG_JSON),
         ("tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON),
         ("nested/tokenizer_config.json", FileKind.TOKENIZER_CONFIG_JSON),
+        ("tokenizer.json", FileKind.TOKENIZER_JSON),
+        ("special_tokens_map.json", FileKind.SPECIAL_TOKENS_MAP_JSON),
+        ("added_tokens.json", FileKind.ADDED_TOKENS_JSON),
+        ("vocab.json", FileKind.VOCAB_JSON),
+        ("merges.txt", FileKind.MERGES_TXT),
+        ("preprocessor_config.json", FileKind.PREPROCESSOR_CONFIG_JSON),
+        ("processor_config.json", FileKind.PROCESSOR_CONFIG_JSON),
+        ("chat_template.jinja", FileKind.CHAT_TEMPLATE_JINJA),
         ("README.md", FileKind.OTHER),
         ("weights.json", FileKind.OTHER),
     ],
@@ -85,4 +93,3 @@ def test_artifact_ref_can_read_local_file_without_importing_code(tmp_path) -> No
 def test_build_artifact_ref_requires_content_or_local_path() -> None:
     with pytest.raises(ValueError):
         build_artifact_ref("missing.py")
-

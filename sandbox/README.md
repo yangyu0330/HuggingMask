@@ -1,5 +1,29 @@
 # Sandbox Module Guide
 
+## B-2 gVisor Phase 0-13 status
+
+Implemented host-side contract so far:
+
+- B-2 sandbox target boundary in the orchestrator.
+- Snapshot-only source resolver and verified-only staging.
+- `config.json` `auto_map` Python promotion to sibling artifact results.
+- B-1 runtime failure separation from B-2 sandbox candidates.
+- B-2 input manifest, local import closure, support JSON handling, and canonical manifest hashing.
+- Runner-result decision builder where clean sandbox evidence remains policy review, never automatic PASS.
+- Optional orchestrator pipeline wiring for direct Python and auto_map sibling Python.
+- Docker/runsc command and lifecycle planning as `list[str]` only.
+- Docker inspect fixture validator and runsc log fixture parser.
+- Trusted in-container B-2 entrypoint contract with manifest/hash verification before import.
+- Injectable `B2HostRunner` coordinator using a fake/fixture `CommandRunner`.
+- Full fixture end-to-end tests from `run_validation_job()` through `artifact.details.sandbox_check`.
+- PR hardening coverage for `python -I -S`, inspect planned host mount source checks, and B-2 schema round-trips.
+
+Not implemented yet:
+
+- No real Docker/runsc executor is present.
+- No `subprocess.run`, shell execution, Docker create/start/wait/inspect/logs/cp/rm execution, or Linux e2e is wired.
+- Current B-2 host runner execution is fixture-based through injected command runners only.
+
 ## 담당자
 정은미, 양유상, 공통
 
@@ -25,3 +49,9 @@
 - `tests/test_weight_validator.md`
 - `tests/test_code_validator.md`
 - `tests/test_validation_flow.md`
+
+## 상세 설계
+- gVisor 공통 운영 원칙: `docs/gVisor_공통_운영_원칙.md`
+- 코드 B-2 gVisor 설계: `docs/B-2_gVisor_구현_상세_설계서.md`
+- 가중치 pickle Path B gVisor host evidence 설계: `docs/PICKLE_PATH_B_gVisor_구현_상세_설계서.md`
+- 가중치 문서는 PR #24의 weight validator 구현을 전제로 하며, Docker inspect와 runsc log 기반 검증만 다룬다.
