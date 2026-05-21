@@ -1,11 +1,15 @@
 from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from analyzer.schemas import (
     ArtifactRef,
     ArtifactValidationResult,
     CodeGrade,
+    ModelRef,
     OverallDecision,
+    PolicyInfo,
     ReasonEntry,
     ReviewAction,
     RouteKind,
@@ -17,10 +21,53 @@ from analyzer.validators.weight.pipeline import validate
 
 
 WEIGHT_FILE_KINDS = {"SAFETENSORS", "PICKLE"}
+ORCHESTRATOR_FILE_KINDS = {"PYTHON", "CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
+STATUS_PRIORITY = {
+    "PASS": 0,
+    "PENDING_REVIEW": 1,
+    "ERROR": 2,
+    "BLOCK": 3,
+}
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _status_value(status) -> str:
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _merge_overall_status(current: str, candidate) -> str:
+    candidate_value = _status_value(candidate)
+    return (
+        candidate_value
+        if STATUS_PRIORITY[candidate_value] > STATUS_PRIORITY[current]
+        else current
+    )
+
+
+def _default_policy(policy_fingerprint: str) -> PolicyInfo:
+    return PolicyInfo(
+        policy_version="default-policy",
+        whitelist_version="default-whitelist",
+        opcode_policy_version="default-opcode-policy",
+        config_schema_version="default-config-schema",
+        runtime_profile_version="default-runtime-profile",
+        policy_fingerprint=policy_fingerprint,
+    )
+
+
+def _default_model() -> ModelRef:
+    return ModelRef(
+        repo_id="unknown/unknown",
+        revision="main",
+        source_host="local",
+        source_url="local",
+        requested_at=_now(),
+        endpoint_mode="INTERNAL_VALIDATION_JOB",
+        requested_by=None,
+    )
 
 
 def _json_safe(obj):
@@ -31,23 +78,18 @@ def _json_safe(obj):
                 continue
             cleaned[key] = _json_safe(value)
         return cleaned
-
     if isinstance(obj, list):
         return [_json_safe(item) for item in obj]
-
     if isinstance(obj, tuple):
         return [_json_safe(item) for item in obj]
-
     if obj.__class__.__module__.startswith("torch"):
         return str(obj)
-
     return obj
 
 
 def _extract_reason(core_result: dict):
     reason_code = core_result.get("reason_code")
     reason_message = core_result.get("reason")
-
     for key in ("path_a", "path_b", "diff", "converted", "yara", "modelscan"):
         if reason_code:
             break
@@ -55,17 +97,14 @@ def _extract_reason(core_result: dict):
         if isinstance(sub, dict):
             reason_code = sub.get("reason_code")
             reason_message = sub.get("reason")
-
     return reason_code or "UNKNOWN", reason_message or "no message"
 
 
 def _route_kind_for(artifact) -> RouteKind:
     if artifact.file_kind == "SAFETENSORS":
         return RouteKind.SAFETENSORS_FAST_PATH
-
     if artifact.file_kind == "PICKLE":
         return RouteKind.PICKLE_PATH_A
-
     return RouteKind.CONFIG_SCHEMA_VALIDATION
 
 
@@ -73,18 +112,13 @@ def _build_generated_artifact(artifact, core_result: dict):
     converted = core_result.get("converted")
     if not isinstance(converted, dict):
         return None
-
     if converted.get("status") != "PASS":
         return None
-
     output_path = converted.get("output_path")
     output_sha256 = converted.get("sha256")
-
     if not output_path or not output_sha256:
         return None
-
     out = Path(output_path)
-
     return ArtifactRef(
         artifact_id=f"sha256:{output_sha256}",
         repo_path=out.as_posix(),
@@ -109,7 +143,6 @@ def _build_result(
     generated_artifact=None,
 ) -> ArtifactValidationResult:
     safe_details = _json_safe(details)
-
     return ArtifactValidationResult(
         artifact=artifact,
         route_kind=_route_kind_for(artifact),
@@ -133,9 +166,7 @@ def _build_result(
 
 def _map_result(artifact, core_result, policy_fingerprint):
     status = "PASS" if core_result.get("status") == "PASS" else "BLOCK"
-
     reason_code, reason_message = _extract_reason(core_result)
-
     return _build_result(
         artifact=artifact,
         status=status,
@@ -146,7 +177,33 @@ def _map_result(artifact, core_result, policy_fingerprint):
     )
 
 
+def _make_source_loader(artifacts: list) -> dict[str, bytes]:
+    """artifact 목록에서 temp_local_path 기반 source_loader 딕셔너리 생성."""
+    loader: dict[str, bytes] = {}
+    for artifact in artifacts:
+        path = Path(artifact.temp_local_path)
+        if path.exists():
+            try:
+                loader[artifact.repo_path] = path.read_bytes()
+            except Exception:
+                pass
+    return loader
+
+
 def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
+    from analyzer.orchestrator import run_validation_job
+    from analyzer.validators.code_semantic import is_preprocessing_metadata_kind
+
+    # 파일 종류별로 분리
+    weight_artifacts = [
+        a for a in job.artifacts
+        if str(a.file_kind) in WEIGHT_FILE_KINDS
+    ]
+    non_weight_artifacts = [
+        a for a in job.artifacts
+        if str(a.file_kind) not in WEIGHT_FILE_KINDS
+    ]
+
     results = []
     generated_artifacts = []
     approved_artifact_ids = []
@@ -156,23 +213,8 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
 
     policy_fingerprint = job.policy_fingerprint or "default-policy"
 
-    for artifact in job.artifacts:
-        if artifact.file_kind not in WEIGHT_FILE_KINDS:
-            mapped = _build_result(
-                artifact=artifact,
-                status="SKIPPED",
-                reason_code="NOT_WEIGHT_ARTIFACT",
-                reason_message="artifact skipped because it is not a weight artifact",
-                details={
-                    "status": "SKIPPED",
-                    "reason_code": "NOT_WEIGHT_ARTIFACT",
-                    "reason": "artifact skipped because it is not a weight artifact",
-                },
-            )
-
-            results.append(mapped)
-            continue
-
+    # ── 가중치 파일: 기존 weight validator 사용 ──────────────────────────────
+    for artifact in weight_artifacts:
         core = validate(
             path=artifact.temp_local_path,
             policy_fingerprint=policy_fingerprint,
@@ -180,7 +222,6 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
             file_kind=artifact.file_kind,
             enable_path_b=getattr(job, "enable_path_b", False),
         )
-
         mapped = _map_result(artifact, core, policy_fingerprint)
         results.append(mapped)
 
@@ -190,12 +231,8 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
         if mapped.status == ValidationStatus.BLOCK:
             overall_status = "BLOCK"
             blocked_artifact_ids.append(artifact.artifact_id)
-
         elif mapped.status == ValidationStatus.PASS:
-            if artifact.file_kind == "PICKLE":
-                # 보안 정책:
-                # 원본 pickle은 release 대상이 아님.
-                # Path A에서 변환된 safetensors artifact만 release 승인.
+            if str(artifact.file_kind) == "PICKLE":
                 if mapped.generated_artifact is None:
                     overall_status = "BLOCK"
                     blocked_artifact_ids.append(artifact.artifact_id)
@@ -213,22 +250,102 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
                     approved_artifact_ids.append(mapped.generated_artifact.artifact_id)
             else:
                 approved_artifact_ids.append(artifact.artifact_id)
-
+        elif mapped.status == ValidationStatus.SKIPPED:
+            pass
         else:
+            overall_status = _merge_overall_status(overall_status, mapped.status)
             pending_artifact_ids.append(artifact.artifact_id)
 
-    decision = (
-        OverallDecision.DENY
-        if overall_status == "BLOCK"
-        else OverallDecision.APPROVE
-    )
+    # ── 비가중치 파일: orchestrator에 위임 ──────────────────────────────────
+    orchestrator_artifacts = [
+        a for a in non_weight_artifacts
+        if (
+            str(a.file_kind) in ORCHESTRATOR_FILE_KINDS
+            or is_preprocessing_metadata_kind(a.file_kind)
+        )
+    ]
+    skipped_artifacts = [
+        a for a in non_weight_artifacts
+        if not (
+            str(a.file_kind) in ORCHESTRATOR_FILE_KINDS
+            or is_preprocessing_metadata_kind(a.file_kind)
+        )
+    ]
+
+    # 지원하지 않는 파일 종류 → SKIPPED
+    for artifact in skipped_artifacts:
+        skipped = _build_result(
+            artifact=artifact,
+            status="SKIPPED",
+            reason_code="UNSUPPORTED_FILE_KIND",
+            reason_message=f"지원하지 않는 파일 종류: {artifact.file_kind}",
+            details={"status": "SKIPPED", "reason_code": "UNSUPPORTED_FILE_KIND"},
+        )
+        results.append(skipped)
+
+    if orchestrator_artifacts:
+        source_loader = _make_source_loader(orchestrator_artifacts)
+
+        # job 복사본에 orchestrator 대상 artifacts만 담아서 호출
+        sub_job = replace(
+            job,
+            artifacts=orchestrator_artifacts,
+            model=job.model or _default_model(),
+            policy=job.policy or _default_policy(policy_fingerprint),
+        )
+
+        try:
+            orch_response = run_validation_job(
+                sub_job,
+                source_loader=source_loader,
+                revision=sub_job.model.revision,
+            )
+
+            for item in orch_response.artifact_results:
+                results.append(item)
+
+            approved_artifact_ids.extend(orch_response.approved_artifact_ids)
+            blocked_artifact_ids.extend(orch_response.blocked_artifact_ids)
+            pending_artifact_ids.extend(orch_response.pending_artifact_ids)
+
+            overall_status = _merge_overall_status(
+                overall_status,
+                orch_response.overall_status,
+            )
+
+        except Exception as e:
+            # orchestrator 실패 시 전부 ERROR 처리
+            for artifact in orchestrator_artifacts:
+                err_result = _build_result(
+                    artifact=artifact,
+                    status="ERROR",
+                    reason_code="ORCHESTRATOR_ERROR",
+                    reason_message=f"orchestrator 호출 실패: {e}",
+                    details={"status": "ERROR", "error": str(e)},
+                )
+                results.append(err_result)
+                overall_status = _merge_overall_status(overall_status, "ERROR")
+                pending_artifact_ids.append(artifact.artifact_id)
+
+    if overall_status == "BLOCK":
+        decision = OverallDecision.DENY
+        release_action = "DENY"
+    elif overall_status == "ERROR":
+        decision = OverallDecision.ERROR
+        release_action = "ERROR"
+    elif overall_status == "PENDING_REVIEW":
+        decision = OverallDecision.REVIEW_REQUIRED
+        release_action = "DENY"
+    else:
+        decision = OverallDecision.APPROVE
+        release_action = "APPROVE"
 
     return ValidationJobResponse(
         request_id=job.request_id,
         job_id=job.job_id,
         overall_decision=decision,
         overall_status=ValidationStatus(overall_status),
-        release_action="DENY" if overall_status == "BLOCK" else "APPROVE",
+        release_action=release_action,
         artifact_results=results,
         approved_artifact_ids=approved_artifact_ids,
         blocked_artifact_ids=blocked_artifact_ids,
