@@ -145,6 +145,21 @@ def test_overlapping_input_and_output_mounts_are_rejected_without_repo_root(tmp_
         build_docker_create_command(job)
 
 
+def test_job_mount_paths_are_absolute_for_docker_bind_mounts() -> None:
+    job = B2SandboxJob(
+        request_id="req",
+        job_id="job",
+        input_dir=Path("relative-input"),
+        output_dir=Path("relative-output"),
+        nonce="nonce",
+        config=_config(),
+        repo_root=None,
+    )
+
+    assert job.input_dir.is_absolute()
+    assert job.output_dir.is_absolute()
+
+
 def test_env_uses_explicit_allowlist_without_pythonpath_or_host_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HF_TOKEN", "host-secret")
     monkeypatch.setenv("PYTHONPATH", "/host/repo")

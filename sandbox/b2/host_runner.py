@@ -111,8 +111,8 @@ class B2SandboxJob:
     repo_root: Path | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "input_dir", Path(self.input_dir))
-        object.__setattr__(self, "output_dir", Path(self.output_dir))
+        object.__setattr__(self, "input_dir", Path(self.input_dir).resolve(strict=False))
+        object.__setattr__(self, "output_dir", Path(self.output_dir).resolve(strict=False))
         if self.repo_root is not None:
             object.__setattr__(self, "repo_root", Path(self.repo_root))
         if not self.request_id:

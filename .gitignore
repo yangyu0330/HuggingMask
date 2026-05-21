@@ -1,6 +1,7 @@
 .venv/
 __pycache__/
 .pytest_cache/
+.cache/
 *.pyc
 .env
 .DS_Store
@@ -11,6 +12,14 @@ generated/
 *.sqlite
 *.sqlite3
 .claude/
+demo_snapshots/
+hf_cache/
+.huggingface/
+evidence/sandbox/
+*.safetensors
+*.bin
+*.pt
+*.pth
 
 # mod1 / mod2 임시 출력 (latest_analysis.json은 commit)
 data/crawl_cache/*.json

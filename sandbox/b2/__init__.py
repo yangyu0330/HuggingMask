@@ -1,5 +1,5 @@
 """B-2 sandbox manifest, decision, and host-side planning helpers.
 
-This package intentionally does not execute Docker, runsc, or untrusted model
-code in the current phase.
+Docker/runsc execution remains opt-in through injected host runners; default
+validation paths still fail closed when no runner is configured.
 """

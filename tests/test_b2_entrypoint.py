@@ -109,6 +109,65 @@ def test_valid_manifest_imports_and_instantiates_target_class(tmp_path: Path) ->
     assert result["exception_message"] is None
 
 
+def test_deterministic_forward_runs_single_none_argument(tmp_path: Path, capsys) -> None:
+    input_root = tmp_path / "input"
+    module_name = "phase10_forward_success"
+    file_entry = _write(
+        input_root,
+        f"{module_name}.py",
+        "class DemoModel:\n"
+        "    def forward(self, x):\n"
+        "        if x is not None:\n"
+        "            raise AssertionError('expected none')\n"
+        "        return x\n",
+    )
+    manifest_path = _write_manifest(
+        input_root,
+        module_name=module_name,
+        target_class="DemoModel",
+        file_entries=[file_entry],
+    )
+
+    result = _run(manifest_path, tmp_path / "runner_result.json")
+
+    output = capsys.readouterr().out
+    assert result["manifest_verified"] is True
+    assert result["import_status"] == "success"
+    assert result["instantiate_status"] == "success"
+    assert result["forward_status"] == "success"
+    assert result["exception_class"] is None
+    assert result["exception_message"] is None
+    assert "B2_RUNNER_COMPLETE" in output
+    assert "forward_status=success" in output
+
+
+def test_forward_exception_preserves_successful_instantiate_status(tmp_path: Path) -> None:
+    input_root = tmp_path / "input"
+    module_name = "phase10_forward_failure"
+    file_entry = _write(
+        input_root,
+        f"{module_name}.py",
+        "class DemoModel:\n"
+        "    def forward(self, x):\n"
+        "        raise RuntimeError('forward boom')\n",
+    )
+    manifest_path = _write_manifest(
+        input_root,
+        module_name=module_name,
+        target_class="DemoModel",
+        file_entries=[file_entry],
+    )
+
+    result = _run(manifest_path, tmp_path / "runner_result.json")
+
+    assert result["manifest_verified"] is True
+    assert result["import_status"] == "success"
+    assert result["instantiate_status"] == "success"
+    assert result["forward_status"] == "failed"
+    assert result["exception_class"] == "RuntimeError"
+    assert result["exception_message"] == "forward boom"
+
+
 def test_manifest_hash_mismatch_skips_import_and_preserves_result(tmp_path: Path) -> None:
     input_root = tmp_path / "input"
     marker = tmp_path / "imported.txt"

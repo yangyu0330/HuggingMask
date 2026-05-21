@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import inspect
 import importlib
 import json
 import sys
@@ -68,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
         _write_runner_result(Path(args.output), result)
+        _emit_runner_log(result)
         return 0
 
     original_sys_path = list(sys.path)
@@ -87,9 +89,14 @@ def main(argv: list[str] | None = None) -> int:
         except AttributeError as exc:
             raise AttributeError(f"target_class not found: {verified.target_class}") from exc
 
-        target()
+        instance = target()
         result["instantiate_status"] = "success"
-        result["forward_status"] = "skipped_schema_unknown"
+        try:
+            result["forward_status"] = _run_deterministic_forward(instance)
+        except Exception as exc:
+            result["forward_status"] = "failed"
+            result["exception_class"] = type(exc).__name__
+            result["exception_message"] = str(exc)
     except Exception as exc:
         if result["import_status"] != "success":
             result["import_status"] = "failed"
@@ -106,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
         sys.modules.update(previous_modules)
 
     _write_runner_result(Path(args.output), result)
+    _emit_runner_log(result)
     return 0
 
 
@@ -177,6 +185,42 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--job-id")
     parser.add_argument("--manifest-sha256")
     return parser.parse_args(argv)
+
+
+def _run_deterministic_forward(instance: Any) -> str:
+    forward = getattr(instance, "forward", None)
+    if not callable(forward):
+        return "skipped_schema_unknown"
+    args = _deterministic_forward_args(forward)
+    if args is None:
+        return "skipped_schema_unknown"
+    forward(*args)
+    return "success"
+
+
+def _deterministic_forward_args(forward: Any) -> list[Any] | None:
+    try:
+        signature = inspect.signature(forward)
+    except (TypeError, ValueError):
+        return None
+
+    required_positional = []
+    for parameter in signature.parameters.values():
+        if parameter.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
+            continue
+        if parameter.default is not inspect.Parameter.empty:
+            continue
+        if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}:
+            required_positional.append(parameter)
+            continue
+        if parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+            return None
+
+    if not required_positional:
+        return []
+    if len(required_positional) == 1:
+        return [None]
+    return None
 
 
 def _read_manifest_payload(manifest_path: Path) -> dict[str, Any]:
@@ -300,6 +344,17 @@ def _write_runner_result(output_path: Path, result: dict[str, Any]) -> None:
     output_path.write_text(
         json.dumps(result, sort_keys=True, separators=(",", ":"), ensure_ascii=False),
         encoding="utf-8",
+    )
+
+
+def _emit_runner_log(result: dict[str, Any]) -> None:
+    print(
+        "B2_RUNNER_COMPLETE "
+        f"manifest_verified={result.get('manifest_verified')} "
+        f"import_status={result.get('import_status')} "
+        f"instantiate_status={result.get('instantiate_status')} "
+        f"forward_status={result.get('forward_status')}",
+        flush=True,
     )
 
 
