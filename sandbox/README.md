@@ -17,12 +17,14 @@ Implemented host-side contract so far:
 - Injectable `B2HostRunner` coordinator using a fake/fixture `CommandRunner`.
 - Full fixture end-to-end tests from `run_validation_job()` through `artifact.details.sandbox_check`.
 - PR hardening coverage for `python -I -S`, inspect planned host mount source checks, and B-2 schema round-trips.
+- Real subprocess-backed Docker lifecycle runner for local Linux Docker daemon demo use, still injected and opt-in.
+- Local B-2 demo image and script contract for Docker/runsc evidence collection.
 
 Not implemented yet:
 
-- No real Docker/runsc executor is present.
-- No `subprocess.run`, shell execution, Docker create/start/wait/inspect/logs/cp/rm execution, or Linux e2e is wired.
-- Current B-2 host runner execution is fixture-based through injected command runners only.
+- No real Docker/runsc execution is enabled by default in pytest or normal validation jobs.
+- No Linux runsc e2e test is wired yet.
+- No production queue/DB/review UI integration is present.
 
 ## 담당자
 정은미, 양유상, 공통

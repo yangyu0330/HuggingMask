@@ -1,0 +1,1 @@
+# Keep the demo image dependency-free until the B-2 target requires otherwise.

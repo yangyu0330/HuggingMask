@@ -566,13 +566,28 @@ def _support_manifest_file(resolved: ResolvedSnapshotFile) -> B2ManifestFile:
 def _target_from_result(result: ArtifactValidationResult, primary_repo_path: str) -> B2Target:
     details = result.details or {}
     target_module = details.get("target_module") or _module_name_from_repo_path(primary_repo_path)
+    target_class = details.get("target_class") or _single_forward_class_from_ast(details)
     return B2Target(
         source="auto_map" if details.get("linked_from_config") else "direct_python",
         target_module=str(target_module),
-        target_class=details.get("target_class"),
+        target_class=target_class,
         auto_map_key=details.get("auto_map_key"),
         primary_repo_path=primary_repo_path,
     )
+
+
+def _single_forward_class_from_ast(details: dict[str, Any]) -> str | None:
+    ast_scan = details.get("ast_scan") or {}
+    classes = ast_scan.get("classes") or []
+    if not isinstance(classes, list) or len(classes) != 1:
+        return None
+    class_name = classes[0]
+    if not isinstance(class_name, str):
+        return None
+    methods = ast_scan.get("methods") or []
+    if f"{class_name}.forward" not in methods:
+        return None
+    return class_name
 
 
 def _build_result_index(results: Iterable[ArtifactValidationResult]) -> dict[str, ArtifactValidationResult]:

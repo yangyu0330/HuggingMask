@@ -107,6 +107,7 @@ def test_primary_b2_artifact_manifest_includes_support_json(tmp_path: Path) -> N
     assert manifest.grade == "B-2"
     assert manifest.target.source == "direct_python"
     assert manifest.target.target_module == "modeling_demo"
+    assert manifest.target.target_class == "DemoModel"
     assert files["modeling_demo.py"].target_allowed is True
     assert files["modeling_demo.py"].import_allowed is True
     assert files["modeling_demo.py"].is_primary is True
