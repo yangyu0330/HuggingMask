@@ -22,15 +22,21 @@ runsc/Docker가 없으면 하위 검증기가 graceful degrade 한다
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
 from analyzer.schemas import (
+    ArtifactValidationResult,
+    CodeGrade,
     ModelRef,
     OverallDecision,
     PolicyInfo,
+    ReasonEntry,
+    ReviewAction,
+    RouteKind,
     ValidationJobRequest,
     ValidationJobResponse,
     ValidationStatus,
@@ -115,6 +121,8 @@ def _subset_request(
         enable_path_b=request.enable_path_b,
         policy_fingerprint=request.policy_fingerprint,
         notes=request.notes,
+        model_snapshot_root=request.model_snapshot_root,
+        model_snapshot_inventory=request.model_snapshot_inventory,
     )
 
 
@@ -152,6 +160,95 @@ def _release(status: ValidationStatus) -> str:
     return "APPROVE_AND_STORE"
 
 
+def _code_config_route_kind(artifact) -> RouteKind:
+    if artifact.file_kind.value in {"CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}:
+        return RouteKind.CONFIG_SCHEMA_VALIDATION
+    return RouteKind.CODE_AST_SCAN
+
+
+def _source_error_result(
+    artifact,
+    *,
+    reason_code: str,
+    message: str,
+    details: dict,
+) -> ArtifactValidationResult:
+    started_at = _now()
+    return ArtifactValidationResult(
+        artifact=artifact,
+        route_kind=_code_config_route_kind(artifact),
+        status=ValidationStatus.ERROR,
+        grade=CodeGrade.NA,
+        review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+        cache_key=f"{artifact.sha256}:{artifact.file_kind.value}:source-integrity",
+        cache_hit=False,
+        reason_entries=[
+            ReasonEntry(
+                code=reason_code,
+                message=message,
+                severity="HIGH",
+                evidence=[artifact.repo_path],
+                review_required=True,
+            )
+        ],
+        started_at=started_at,
+        finished_at=_now(),
+        details=details,
+    )
+
+
+def _verified_text_source(artifact) -> tuple[str | None, ArtifactValidationResult | None]:
+    try:
+        raw = Path(artifact.temp_local_path).read_bytes()
+    except OSError as exc:
+        return None, _source_error_result(
+            artifact,
+            reason_code="SOURCE_READ_ERROR",
+            message=f"source file could not be read: {exc}",
+            details={
+                "error": str(exc),
+                "repo_path": artifact.repo_path,
+                "temp_local_path": artifact.temp_local_path,
+            },
+        )
+
+    actual_size = len(raw)
+    if actual_size != artifact.size_bytes:
+        return None, _source_error_result(
+            artifact,
+            reason_code="SOURCE_SIZE_MISMATCH",
+            message="source file size does not match artifact metadata",
+            details={
+                "repo_path": artifact.repo_path,
+                "temp_local_path": artifact.temp_local_path,
+                "expected_size_bytes": artifact.size_bytes,
+                "actual_size_bytes": actual_size,
+            },
+        )
+
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != artifact.sha256:
+        return None, _source_error_result(
+            artifact,
+            reason_code="SOURCE_SHA256_MISMATCH",
+            message="source file sha256 does not match artifact metadata",
+            details={
+                "repo_path": artifact.repo_path,
+                "temp_local_path": artifact.temp_local_path,
+                "expected_sha256": artifact.sha256,
+                "actual_sha256": actual_sha256,
+            },
+        )
+
+    return raw.decode("utf-8", errors="replace"), None
+
+
+def _extend_unique(target: list[str], values: list[str]) -> None:
+    for value in values:
+        if value not in target:
+            target.append(value)
+
+
 def run_full_validation(
     request: ValidationJobRequest | dict,
     *,
@@ -170,12 +267,18 @@ def run_full_validation(
 
     results: list = []
     generated: list = []
+    approved_artifact_ids: list[str] = []
+    blocked_artifact_ids: list[str] = []
+    pending_artifact_ids: list[str] = []
 
     # 1) 가중치 경로 (정은미)
     if weight_arts:
         wresp = _validate_weight_job(_subset_request(request, weight_arts))
         results.extend(wresp.artifact_results)
         generated.extend(wresp.generated_artifacts)
+        _extend_unique(approved_artifact_ids, wresp.approved_artifact_ids)
+        _extend_unique(blocked_artifact_ids, wresp.blocked_artifact_ids)
+        _extend_unique(pending_artifact_ids, wresp.pending_artifact_ids)
 
     # 2) 코드 + config 경로 (양유상 orchestrator + 본인 화이트리스트/제한런타임)
     if codecfg_arts:
@@ -185,33 +288,53 @@ def run_full_validation(
         from whitelist.integration import run_validation_job_with_whitelist_engine
 
         sources: dict[str, str] = {}
+        verified_codecfg_arts = []
         for a in codecfg_arts:
-            try:
-                sources[a.repo_path] = Path(a.temp_local_path).read_text(
-                    encoding="utf-8", errors="replace"
+            if a.repo_path in sources:
+                source_error = _source_error_result(
+                    a,
+                    reason_code="DUPLICATE_REPO_PATH",
+                    message="duplicate repo_path cannot be safely mapped to one source",
+                    details={
+                        "repo_path": a.repo_path,
+                        "temp_local_path": a.temp_local_path,
+                    },
                 )
-            except OSError:
-                sources[a.repo_path] = ""
+                results.append(source_error)
+                _extend_unique(pending_artifact_ids, [a.artifact_id])
+                continue
 
-        runtime_loader = make_restricted_runtime_loader(sources)
-        policy = request.policy or _default_policy()
-        # orchestrator용 analyzer ModelRef (request에 채워 forward)
-        analyzer_model = request.model or _default_model()
-        cc_request = _subset_request(
-            request, codecfg_arts, policy=policy, model=analyzer_model
-        )
-        # WhitelistEngineLookup용 pydantic ModelRef (model= 인자는 별도 타입)
-        wl_model = model if model is not None else _whitelist_model(analyzer_model)
+            source, source_error = _verified_text_source(a)
+            if source_error is not None:
+                results.append(source_error)
+                _extend_unique(pending_artifact_ids, [a.artifact_id])
+                continue
+            sources[a.repo_path] = source or ""
+            verified_codecfg_arts.append(a)
 
-        cresp = run_validation_job_with_whitelist_engine(
-            cc_request,
-            db=db,
-            engine=engine,
-            model=wl_model,
-            source_loader=sources,
-            runtime_check_loader=runtime_loader,
-        )
-        results.extend(cresp.artifact_results)
+        if verified_codecfg_arts:
+            runtime_loader = make_restricted_runtime_loader(sources)
+            policy = request.policy or _default_policy()
+            # orchestrator용 analyzer ModelRef (request에 채워 forward)
+            analyzer_model = request.model or _default_model()
+            cc_request = _subset_request(
+                request, verified_codecfg_arts, policy=policy, model=analyzer_model
+            )
+            # WhitelistEngineLookup용 pydantic ModelRef (model= 인자는 별도 타입)
+            wl_model = model if model is not None else _whitelist_model(analyzer_model)
+
+            cresp = run_validation_job_with_whitelist_engine(
+                cc_request,
+                db=db,
+                engine=engine,
+                model=wl_model,
+                source_loader=sources,
+                runtime_check_loader=runtime_loader,
+            )
+            results.extend(cresp.artifact_results)
+            _extend_unique(approved_artifact_ids, cresp.approved_artifact_ids)
+            _extend_unique(blocked_artifact_ids, cresp.blocked_artifact_ids)
+            _extend_unique(pending_artifact_ids, cresp.pending_artifact_ids)
 
     overall = _combine_status(results)
 
@@ -222,18 +345,9 @@ def run_full_validation(
         overall_status=overall,
         release_action=_release(overall),
         artifact_results=results,
-        approved_artifact_ids=[
-            r.artifact.artifact_id for r in results
-            if r.status is ValidationStatus.PASS
-        ],
-        blocked_artifact_ids=[
-            r.artifact.artifact_id for r in results
-            if r.status is ValidationStatus.BLOCK
-        ],
-        pending_artifact_ids=[
-            r.artifact.artifact_id for r in results
-            if r.status in {ValidationStatus.PENDING_REVIEW, ValidationStatus.ERROR}
-        ],
+        approved_artifact_ids=approved_artifact_ids,
+        blocked_artifact_ids=blocked_artifact_ids,
+        pending_artifact_ids=pending_artifact_ids,
         generated_artifacts=generated,
         report_id=f"report-{request.job_id}",
         report_path="",

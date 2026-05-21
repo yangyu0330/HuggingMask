@@ -14,9 +14,16 @@ import uuid
 import pytest
 
 from analyzer.schemas import (
+    ArtifactRef,
+    ArtifactValidationResult,
+    CodeGrade,
     ModelRef,
     OverallDecision,
+    ReasonEntry,
+    ReviewAction,
+    RouteKind,
     ValidationJobRequest,
+    ValidationJobResponse,
     ValidationStatus,
 )
 from whitelist.full_pipeline import _combine_status, run_full_validation
@@ -160,3 +167,119 @@ class TestFullPipelineRouting:
         resp = run_full_validation(payload, db=db_session)
         assert resp.request_id == "r1"
         assert len(resp.artifact_results) == 1
+
+    def test_weight_release_id_lists_are_preserved(
+        self, db_session, monkeypatch, tmp_path
+    ):
+        original = tmp_path / "training_args.bin"
+        original.write_bytes(b"pickle payload")
+        req = _request([_artifact(original, "training_args.bin", "PICKLE")])
+        original_ref = req.artifacts[0]
+
+        converted = tmp_path / "training_args.safetensors"
+        converted.write_bytes(b"converted safetensors")
+        converted_digest = _sha256_bytes(converted.read_bytes())
+        generated_ref = ArtifactRef(
+            artifact_id=f"sha256:{converted_digest}",
+            repo_path=converted.as_posix(),
+            file_name=converted.name,
+            file_kind="SAFETENSORS",
+            detected_extension=".safetensors",
+            size_bytes=converted.stat().st_size,
+            sha256=converted_digest,
+            source_url=original_ref.source_url,
+            temp_local_path=converted.as_posix(),
+            referenced_by=[original_ref.file_name],
+            is_generated=True,
+        )
+        weight_result = ArtifactValidationResult(
+            artifact=original_ref,
+            route_kind=RouteKind.PICKLE_PATH_A,
+            status=ValidationStatus.PASS,
+            grade=CodeGrade.NA,
+            review_action=ReviewAction.AUTO_APPROVE_REGENERATED,
+            cache_key="",
+            cache_hit=False,
+            reason_entries=[ReasonEntry(code="PICKLE_CONVERTED", message="ok")],
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:00Z",
+            details={},
+            generated_artifact=generated_ref,
+        )
+        weight_response = ValidationJobResponse(
+            request_id=req.request_id,
+            job_id=req.job_id,
+            overall_decision=OverallDecision.APPROVE,
+            overall_status=ValidationStatus.PASS,
+            release_action="APPROVE",
+            artifact_results=[weight_result],
+            approved_artifact_ids=[generated_ref.artifact_id],
+            blocked_artifact_ids=[],
+            pending_artifact_ids=[],
+            generated_artifacts=[generated_ref],
+            report_id=f"report-{req.job_id}",
+            report_path="",
+            reason_entries=[],
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        monkeypatch.setattr(
+            "whitelist.full_pipeline._validate_weight_job",
+            lambda job: weight_response,
+        )
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.approved_artifact_ids == [generated_ref.artifact_id]
+        assert original_ref.artifact_id not in resp.approved_artifact_ids
+        assert resp.generated_artifacts == [generated_ref]
+
+    def test_code_config_source_metadata_mismatch_fails_closed(
+        self, db_session, tmp_path
+    ):
+        declared = tmp_path / "declared_config.json"
+        declared.write_text('{"model_type": "roberta"', encoding="utf-8")
+        actual = tmp_path / "actual_config.json"
+        actual.write_text(CONFIG_JSON, encoding="utf-8")
+
+        artifact = _artifact(declared, "config.json", "CONFIG_JSON")
+        artifact["temp_local_path"] = str(actual)
+        req = _request([artifact])
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.ERROR
+        assert resp.approved_artifact_ids == []
+        assert artifact["artifact_id"] in resp.pending_artifact_ids
+        result = resp.artifact_results[0]
+        assert result.status is ValidationStatus.ERROR
+        assert result.reason_entries[0].code in {
+            "SOURCE_SIZE_MISMATCH",
+            "SOURCE_SHA256_MISMATCH",
+        }
+
+    def test_duplicate_repo_path_does_not_overwrite_verified_source(
+        self, db_session, tmp_path
+    ):
+        evil = tmp_path / "evil.py"
+        evil.write_text(EVIL_PY, encoding="utf-8")
+        safe = tmp_path / "safe.py"
+        safe.write_text(SAFE_PY, encoding="utf-8")
+
+        req = _request([
+            _artifact(evil, "modeling.py", "PYTHON"),
+            _artifact(safe, "modeling.py", "PYTHON"),
+        ])
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.BLOCK
+        assert any(
+            result.status is ValidationStatus.BLOCK
+            for result in resp.artifact_results
+        )
+        assert any(
+            result.status is ValidationStatus.ERROR
+            and result.reason_entries[0].code == "DUPLICATE_REPO_PATH"
+            for result in resp.artifact_results
+        )

@@ -1,11 +1,10 @@
 """실제 HuggingFace 모델 e2e 검증 데모 클라이언트.
 
 HF Hub에서 모델 repo를 다운로드 → 파일별로 sha256 + FileKind 분류 →
-``POST /internal/v1/validation/jobs``로 검증 요청 → 결과를 표로 출력.
+``POST /internal/v1/validation/full``로 검증 요청 → 결과를 표로 출력.
 
-현재 ``/validation/jobs``는 가중치 파일(SAFETENSORS / PICKLE)만 실제 검증하고
-config / tokenizer / python 은 SKIPPED로 응답한다 (오케스트레이터 HTTP 미노출).
-데모에서는 safetensors PASS vs pickle(.bin) 검증 대비를 보여주는 것이 핵심.
+기본값은 통합 엔드포인트(``/validation/full``)이며, ``--weight-only``를 주면
+기존 가중치 전용 엔드포인트(``/validation/jobs``)로 요청한다.
 
 사전 준비:
     pip install huggingface_hub safetensors torch numpy
