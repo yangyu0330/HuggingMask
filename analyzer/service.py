@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -6,7 +7,9 @@ from analyzer.schemas import (
     ArtifactRef,
     ArtifactValidationResult,
     CodeGrade,
+    ModelRef,
     OverallDecision,
+    PolicyInfo,
     ReasonEntry,
     ReviewAction,
     RouteKind,
@@ -18,10 +21,53 @@ from analyzer.validators.weight.pipeline import validate
 
 
 WEIGHT_FILE_KINDS = {"SAFETENSORS", "PICKLE"}
+ORCHESTRATOR_FILE_KINDS = {"PYTHON", "CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
+STATUS_PRIORITY = {
+    "PASS": 0,
+    "PENDING_REVIEW": 1,
+    "ERROR": 2,
+    "BLOCK": 3,
+}
 
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _status_value(status) -> str:
+    return status.value if hasattr(status, "value") else str(status)
+
+
+def _merge_overall_status(current: str, candidate) -> str:
+    candidate_value = _status_value(candidate)
+    return (
+        candidate_value
+        if STATUS_PRIORITY[candidate_value] > STATUS_PRIORITY[current]
+        else current
+    )
+
+
+def _default_policy(policy_fingerprint: str) -> PolicyInfo:
+    return PolicyInfo(
+        policy_version="default-policy",
+        whitelist_version="default-whitelist",
+        opcode_policy_version="default-opcode-policy",
+        config_schema_version="default-config-schema",
+        runtime_profile_version="default-runtime-profile",
+        policy_fingerprint=policy_fingerprint,
+    )
+
+
+def _default_model() -> ModelRef:
+    return ModelRef(
+        repo_id="unknown/unknown",
+        revision="main",
+        source_host="local",
+        source_url="local",
+        requested_at=_now(),
+        endpoint_mode="INTERNAL_VALIDATION_JOB",
+        requested_by=None,
+    )
 
 
 def _json_safe(obj):
@@ -146,6 +192,7 @@ def _make_source_loader(artifacts: list) -> dict[str, bytes]:
 
 def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
     from analyzer.orchestrator import run_validation_job
+    from analyzer.validators.code_semantic import is_preprocessing_metadata_kind
 
     # 파일 종류별로 분리
     weight_artifacts = [
@@ -206,19 +253,23 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
         elif mapped.status == ValidationStatus.SKIPPED:
             pass
         else:
+            overall_status = _merge_overall_status(overall_status, mapped.status)
             pending_artifact_ids.append(artifact.artifact_id)
 
     # ── 비가중치 파일: orchestrator에 위임 ──────────────────────────────────
-    # orchestrator가 처리하는 파일 종류
-    ORCHESTRATOR_FILE_KINDS = {"PYTHON", "CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
-
     orchestrator_artifacts = [
         a for a in non_weight_artifacts
-        if str(a.file_kind) in ORCHESTRATOR_FILE_KINDS
+        if (
+            str(a.file_kind) in ORCHESTRATOR_FILE_KINDS
+            or is_preprocessing_metadata_kind(a.file_kind)
+        )
     ]
     skipped_artifacts = [
         a for a in non_weight_artifacts
-        if str(a.file_kind) not in ORCHESTRATOR_FILE_KINDS
+        if not (
+            str(a.file_kind) in ORCHESTRATOR_FILE_KINDS
+            or is_preprocessing_metadata_kind(a.file_kind)
+        )
     ]
 
     # 지원하지 않는 파일 종류 → SKIPPED
@@ -236,13 +287,18 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
         source_loader = _make_source_loader(orchestrator_artifacts)
 
         # job 복사본에 orchestrator 대상 artifacts만 담아서 호출
-        import dataclasses
-        sub_job = dataclasses.replace(job, artifacts=orchestrator_artifacts)
+        sub_job = replace(
+            job,
+            artifacts=orchestrator_artifacts,
+            model=job.model or _default_model(),
+            policy=job.policy or _default_policy(policy_fingerprint),
+        )
 
         try:
             orch_response = run_validation_job(
                 sub_job,
                 source_loader=source_loader,
+                revision=sub_job.model.revision,
             )
 
             for item in orch_response.artifact_results:
@@ -252,12 +308,10 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
             blocked_artifact_ids.extend(orch_response.blocked_artifact_ids)
             pending_artifact_ids.extend(orch_response.pending_artifact_ids)
 
-            # overall_status 집계: BLOCK > PENDING_REVIEW > PASS
-            if str(orch_response.overall_status) == "BLOCK":
-                overall_status = "BLOCK"
-            elif str(orch_response.overall_status) in {"PENDING_REVIEW", "ERROR"}:
-                if overall_status == "PASS":
-                    overall_status = "PENDING_REVIEW"
+            overall_status = _merge_overall_status(
+                overall_status,
+                orch_response.overall_status,
+            )
 
         except Exception as e:
             # orchestrator 실패 시 전부 ERROR 처리
@@ -270,23 +324,28 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
                     details={"status": "ERROR", "error": str(e)},
                 )
                 results.append(err_result)
-                overall_status = "BLOCK"
-                blocked_artifact_ids.append(artifact.artifact_id)
+                overall_status = _merge_overall_status(overall_status, "ERROR")
+                pending_artifact_ids.append(artifact.artifact_id)
 
-    decision = (
-        OverallDecision.DENY
-        if overall_status == "BLOCK"
-        else OverallDecision.APPROVE
-        if overall_status == "PASS"
-        else OverallDecision.REVIEW_REQUIRED
-    )
+    if overall_status == "BLOCK":
+        decision = OverallDecision.DENY
+        release_action = "DENY"
+    elif overall_status == "ERROR":
+        decision = OverallDecision.ERROR
+        release_action = "ERROR"
+    elif overall_status == "PENDING_REVIEW":
+        decision = OverallDecision.REVIEW_REQUIRED
+        release_action = "DENY"
+    else:
+        decision = OverallDecision.APPROVE
+        release_action = "APPROVE"
 
     return ValidationJobResponse(
         request_id=job.request_id,
         job_id=job.job_id,
         overall_decision=decision,
         overall_status=ValidationStatus(overall_status),
-        release_action="DENY" if overall_status in {"BLOCK", "PENDING_REVIEW"} else "APPROVE",
+        release_action=release_action,
         artifact_results=results,
         approved_artifact_ids=approved_artifact_ids,
         blocked_artifact_ids=blocked_artifact_ids,
