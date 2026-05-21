@@ -4,10 +4,10 @@
 
 schema, file classifier, config routing, code validator 결과를 연결해 analyzer 단위에서 최소 `ValidationJobResponse` 형태를 만들 수 있게 한다. 이 단계는 최종 Analyzer Core 조립 책임이 아니라 proxy 없이 코드검증 흐름을 end-to-end로 테스트하는 adapter 계층이다.
 
-## 구현 반영 상태 (2026-04-21)
+## 구현 반영 상태 (2026-05-22)
 
-- 상태: 완료(최소 연결). orchestrator adapter가 schema, classifier, config routing, code validator 결과를 analyzer 단위에서 연결한다.
-- 경계: 이 orchestrator는 최종 Analyzer Core 구현이 아니라 코드검증 결과 연결용 최소 adapter다. proxy endpoint는 아직 구현하지 않았다.
+- 상태: 완료. orchestrator가 schema, classifier, config routing, code validator, 전처리 semantic gate, runtime loader 결과를 analyzer 단위에서 연결한다.
+- 경계: 코드/config validation flow는 `analyzer/orchestrator.py`가 담당하고, 가중치까지 포함한 통합 병합은 `whitelist/full_pipeline.py`가 담당한다. proxy endpoint는 구현되어 이 경로를 호출한다.
 
 ## 담당 범위
 
@@ -24,13 +24,13 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 
 ## 비범위
 
-- FastAPI proxy endpoint 최종 구현
+- FastAPI proxy endpoint 내부 정책 구현
 - 외부 요청 인증/권한
 - 실제 Hub 다운로드
 - ML-BOM, audit log, report 저장소
 - review queue 생성
-- 정식 whitelist/pending store 연동
-- gVisor/Docker runtime 실행 orchestration
+- whitelist/pending store 직접 접근
+- gVisor/Docker runtime 운영 배포 orchestration
 
 ## 입력
 
@@ -38,7 +38,7 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 - `ArtifactRef[]`
 - artifact local path/source loader
 - `WhitelistLookup` in-memory adapter
-- 선택 입력: runtime gate adapter 또는 stub
+- 선택 입력: runtime gate adapter, source resolver, whitelist adapter
 
 ## 출력
 
@@ -76,7 +76,7 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 - `release_action`은 상태에 맞춰 `DENY`, `ERROR`, `REVIEW_QUEUE`, `APPROVE_AND_STORE`를 반환한다.
 - `PENDING_REVIEW` artifact는 release 대상이 아니다.
 - A 등급 재생성 결과가 있는 경우 원본이 아니라 `effective_output_artifact_id`를 승인 대상으로 사용한다.
-- proxy에는 검증 로직을 넣지 않고, 이후 proxy는 이 orchestrator만 호출한다.
+- proxy에는 검증 로직을 넣지 않고, analyzer orchestrator 또는 `whitelist.full_pipeline.run_full_validation`을 호출한다.
 
 ## 테스트
 
@@ -105,4 +105,4 @@ schema, file classifier, config routing, code validator 결과를 연결해 anal
 
 ## 다음 단계 연결
 
-단계 7은 proxy smoke endpoint를 선택적으로 연결한다. 단계 6이 끝나면 proxy는 검증 로직을 소유하지 않고 orchestrator를 호출하는 얇은 진입점으로만 구현할 수 있다.
+단계 7의 proxy smoke endpoint는 구현되어 있다. 이후 변경은 proxy가 검증 로직을 소유하지 않는다는 경계를 유지하면서 endpoint 회귀 테스트를 확장한다.

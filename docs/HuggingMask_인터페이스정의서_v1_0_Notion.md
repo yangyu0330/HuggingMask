@@ -5,8 +5,9 @@ _Notion 업로드용 / 구현 기준 문서_
 
 - 문서명: HuggingMask 인터페이스 정의서
 - 버전: v1.0
-- 상태: Freeze Candidate
-- 적용 범위: 박용담 파일분류/JSON/config/tokenizer, 정은미 가중치검증경로, 양유상 코드검증경로, 김민우 적응형 화이트리스트 엔진, Proxy 후순위 진입점
+- 상태: Freeze Candidate / 구현 상태 반영 갱신
+- 최종 갱신일: 2026-05-22
+- 적용 범위: 박용담 파일분류/JSON/config/tokenizer, 정은미 가중치검증경로, 양유상 코드검증경로, 김민우 적응형 화이트리스트 엔진, Proxy 진입점, 통합 검증 endpoint
 - 인터페이스 기준: 코드 제작 착수 전 고정
 - 변경 정책: 공통 JSON 계약 변경은 팀장 승인 + 영향 모듈 담당자 동의 후 진행
 - 비고: 이 문서는 구현 편의를 위해 기존 계획서/상세설계 문서의 요구사항을 **실행 가능한 JSON 계약 형태**로 재구성한 통합 문서다.
@@ -38,8 +39,9 @@ _Notion 업로드용 / 구현 기준 문서_
 5. 양유상이 Python 코드 검증 경로와 config가 참조한 `.py` 파일 검증을 실행한다.
 6. 양유상의 코드 검증 중 API 판정이 필요하면 김민우의 Whitelist Engine에 질의한다.
 7. 김민우가 미등록 API를 Pending List에 등록하거나 갱신한다.
-8. 박용담이 정은미/양유상/김민우 결과를 종합해 `ValidationJobResponse`를 만든다.
-9. Proxy는 후순위로 두며, 나중에 박용담 기준의 orchestrator를 호출하는 진입점으로 연결한다.
+8. 코드/config 결과는 `analyzer/orchestrator.py`가 `ValidationJobResponse`로 조립한다.
+9. 통합 검증은 `whitelist/full_pipeline.py`가 가중치 결과와 코드/config/whitelist/제한 런타임 결과를 병합한다.
+10. Proxy는 구현된 FastAPI 진입점으로, 검증 정책을 직접 소유하지 않고 analyzer/whitelist 통합 함수를 호출한다.
 
 ### 2.2 모듈 경계
 
@@ -50,7 +52,7 @@ _Notion 업로드용 / 구현 기준 문서_
 | Weight Validator | safetensors / pickle Path A / pickle Path B 검증 | 가중치 artifact | ArtifactValidationResult | 정은미 |
 | Code Validator | 검증1(AST 후보 추출), 검증2(`API_POLICY_SCAN` + contextual safe/review/block), 검증3(`GRADE_DECISION`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
 | Whitelist Engine | API 허용 여부 확인, Pending List 등록/갱신, 리뷰 반영 | API 목록, 미등록 API, 리뷰 결정 | WhitelistCheckResponse, PendingApiRecord, ReviewDecisionResult | 김민우 |
-| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출. proxy 내부에는 검증 로직을 두지 않음 | 외부 요청 | ValidationJobResponse | 공통 |
+| Proxy | FastAPI 진입점. `/health`, validation endpoint, whitelist 운영 API, dashboard 제공. proxy 내부에는 검증 로직을 두지 않음 | 외부 요청 | ValidationJobResponse | 공통 |
 
 ### 2.3 내부 API 엔드포인트 계약 (v1.0)
 
@@ -58,14 +60,15 @@ _Notion 업로드용 / 구현 기준 문서_
 
 | 제공 모듈 | Method | Path | Request | Response | 비고 |
 |---|---|---|---|---|---|
-| Analyzer Core | `POST` | `/internal/v1/validation/jobs` | `ValidationJobRequest` | `ValidationJobResponse` | 후순위 Proxy가 호출 |
+| Analyzer Core | `POST` | `/internal/v1/validation/jobs` | `ValidationJobRequest` | `ValidationJobResponse` | 가중치 검증 중심 endpoint |
+| Unified Pipeline | `POST` | `/internal/v1/validation/full` | `ValidationJobRequest` | `ValidationJobResponse` | 가중치 + 코드/config + whitelist + 제한 런타임 통합 |
 | Code Validator | `POST` | `/internal/v1/whitelist/check` | `WhitelistCheckRequest` | `WhitelistCheckResponse[]` | AST 결과 API 목록 조회 |
 | Whitelist Engine | `POST` | `/internal/v1/pending/upsert` | `PendingApiUpsertRequest` | `PendingApiRecord` | 미등록 API 등록/갱신 |
 | Review Gate | `POST` | `/internal/v1/reviews/decide` | `ReviewDecisionRequest` | `ReviewDecisionResult` | 보안 담당자 판단 반영 |
 | Analyzer Core | `POST` | `/internal/v1/reports` | `ValidationReport` | `{report_id, report_path}` | 검증 리포트 저장 |
 | Governance | `POST` | `/internal/v1/mlbom` | `MLBOM` | `{mlbom_id}` | ML-BOM 저장 |
 | Governance | `POST` | `/internal/v1/audit/events` | `AuditEvent` | `{event_id, event_hash}` | append-only 감사 로그 |
-| Proxy | `POST` | `/internal/v1/approvals` | `ApprovalPackage` | `{release_ids, cache_keys}` | 후순위 승인 결과물 배포/캐시 반영 |
+| Proxy | `POST` | `/internal/v1/approvals` | `ApprovalPackage` | `{release_ids, cache_keys}` | 승인 결과물 배포/캐시 반영 |
 
 ### 2.4 전송/재시도 규칙
 
@@ -744,7 +747,7 @@ _Validation Engine → Proxy_
 
 ### 12.6 `runtime_check`
 
-1차 코드검증 구현에서는 제한 런타임/gVisor를 실제 실행하지 않고, `runtime_check` 입력과 테스트 stub로만 gate 결과를 표현할 수 있다. 제한 런타임은 B-1 후보 gate이고, gVisor/Docker는 B-2/C 증거 수집과 리뷰 보조용이며 자동 승인 증명이 아니다.
+현재 제한 런타임은 B-1 후보 gate로 구현되어 있으며, 실패/스킵/fixture 부족은 자동 PASS가 아니라 보수적으로 처리한다. B-2/C sandbox는 증거 수집과 리뷰 보조용이며 자동 승인 증명이 아니다. `runtime_check` 필드는 제한 런타임 또는 sandbox 계층의 관찰 결과를 담는 확장 detail이다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|

@@ -1,7 +1,7 @@
 # TASK GUIDE
 
 HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.  
-현재는 데모코드 검토를 끝내고 실제 검증 엔진 코드 제작에 들어가는 단계입니다.
+현재는 핵심 검증 엔진 제작을 지나 통합 검증 endpoint, 운영 UI, 데모 증빙을 안정화하는 단계입니다.
 
 ## 1. 운영 리듬
 - 시작 전: 담당 범위와 입력/출력 확인
@@ -18,7 +18,7 @@ HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.
 - 박용담: 파일분류, `config.json`, `tokenizer_config.json`, 공통 JSON 스키마/계약, 최종 응답 조립 기준
 - 정은미: 가중치검증경로, safetensors 검증, pickle Path A/Path B 검증, 가중치 artifact별 validation result 생성
 - 양유상: 코드검증경로, 검증1(`CODE_AST_SCAN`), 검증2(`CODE_RESTRICTED_RUNTIME`), 검증3(`CODE_SANDBOX_RUNTIME`), config가 참조한 `.py` 파일의 코드 검증
-- 김민우: 적응형 화이트리스트 엔진, allow/block/unknown/pending 판정, pending API 저장/갱신, adaptive whitelist 정책 문서화
+- 김민우: 적응형 화이트리스트 엔진, allow/block/unknown/pending 판정, pending API 저장/갱신, adaptive whitelist 정책 문서화, 통합 검증 endpoint와 운영 대시보드 연결
 
 ## 3. 작업 단위 규칙
 - 기능 전체를 한 번에 하지 말고 작은 단위로 분리
@@ -50,8 +50,8 @@ HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.
 - `analyzer`: 박용담/정은미/양유상 담당 검증 흐름의 중심 모듈
 - `analyzer/validators`: 정은미/양유상 담당 파일 유형별 검증 경로
 - `whitelist`: 김민우 담당 적응형 화이트리스트와 pending API 관리
-- `proxy`: 후순위 FastAPI 진입점, 향후 `orchestrator` 호출 담당
-- `sandbox`: 정은미/양유상 검증에서 제한 실행이 필요할 때 연결
+- `proxy`: FastAPI 진입점. `/health`, `/internal/v1/validation/jobs`, `/internal/v1/validation/full`, whitelist 운영 API, `/dashboard` 제공
+- `sandbox`: B-2/C 후보에 대한 격리 실행 증거 수집 및 정책 게이트 담당
 
 ## 8. 증빙 자료 운영 규칙
 다음 폴더를 작업 단위로 업데이트합니다.
@@ -77,8 +77,10 @@ evidence/budget
 - 통합 실패 시 개인 작업보다 통합 안정화 우선
 
 ## 10. 최종 목표
-각 담당자가 만든 코드를 공통 JSON 계약으로 붙일 수 있는 상태를 만든다.
+각 담당자가 만든 검증 경로를 공통 JSON 계약과 단일 endpoint로 안정적으로 붙이고, 데모/운영 증빙까지 재현 가능한 상태를 만든다.
 - 박용담/정은미/양유상/김민우 입출력 계약 일치
-- mock fixture 기반 검증 가능
+- mock fixture 및 local snapshot 기반 검증 가능
+- `POST /internal/v1/validation/full`에서 가중치 + 코드 + config + whitelist + 제한 런타임 통합 판정 가능
+- 운영 대시보드에서 pending/review/audit/feedback 확인 가능
 - `python -m pytest -q` 통과
 - 구현 근거와 테스트 결과 증빙
