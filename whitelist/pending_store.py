@@ -216,6 +216,13 @@ def upsert_pending_record(
 
     existing = get_pending(db, record.api_path)
     if existing:
+        existing_status = ReviewStatus(existing.review_status)
+        if existing_status is not ReviewStatus.PENDING:
+            raise ValueError(
+                f"/pending/upsert cannot downgrade finalized review_status "
+                f"{existing_status.value} to PENDING. Use /reviews/decide "
+                f"for review state transitions."
+            )
         # 업데이트 — record 값으로 덮어쓴다 (외부가 명시적으로 보낸 값이 우선)
         existing.first_seen_at = record.first_seen_at
         existing.last_seen_at = record.last_seen_at
