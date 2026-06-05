@@ -101,6 +101,10 @@ class TestCombineStatus:
     def test_empty_is_pass(self):
         assert _combine_status([]) is ValidationStatus.PASS
 
+    def test_skipped_requires_review(self):
+        rs = [self._R(ValidationStatus.SKIPPED)]
+        assert _combine_status(rs) is ValidationStatus.PENDING_REVIEW
+
 
 class TestFullPipelineRouting:
     """코드 + config가 각 검증기로 실제 라우팅되고 병합되는지."""
@@ -154,6 +158,52 @@ class TestFullPipelineRouting:
         r = resp.artifact_results[0]
         assert r.artifact.file_name == "tokenizer_config.json"
         assert r.status is not ValidationStatus.SKIPPED
+
+    def test_unrouted_artifact_is_visible_and_gates_release(
+        self, db_session, tmp_path
+    ):
+        preprocessor = tmp_path / "preprocessor_config.json"
+        preprocessor.write_text(
+            '{"image_processor_type": "DemoProcessor"}\n',
+            encoding="utf-8",
+        )
+
+        artifact = _artifact(
+            preprocessor,
+            "preprocessor_config.json",
+            "PREPROCESSOR_CONFIG_JSON",
+        )
+        req = _request([artifact])
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.PENDING_REVIEW
+        assert resp.overall_decision is OverallDecision.REVIEW_REQUIRED
+        assert resp.release_action == "REVIEW_QUEUE"
+        assert resp.approved_artifact_ids == []
+        assert artifact["artifact_id"] in resp.pending_artifact_ids
+
+        assert len(resp.artifact_results) == 1
+        result = resp.artifact_results[0]
+        assert result.artifact.repo_path == "preprocessor_config.json"
+        assert result.route_kind is RouteKind.PREPROCESSING_SEMANTIC_SCAN
+        assert result.status is ValidationStatus.SKIPPED
+        assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
+        assert result.reason_entries[0].code == "UNROUTED_ARTIFACT_KIND"
+
+        assert resp.coverage_summary == {
+            "submitted": 1,
+            "result_count": 1,
+            "validated": 0,
+            "approved": 0,
+            "pending": 1,
+            "blocked": 0,
+            "skipped": 1,
+            "unsupported": 1,
+            "error": 0,
+            "missing": 0,
+            "extra_results": 0,
+        }
 
     def test_dict_request_accepted(self, db_session, tmp_path):
         """dict로 들어와도 ValidationJobRequest로 정규화."""
@@ -233,6 +283,53 @@ class TestFullPipelineRouting:
         assert resp.approved_artifact_ids == [generated_ref.artifact_id]
         assert original_ref.artifact_id not in resp.approved_artifact_ids
         assert resp.generated_artifacts == [generated_ref]
+
+    def test_routed_artifact_without_result_fails_closed(
+        self, db_session, monkeypatch, tmp_path
+    ):
+        original = tmp_path / "training_args.bin"
+        original.write_bytes(b"pickle payload")
+        req = _request([_artifact(original, "training_args.bin", "PICKLE")])
+        original_ref = req.artifacts[0]
+        empty_response = ValidationJobResponse(
+            request_id=req.request_id,
+            job_id=req.job_id,
+            overall_decision=OverallDecision.APPROVE,
+            overall_status=ValidationStatus.PASS,
+            release_action="APPROVE_AND_STORE",
+            artifact_results=[],
+            approved_artifact_ids=[original_ref.artifact_id],
+            blocked_artifact_ids=[],
+            pending_artifact_ids=[],
+            generated_artifacts=[],
+            report_id=f"report-{req.job_id}",
+            report_path="",
+            reason_entries=[],
+            created_at="2026-01-01T00:00:00Z",
+        )
+
+        monkeypatch.setattr(
+            "whitelist.full_pipeline._validate_weight_job",
+            lambda job: empty_response,
+        )
+
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.PENDING_REVIEW
+        assert resp.overall_decision is OverallDecision.REVIEW_REQUIRED
+        assert resp.release_action == "REVIEW_QUEUE"
+        assert resp.approved_artifact_ids == []
+        assert original_ref.artifact_id in resp.pending_artifact_ids
+
+        assert len(resp.artifact_results) == 1
+        result = resp.artifact_results[0]
+        assert result.artifact.artifact_id == original_ref.artifact_id
+        assert result.status is ValidationStatus.SKIPPED
+        assert result.reason_entries[0].code == "ARTIFACT_RESULT_MISSING"
+        assert resp.coverage_summary["submitted"] == 1
+        assert resp.coverage_summary["result_count"] == 1
+        assert resp.coverage_summary["pending"] == 1
+        assert resp.coverage_summary["unsupported"] == 1
 
     def test_code_config_source_metadata_mismatch_fails_closed(
         self, db_session, tmp_path
