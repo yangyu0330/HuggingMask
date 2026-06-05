@@ -45,6 +45,20 @@ from analyzer.service import validate_job as _validate_weight_job
 
 WEIGHT_KINDS = {"SAFETENSORS", "PICKLE"}
 CODE_CONFIG_KINDS = {"PYTHON", "CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
+PREPROCESSING_METADATA_KINDS = {
+    "TOKENIZER_JSON",
+    "SPECIAL_TOKENS_MAP_JSON",
+    "ADDED_TOKENS_JSON",
+    "VOCAB_JSON",
+    "MERGES_TXT",
+    "PREPROCESSOR_CONFIG_JSON",
+    "PROCESSOR_CONFIG_JSON",
+    "CHAT_TEMPLATE_JINJA",
+}
+UNVALIDATED_REASON_CODES = {
+    "ARTIFACT_RESULT_MISSING",
+    "UNROUTED_ARTIFACT_KIND",
+}
 
 
 def _now() -> str:
@@ -134,6 +148,8 @@ def _combine_status(results: list) -> ValidationStatus:
         return ValidationStatus.ERROR
     if ValidationStatus.PENDING_REVIEW in statuses:
         return ValidationStatus.PENDING_REVIEW
+    if ValidationStatus.SKIPPED in statuses:
+        return ValidationStatus.PENDING_REVIEW
     if ValidationStatus.PASS in statuses:
         return ValidationStatus.PASS
     # 전부 SKIPPED 거나 빈 경우
@@ -145,7 +161,7 @@ def _decision(status: ValidationStatus) -> OverallDecision:
         return OverallDecision.DENY
     if status is ValidationStatus.ERROR:
         return OverallDecision.ERROR
-    if status is ValidationStatus.PENDING_REVIEW:
+    if status in {ValidationStatus.PENDING_REVIEW, ValidationStatus.SKIPPED}:
         return OverallDecision.REVIEW_REQUIRED
     return OverallDecision.APPROVE
 
@@ -155,7 +171,7 @@ def _release(status: ValidationStatus) -> str:
         return "DENY"
     if status is ValidationStatus.ERROR:
         return "ERROR"
-    if status is ValidationStatus.PENDING_REVIEW:
+    if status in {ValidationStatus.PENDING_REVIEW, ValidationStatus.SKIPPED}:
         return "REVIEW_QUEUE"
     return "APPROVE_AND_STORE"
 
@@ -194,6 +210,57 @@ def _source_error_result(
         started_at=started_at,
         finished_at=_now(),
         details=details,
+    )
+
+
+def _unvalidated_route_kind(artifact) -> RouteKind:
+    file_kind = artifact.file_kind.value
+    if file_kind == "SAFETENSORS":
+        return RouteKind.SAFETENSORS_FAST_PATH
+    if file_kind == "PICKLE":
+        return RouteKind.PICKLE_PATH_A
+    if file_kind in {"CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}:
+        return RouteKind.CONFIG_SCHEMA_VALIDATION
+    if file_kind in PREPROCESSING_METADATA_KINDS:
+        return RouteKind.PREPROCESSING_SEMANTIC_SCAN
+    return RouteKind.CODE_AST_SCAN
+
+
+def _unvalidated_result(
+    artifact,
+    *,
+    reason_code: str,
+    message: str,
+    details: dict,
+) -> ArtifactValidationResult:
+    started_at = _now()
+    return ArtifactValidationResult(
+        artifact=artifact,
+        route_kind=_unvalidated_route_kind(artifact),
+        status=ValidationStatus.SKIPPED,
+        grade=CodeGrade.NA,
+        review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+        cache_key=f"{artifact.sha256}:{artifact.file_kind.value}:unvalidated",
+        cache_hit=False,
+        reason_entries=[
+            ReasonEntry(
+                code=reason_code,
+                message=message,
+                severity="MEDIUM",
+                evidence=[artifact.repo_path],
+                review_required=True,
+            )
+        ],
+        started_at=started_at,
+        finished_at=_now(),
+        details={
+            "validation_coverage": "unvalidated",
+            "reason_code": reason_code,
+            "file_kind": artifact.file_kind.value,
+            "repo_path": artifact.repo_path,
+            "requires_manual_review": True,
+            **details,
+        },
     )
 
 
@@ -249,6 +316,99 @@ def _extend_unique(target: list[str], values: list[str]) -> None:
             target.append(value)
 
 
+def _artifact_key(artifact) -> tuple[str, str]:
+    return artifact.artifact_id, artifact.repo_path
+
+
+def _missing_submitted_artifacts(
+    submitted_artifacts: list,
+    results: list,
+) -> list:
+    submitted_keys = {_artifact_key(artifact) for artifact in submitted_artifacts}
+    result_keys = {
+        _artifact_key(result.artifact)
+        for result in results
+        if _artifact_key(result.artifact) in submitted_keys
+    }
+    return [
+        artifact
+        for artifact in submitted_artifacts
+        if _artifact_key(artifact) not in result_keys
+    ]
+
+
+def _is_unvalidated_result(result) -> bool:
+    if result.details.get("validation_coverage") == "unvalidated":
+        return True
+    return any(
+        entry.code in UNVALIDATED_REASON_CODES
+        for entry in result.reason_entries
+    )
+
+
+def _coverage_summary(
+    submitted_artifacts: list,
+    results: list,
+    pending_artifact_ids: list[str],
+) -> dict[str, int]:
+    submitted_keys = {_artifact_key(artifact) for artifact in submitted_artifacts}
+    pending_ids = set(pending_artifact_ids)
+    submitted_results = [
+        result
+        for result in results
+        if _artifact_key(result.artifact) in submitted_keys
+    ]
+    result_keys = {_artifact_key(result.artifact) for result in submitted_results}
+
+    return {
+        "submitted": len(submitted_artifacts),
+        "result_count": len(submitted_results),
+        "validated": sum(
+            1
+            for result in submitted_results
+            if result.status is not ValidationStatus.SKIPPED
+            and not _is_unvalidated_result(result)
+        ),
+        "approved": sum(
+            1
+            for result in submitted_results
+            if result.status is ValidationStatus.PASS
+        ),
+        "pending": sum(
+            1
+            for result in submitted_results
+            if result.status in {
+                ValidationStatus.PENDING_REVIEW,
+                ValidationStatus.ERROR,
+                ValidationStatus.SKIPPED,
+            }
+            or result.artifact.artifact_id in pending_ids
+        ),
+        "blocked": sum(
+            1
+            for result in submitted_results
+            if result.status is ValidationStatus.BLOCK
+        ),
+        "skipped": sum(
+            1
+            for result in submitted_results
+            if result.status is ValidationStatus.SKIPPED
+        ),
+        "unsupported": sum(
+            1
+            for result in submitted_results
+            if _is_unvalidated_result(result)
+        ),
+        "error": sum(
+            1
+            for result in submitted_results
+            if result.status is ValidationStatus.ERROR
+        ),
+        "missing": max(0, len(submitted_keys) - len(result_keys)),
+        "extra_results": max(0, len(results) - len(submitted_results)),
+    }
+
+
 def run_full_validation(
     request: ValidationJobRequest | dict,
     *,
@@ -263,6 +423,10 @@ def run_full_validation(
     weight_arts = [a for a in request.artifacts if a.file_kind.value in WEIGHT_KINDS]
     codecfg_arts = [
         a for a in request.artifacts if a.file_kind.value in CODE_CONFIG_KINDS
+    ]
+    routed_kinds = WEIGHT_KINDS | CODE_CONFIG_KINDS
+    unrouted_arts = [
+        a for a in request.artifacts if a.file_kind.value not in routed_kinds
     ]
 
     results: list = []
@@ -336,7 +500,44 @@ def run_full_validation(
             _extend_unique(blocked_artifact_ids, cresp.blocked_artifact_ids)
             _extend_unique(pending_artifact_ids, cresp.pending_artifact_ids)
 
+    for artifact in unrouted_arts:
+        results.append(
+            _unvalidated_result(
+                artifact,
+                reason_code="UNROUTED_ARTIFACT_KIND",
+                message=(
+                    "submitted artifact has no full-pipeline validation route "
+                    f"for file_kind={artifact.file_kind.value}"
+                ),
+                details={
+                    "supported_file_kinds": sorted(routed_kinds),
+                },
+            )
+        )
+        _extend_unique(pending_artifact_ids, [artifact.artifact_id])
+
+    for artifact in _missing_submitted_artifacts(request.artifacts, results):
+        results.append(
+            _unvalidated_result(
+                artifact,
+                reason_code="ARTIFACT_RESULT_MISSING",
+                message="submitted artifact did not produce a validation result",
+                details={
+                    "routed_file_kind": artifact.file_kind.value in routed_kinds,
+                },
+            )
+        )
+        _extend_unique(pending_artifact_ids, [artifact.artifact_id])
+
+    gated_artifact_ids = set(blocked_artifact_ids) | set(pending_artifact_ids)
+    approved_artifact_ids = [
+        artifact_id
+        for artifact_id in approved_artifact_ids
+        if artifact_id not in gated_artifact_ids
+    ]
+
     overall = _combine_status(results)
+    coverage = _coverage_summary(request.artifacts, results, pending_artifact_ids)
 
     return ValidationJobResponse(
         request_id=request.request_id,
@@ -353,6 +554,7 @@ def run_full_validation(
         report_path="",
         reason_entries=[],
         created_at=_now(),
+        coverage_summary=coverage,
     )
 
 
