@@ -217,7 +217,7 @@ def upsert_pending_record(
     existing = get_pending(db, record.api_path)
     if existing:
         existing_status = ReviewStatus(existing.review_status)
-        if existing_status is not ReviewStatus.PENDING:
+        if existing_status in {ReviewStatus.APPROVED, ReviewStatus.REJECTED}:
             raise ValueError(
                 f"/pending/upsert cannot downgrade finalized review_status "
                 f"{existing_status.value} to PENDING. Use /reviews/decide "
@@ -231,7 +231,7 @@ def upsert_pending_record(
         existing.verified_org_count = record.verified_org_count
         existing.verified_org_list = list(record.verified_org_list)
         existing.in_official_docs = record.in_official_docs
-        existing.review_status = record.review_status
+        existing.review_status = existing_status
         existing.model_list = list(record.model_list)
         existing.risk_keywords = list(record.risk_keywords)
         existing.matched_namespace_rule = record.matched_namespace_rule

@@ -65,6 +65,7 @@ def test_approve_creates_review_decision_and_structured_audit(
     assert decision is not None
     assert decision.audit_log_id == result.audit_event_id
     assert decision.audit_entry_hash == result.audit_event_hash
+    assert decision.source_evidence == ["doc=https://pytorch.org/docs/stable/nn.html"]
 
     audit_detail = _audit_payload(db_session, result.audit_event_id)
     assert audit_detail["review_id"] == "rev-approve-001"
@@ -86,6 +87,7 @@ def test_review_id_replay_is_idempotent_without_new_audit(
         reviewer_id="security_admin",
         review_note="same review request",
         review_id="rev-idempotent-001",
+        source_evidence=["doc=https://example.test/api"],
     )
     db_session.commit()
     audit_count = db_session.execute(select(AuditLog)).scalars().all()
@@ -97,6 +99,7 @@ def test_review_id_replay_is_idempotent_without_new_audit(
         reviewer_id="security_admin",
         review_note="same review request",
         review_id="rev-idempotent-001",
+        source_evidence=["doc=https://example.test/api"],
     )
     db_session.commit()
 
@@ -134,6 +137,39 @@ def test_review_id_reuse_with_different_payload_is_not_applied(
     assert first.applied is True
     assert conflict.applied is False
     assert "review_id already exists" in conflict.message
+
+
+def test_review_id_reuse_with_different_evidence_is_not_idempotent(
+    db_session, check_request_factory,
+):
+    api_path = "torch.nn.ReviewEvidenceConflictLayer"
+    _register_pending(db_session, check_request_factory, api_path)
+
+    first = apply_review_decision(
+        db_session,
+        api_path=api_path,
+        decision="approve",
+        reviewer_id="security_admin",
+        review_note="same reason",
+        review_id="rev-evidence-conflict-001",
+        source_evidence=["doc=https://example.test/original"],
+    )
+    db_session.commit()
+
+    conflict = apply_review_decision(
+        db_session,
+        api_path=api_path,
+        decision="approve",
+        reviewer_id="security_admin",
+        review_note="same reason",
+        review_id="rev-evidence-conflict-001",
+        source_evidence=["doc=https://example.test/changed"],
+    )
+    db_session.commit()
+
+    assert first.applied is True
+    assert conflict.applied is False
+    assert "different review payload" in conflict.message
 
 
 def test_reject_is_durable_and_future_checks_block(
@@ -220,3 +256,42 @@ def test_pending_upsert_cannot_downgrade_approved_review_status(
         raise AssertionError("expected finalized pending upsert downgrade to fail")
 
     assert ReviewStatus(get_pending(db_session, api_path).review_status) is ReviewStatus.APPROVED
+
+
+def test_pending_upsert_refreshes_deferred_record_without_downgrade(
+    db_session, check_request_factory,
+):
+    api_path = "torch.nn.DeferredEvidenceRefreshLayer"
+    _register_pending(db_session, check_request_factory, api_path)
+    apply_review_decision(
+        db_session,
+        api_path=api_path,
+        decision="defer",
+        reviewer_id="security_admin",
+        review_note="needs more evidence",
+        review_id="rev-deferred-refresh-001",
+    )
+    db_session.commit()
+
+    record = to_record(get_pending(db_session, api_path))
+    refreshed = PendingApiRecord(
+        **{
+            **record.model_dump(),
+            "review_status": ReviewStatus.PENDING,
+            "seen_count": record.seen_count + 10,
+            "model_list": ["org/refreshed-model"],
+            "risk_keywords": ["new_signal"],
+            "sample_callsites": ["layer = torch.nn.DeferredEvidenceRefreshLayer()"],
+        }
+    )
+
+    updated = upsert_pending_record(db_session, refreshed)
+    db_session.commit()
+
+    assert ReviewStatus(updated.review_status) is ReviewStatus.DEFERRED
+    assert updated.seen_count == record.seen_count + 10
+    assert updated.model_list == ["org/refreshed-model"]
+    assert updated.risk_keywords == ["new_signal"]
+    assert updated.sample_callsites == [
+        "layer = torch.nn.DeferredEvidenceRefreshLayer()"
+    ]

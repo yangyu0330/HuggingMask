@@ -301,6 +301,7 @@ def apply_review_decision(
 
     reviewer_id = reviewer_id.strip()
     review_note = review_note.strip()
+    requested_evidence = list(source_evidence or [])
     if not reviewer_id or not review_note:
         return ReviewDecisionResult(
             api_path=api_path,
@@ -318,6 +319,7 @@ def apply_review_decision(
             and existing_decision.reviewer_id == reviewer_id
             and existing_decision.review_note == review_note
             and existing_decision.condition == condition
+            and list(existing_decision.source_evidence or []) == requested_evidence
         ):
             return ReviewDecisionResult(
                 api_path=api_path,
@@ -333,7 +335,7 @@ def apply_review_decision(
             api_path=api_path,
             decision=parsed_decision,
             applied=False,
-            message="review_id already exists for a different decision",
+            message="review_id already exists for a different review payload",
             review_id=resolved_review_id,
         )
 
@@ -360,7 +362,7 @@ def apply_review_decision(
 
     namespace = api_path.rsplit(".", 1)[0] if "." in api_path else api_path
     matched = pending.matched_namespace_rule
-    evidence = list(source_evidence or [])
+    evidence = list(requested_evidence)
     evidence.extend([
         f"created_from_job_id={pending.created_from_job_id}",
         f"auto_classification={pending.auto_classification}",
@@ -441,7 +443,7 @@ def apply_review_decision(
         reviewer_id=reviewer_id,
         review_note=review_note,
         condition=condition,
-        source_evidence=evidence,
+        source_evidence=requested_evidence,
         final_review_status=final_status,
         audit_log_id=audit_log.id,
         audit_entry_hash=audit_log.entry_hash,
