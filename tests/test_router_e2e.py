@@ -159,6 +159,33 @@ class TestReviewFlow:
         assert r2.json()[0]["status"] == "ALLOWED"
         assert r2.json()[0]["source"] == "MANUAL_REVIEW"
 
+    def test_canonical_reviews_decide_returns_audit_metadata(self, client):
+        new_api = "torch.nn.functional.review_decide_layer"
+        payload = {
+            "schema_version": "1.0",
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "model": _model_payload(),
+            "apis": [new_api],
+        }
+        client.post("/internal/v1/whitelist/check", json=payload)
+
+        r = client.post("/internal/v1/reviews/decide", json={
+            "api_path": new_api,
+            "decision": "approve",
+            "reviewer_id": "admin_01",
+            "review_note": "canonical endpoint approval",
+            "review_id": "rev-router-canonical-001",
+            "source_evidence": ["test:e2e"],
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["applied"] is True
+        assert body["review_id"] == "rev-router-canonical-001"
+        assert body["final_review_status"] == "APPROVED"
+        assert body["audit_event_id"] is not None
+        assert body["audit_event_hash"]
+
 
 class TestFeedbackFlow:
 

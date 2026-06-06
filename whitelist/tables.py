@@ -102,6 +102,32 @@ class AuditLog(Base):
         return f"<AuditLog #{self.id} {self.action} {self.api_path}>"
 
 
+class ReviewDecisionLog(Base):
+    """Durable review decision record keyed by caller supplied review_id."""
+    __tablename__ = "review_decisions"
+
+    review_id: Mapped[str] = mapped_column(String(96), primary_key=True)
+    api_path: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    reviewer_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    review_note: Mapped[str] = mapped_column(Text, nullable=False)
+    condition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_evidence: Mapped[list] = mapped_column(JSON, default=list)
+    final_review_status: Mapped[str] = mapped_column(
+        Enum(ReviewStatus), nullable=False, index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+    audit_log_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    audit_entry_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    __table_args__ = (
+        Index("ix_review_decisions_api_decision", "api_path", "decision"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ReviewDecision {self.review_id} {self.api_path} {self.decision}>"
+
+
 class FeedbackReport(Base):
     """오탐 피드백 보고 (모듈 5)"""
     __tablename__ = "feedback_reports"

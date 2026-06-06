@@ -15,7 +15,6 @@ FastAPI 라우터 — HuggingMask 인터페이스 정의서 v1.0 정확 일치
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
@@ -28,6 +27,7 @@ from whitelist.feedback import (
 from whitelist.models import (
     FeedbackReportRequest, FeedbackReportResponse,
     PendingApiRecord, PendingApiUpsertRequest, ReviewStatus,
+    ReviewDecisionRequest, ReviewDecisionResult,
     WhitelistCheckRequest, WhitelistCheckResponse,
 )
 from whitelist.pending_store import (
@@ -111,40 +111,32 @@ def get_pending_api(api_path: str, db: Session = Depends(get_db)):
 # 16. 리뷰 (보안 담당자 판정)
 # ─────────────────────────────────────────────
 
-class ReviewDecisionRequest(BaseModel):
-    api_path: str
-    decision: str  # approve | conditional | reject | defer
-    reviewer_id: str
-    review_note: str = ""
-    condition: str | None = None
-
-
-class ReviewDecisionResponse(BaseModel):
-    api_path: str
-    decision: str
-    applied: bool
-    message: str
-
-
-@router.post("/review", response_model=ReviewDecisionResponse)
-def review_pending(
+def _apply_review_request(
     req: ReviewDecisionRequest, db: Session = Depends(get_db),
-) -> ReviewDecisionResponse:
-    ok = apply_review_decision(
-        db, api_path=req.api_path, decision=req.decision,
+) -> ReviewDecisionResult:
+    result = apply_review_decision(
+        db, api_path=req.api_path, decision=req.decision.value,
         reviewer_id=req.reviewer_id, review_note=req.review_note,
-        condition=req.condition,
+        condition=req.condition, review_id=req.review_id,
+        source_evidence=req.source_evidence,
     )
     db.commit()
-    if ok:
-        return ReviewDecisionResponse(
-            api_path=req.api_path, decision=req.decision,
-            applied=True, message=f"판정 완료: {req.decision}",
-        )
-    return ReviewDecisionResponse(
-        api_path=req.api_path, decision=req.decision,
-        applied=False, message="해당 API를 Pending에서 찾을 수 없습니다",
-    )
+    return result
+
+
+@router.post("/reviews/decide", response_model=ReviewDecisionResult)
+def decide_review(
+    req: ReviewDecisionRequest, db: Session = Depends(get_db),
+) -> ReviewDecisionResult:
+    return _apply_review_request(req, db)
+
+
+@router.post("/review", response_model=ReviewDecisionResult)
+def review_pending(
+    req: ReviewDecisionRequest, db: Session = Depends(get_db),
+) -> ReviewDecisionResult:
+    """Compatibility alias for older dashboard and bulk scripts."""
+    return _apply_review_request(req, db)
 
 
 # ─────────────────────────────────────────────
@@ -291,6 +283,7 @@ def list_approved(
     search: str = "",
     namespace: str = "",
     source: str = "",
+    include_blocked: bool = False,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
@@ -300,7 +293,9 @@ def list_approved(
     대시보드 ✅ 승인 목록 탭 + bulk 스크립트 운영용.
     is_blocked=True인 항목은 BLOCKED 응답 전용이므로 여기선 제외.
     """
-    stmt = select(ApprovedApi).where(ApprovedApi.is_blocked == False)  # noqa: E712
+    stmt = select(ApprovedApi)
+    if not include_blocked:
+        stmt = stmt.where(ApprovedApi.is_blocked == False)  # noqa: E712
     if search:
         stmt = stmt.where(ApprovedApi.api_path.contains(search))
     if namespace:
@@ -326,6 +321,7 @@ def list_approved(
                 "added_date": a.added_date.isoformat() if a.added_date else "",
                 "reviewer_id": a.reviewer_id or "",
                 "review_note": a.review_note or "",
+                "is_blocked": a.is_blocked,
             }
             for a in rows
         ],
@@ -356,6 +352,7 @@ def whitelist_stats(db: Session = Depends(get_db)):
         "whitelist_version": WHITELIST_VERSION,
         "approved_active": approved_count,
         "blocked": blocked_count,
+        "rejected": blocked_count,
         "pending_review": pending_count,
         "feedback_total": feedback_count,
     }

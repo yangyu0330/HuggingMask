@@ -11,16 +11,18 @@
 이 엔진은 단지 per-API status만 반환한다.
 """
 
+import json
 import logging
 import re
-from datetime import datetime, timezone
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from whitelist.audit import append_audit
 from whitelist.models import (
-    ModelRef, PendingClassification,
+    ModelRef, PendingClassification, ReviewDecision, ReviewDecisionResult,
+    ReviewStatus,
     WhitelistCheckRequest, WhitelistCheckResponse,
     WhitelistSource, WhitelistStatus,
 )
@@ -280,29 +282,101 @@ def apply_review_decision(
     reviewer_id: str,
     review_note: str = "",
     condition: str | None = None,
-) -> bool:
-    """Pending API에 대한 보안 담당자 판정을 DB에 반영.
-
-    - approve / conditional: ApprovedApi에 등록 (is_blocked=False)
-    - reject: ApprovedApi에 등록 (is_blocked=True)
-    - defer: review_status를 PENDING으로 유지
-
-    Returns: 적용 성공 여부 (해당 pending 없으면 False)
-    """
+    review_id: str | None = None,
+    source_evidence: list[str] | None = None,
+) -> ReviewDecisionResult:
+    """Apply a security-owner decision to a pending API candidate."""
     from whitelist.pending_store import get_pending
-    from whitelist.tables import ApprovedApi
+    from whitelist.tables import ApprovedApi, ReviewDecisionLog
+
+    try:
+        parsed_decision = ReviewDecision(decision)
+    except ValueError:
+        return ReviewDecisionResult(
+            api_path=api_path,
+            decision=ReviewDecision.DEFER,
+            applied=False,
+            message=f"unsupported review decision: {decision}",
+        )
+
+    reviewer_id = reviewer_id.strip()
+    review_note = review_note.strip()
+    requested_evidence = list(source_evidence or [])
+    if not reviewer_id or not review_note:
+        return ReviewDecisionResult(
+            api_path=api_path,
+            decision=parsed_decision,
+            applied=False,
+            message="reviewer_id and review_note are required",
+        )
+
+    resolved_review_id = (review_id or f"rev-{uuid.uuid4()}").strip()
+    existing_decision = db.get(ReviewDecisionLog, resolved_review_id)
+    if existing_decision is not None:
+        if (
+            existing_decision.api_path == api_path
+            and existing_decision.decision == parsed_decision.value
+            and existing_decision.reviewer_id == reviewer_id
+            and existing_decision.review_note == review_note
+            and existing_decision.condition == condition
+            and list(existing_decision.source_evidence or []) == requested_evidence
+        ):
+            return ReviewDecisionResult(
+                api_path=api_path,
+                decision=parsed_decision,
+                applied=True,
+                message="review decision already applied",
+                review_id=resolved_review_id,
+                final_review_status=ReviewStatus(existing_decision.final_review_status),
+                audit_event_id=existing_decision.audit_log_id,
+                audit_event_hash=existing_decision.audit_entry_hash,
+            )
+        return ReviewDecisionResult(
+            api_path=api_path,
+            decision=parsed_decision,
+            applied=False,
+            message="review_id already exists for a different review payload",
+            review_id=resolved_review_id,
+        )
 
     pending = get_pending(db, api_path)
     if not pending:
-        return False
+        return ReviewDecisionResult(
+            api_path=api_path,
+            decision=parsed_decision,
+            applied=False,
+            message="pending API not found",
+            review_id=resolved_review_id,
+        )
+
+    current_status = ReviewStatus(pending.review_status)
+    if current_status is not ReviewStatus.PENDING:
+        return ReviewDecisionResult(
+            api_path=api_path,
+            decision=parsed_decision,
+            applied=False,
+            message=f"pending API is already {current_status.value}",
+            review_id=resolved_review_id,
+            final_review_status=current_status,
+        )
 
     namespace = api_path.rsplit(".", 1)[0] if "." in api_path else api_path
     matched = pending.matched_namespace_rule
+    evidence = list(requested_evidence)
+    evidence.extend([
+        f"created_from_job_id={pending.created_from_job_id}",
+        f"auto_classification={pending.auto_classification}",
+        f"matched_namespace_rule={matched or ''}",
+    ])
+    if pending.documentation_url:
+        evidence.append(f"documentation_url={pending.documentation_url}")
+    if pending.model_list:
+        evidence.append("model_list=" + ",".join(pending.model_list))
 
-    if decision in ("approve", "conditional"):
+    if parsed_decision in (ReviewDecision.APPROVE, ReviewDecision.CONDITIONAL):
         note = review_note
-        if decision == "conditional":
-            note = f"[조건부] {condition or ''} — {review_note}".strip(" —")
+        if parsed_decision is ReviewDecision.CONDITIONAL:
+            note = f"[conditional] {condition or ''} - {review_note}".strip(" -")
         db.merge(ApprovedApi(
             api_path=api_path,
             namespace=namespace,
@@ -313,10 +387,10 @@ def apply_review_decision(
             review_note=note,
             is_blocked=False,
         ))
-        from whitelist.models import ReviewStatus as RS
-        pending.review_status = RS.APPROVED
+        final_status = ReviewStatus.APPROVED
+        pending.review_status = final_status
 
-    elif decision == "reject":
+    elif parsed_decision is ReviewDecision.REJECT:
         db.merge(ApprovedApi(
             api_path=api_path,
             namespace=namespace,
@@ -327,19 +401,61 @@ def apply_review_decision(
             review_note=review_note,
             is_blocked=True,
         ))
-        from whitelist.models import ReviewStatus as RS
-        pending.review_status = RS.REJECTED
+        final_status = ReviewStatus.REJECTED
+        pending.review_status = final_status
 
-    elif decision == "defer":
-        from whitelist.models import ReviewStatus as RS
-        pending.review_status = RS.DEFERRED
+    elif parsed_decision is ReviewDecision.DEFER:
+        final_status = ReviewStatus.DEFERRED
+        pending.review_status = final_status
 
     else:
-        return False
+        return ReviewDecisionResult(
+            api_path=api_path,
+            decision=parsed_decision,
+            applied=False,
+            message=f"unsupported review decision: {decision}",
+            review_id=resolved_review_id,
+        )
 
-    append_audit(
-        db, action=f"review_{decision}", api_path=api_path,
-        actor=reviewer_id, detail=review_note,
+    detail = json.dumps(
+        {
+            "review_id": resolved_review_id,
+            "decision": parsed_decision.value,
+            "final_review_status": final_status.value,
+            "reviewer_id": reviewer_id,
+            "review_note": review_note,
+            "condition": condition,
+            "source_evidence": evidence,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+    audit_log = append_audit(
+        db, action=f"review_{parsed_decision.value}", api_path=api_path,
+        actor=reviewer_id, detail=detail,
     )
     db.flush()
-    return True
+    db.add(ReviewDecisionLog(
+        review_id=resolved_review_id,
+        api_path=api_path,
+        decision=parsed_decision.value,
+        reviewer_id=reviewer_id,
+        review_note=review_note,
+        condition=condition,
+        source_evidence=requested_evidence,
+        final_review_status=final_status,
+        audit_log_id=audit_log.id,
+        audit_entry_hash=audit_log.entry_hash,
+    ))
+    db.flush()
+    return ReviewDecisionResult(
+        api_path=api_path,
+        decision=parsed_decision,
+        applied=True,
+        message=f"review decision applied: {parsed_decision.value}",
+        review_id=resolved_review_id,
+        final_review_status=final_status,
+        audit_event_id=audit_log.id,
+        audit_event_hash=audit_log.entry_hash,
+    )

@@ -56,6 +56,14 @@ class ReviewStatus(str, Enum):
     DEFERRED = "DEFERRED"
 
 
+class ReviewDecision(str, Enum):
+    """Security owner decision applied to a pending API candidate."""
+    APPROVE = "approve"
+    CONDITIONAL = "conditional"
+    REJECT = "reject"
+    DEFER = "defer"
+
+
 class EndpointMode(str, Enum):
     """ModelRef.endpoint_mode"""
     HF_ENDPOINT_PROXY = "HF_ENDPOINT_PROXY"
@@ -138,6 +146,28 @@ class PendingApiUpsertRequest(BaseModel):
     request_id: str
     job_id: str
     record: PendingApiRecord
+
+
+class ReviewDecisionRequest(BaseModel):
+    """Canonical review decision request for pending API promotion."""
+    api_path: str = Field(min_length=1)
+    decision: ReviewDecision
+    reviewer_id: str = Field(min_length=1)
+    review_note: str = Field(min_length=1)
+    review_id: str | None = None
+    condition: str | None = None
+    source_evidence: list[str] = Field(default_factory=list)
+
+
+class ReviewDecisionResult(BaseModel):
+    api_path: str
+    decision: ReviewDecision
+    applied: bool
+    message: str
+    review_id: str | None = None
+    final_review_status: ReviewStatus | None = None
+    audit_event_id: int | None = None
+    audit_event_hash: str | None = None
 
 
 # ─────────────────────────────────────────────
