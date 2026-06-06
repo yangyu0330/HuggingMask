@@ -335,10 +335,13 @@ class ValidationJobResponse(Serializable):
     reason_entries: list[ReasonEntry]
     created_at: str
     schema_version: str = SCHEMA_VERSION
+    coverage_summary: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.overall_decision = OverallDecision(self.overall_decision)
         self.overall_status = ValidationStatus(self.overall_status)
+        if self.coverage_summary is None:
+            self.coverage_summary = {}
         self.artifact_results = [
             result
             if isinstance(result, ArtifactValidationResult)
