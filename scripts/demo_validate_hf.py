@@ -26,29 +26,14 @@ from pathlib import Path
 
 import httpx
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from analyzer.classifier import classify_file_kind as classify_core_file_kind
+from analyzer.schemas import FileKind
 
 DEFAULT_API_BASE = "http://127.0.0.1:8000"
-
-# 파일명/확장자 → analyzer.schemas.FileKind 매핑.
-# 매핑 안 되는 파일(vocab.txt / README / label_map.json 등)은 검증 대상에서 제외.
-_PICKLE_SUFFIXES = {".bin", ".pt", ".pth", ".pkl", ".ckpt"}
-
-
-def classify_file_kind(rel_path: str) -> str | None:
-    name = Path(rel_path).name
-    suffix = Path(name).suffix.lower()
-
-    if suffix == ".safetensors":
-        return "SAFETENSORS"
-    if suffix in _PICKLE_SUFFIXES:
-        return "PICKLE"
-    if name == "config.json":
-        return "CONFIG_JSON"
-    if name == "tokenizer_config.json":
-        return "TOKENIZER_CONFIG_JSON"
-    if suffix == ".py":
-        return "PYTHON"
-    return None
 
 
 def sha256_file(path: Path) -> str:
@@ -61,17 +46,19 @@ def sha256_file(path: Path) -> str:
 
 def build_artifacts(local_dir: Path, repo_id: str, skip_weights: bool) -> list[dict]:
     artifacts = []
-    skipped_unmapped = []
+    skipped_other = []
+    skipped_weights = []
 
     for path in sorted(local_dir.rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(local_dir).as_posix()
-        kind = classify_file_kind(rel)
-        if kind is None:
-            skipped_unmapped.append(rel)
+        kind = classify_core_file_kind(rel)
+        if kind is FileKind.OTHER:
+            skipped_other.append(rel)
             continue
-        if skip_weights and kind in {"SAFETENSORS", "PICKLE"}:
+        if skip_weights and kind in {FileKind.SAFETENSORS, FileKind.PICKLE}:
+            skipped_weights.append(rel)
             continue
 
         digest = sha256_file(path)
@@ -79,7 +66,7 @@ def build_artifacts(local_dir: Path, repo_id: str, skip_weights: bool) -> list[d
             "artifact_id": f"sha256:{digest}",
             "repo_path": rel,
             "file_name": path.name,
-            "file_kind": kind,
+            "file_kind": kind.value,
             "detected_extension": path.suffix.lower(),
             "size_bytes": path.stat().st_size,
             "sha256": digest,
@@ -87,9 +74,14 @@ def build_artifacts(local_dir: Path, repo_id: str, skip_weights: bool) -> list[d
             "temp_local_path": str(path),
         })
 
-    if skipped_unmapped:
-        print(f"\n[분류 제외 - FileKind 매핑 없음] {len(skipped_unmapped)}개")
-        for r in skipped_unmapped:
+    if skipped_other:
+        print(f"\n[분류 제외 - core FileKind=OTHER] {len(skipped_other)}개")
+        for r in skipped_other:
+            print(f"    · {r}")
+
+    if skipped_weights:
+        print(f"\n[사용자 옵션 제외 - --skip-weights] {len(skipped_weights)}개")
+        for r in skipped_weights:
             print(f"    · {r}")
 
     return artifacts
@@ -126,6 +118,13 @@ def print_report(resp_json: dict, artifacts: list[dict]) -> None:
 
 
 def main() -> int:
+    # Windows 콘솔(cp949)에서도 UTF-8 출력이 깨지지 않게.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
     p = argparse.ArgumentParser(description="실제 HF 모델 e2e 검증 데모")
     p.add_argument("repo_id", help="예: vmaca123/korean-pii-ner-v3")
     p.add_argument("--api", default=DEFAULT_API_BASE, help="프록시 base URL")
@@ -139,13 +138,6 @@ def main() -> int:
                         "(가중치+코드+config+화이트리스트+제한런타임 통합)")
     p.add_argument("--cache-dir", default=None, help="다운로드 캐시 경로")
     args = p.parse_args()
-
-    # Windows 콘솔(cp949)에서도 UTF-8 출력이 깨지지 않게.
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8")
-        except Exception:
-            pass
 
     try:
         from huggingface_hub import snapshot_download
