@@ -10,6 +10,7 @@ from analyzer.validators.weight.convert.to_safetensors import (
 )
 from analyzer.validators.weight.diff.checker import compare_tensor_reports
 from analyzer.validators.weight.hashing import sha256_file
+from analyzer.validators.weight.pickle_roles import PickleRole, classify_pickle_role
 from analyzer.validators.weight.sandbox.docker_runner import run_in_docker
 from analyzer.validators.weight.validators.modelscan_wrapper import scan_with_modelscan
 from analyzer.validators.weight.validators.pickle_opcode_parser import validate_pickle
@@ -48,6 +49,13 @@ def _pickle_cache_kind(enable_path_b: bool) -> str:
     return "PICKLE"
 
 
+def _path_a_block_allows_path_b_evidence(path_a_result: dict) -> bool:
+    return path_a_result.get("reason_code") in {
+        "PICKLE_PARSE_ERROR",
+        "UNSUPPORTED_PICKLE_FORMAT",
+    }
+
+
 def _hash_mismatch_result(
     file_hash: str,
     expected_sha256: str,
@@ -65,6 +73,35 @@ def _hash_mismatch_result(
     }
 
 
+def _annotate_pickle_result(result: dict, pickle_role: PickleRole | str) -> dict:
+    role_value = (
+        pickle_role.value
+        if isinstance(pickle_role, PickleRole)
+        else str(pickle_role)
+    )
+    result["pickle_role"] = role_value
+
+    converted = result.get("converted")
+    if isinstance(converted, dict) and converted.get("status") == "PASS":
+        result["release_eligible"] = True
+        result["release_target"] = "GENERATED_SAFETENSORS"
+    else:
+        result["release_eligible"] = False
+        result["release_target"] = None
+
+    return result
+
+
+def _cache_pickle_result(
+    cache_key: str,
+    result: dict,
+    pickle_role: PickleRole | str,
+) -> dict:
+    annotated = _annotate_pickle_result(result, pickle_role)
+    set_cache(cache_key, _make_cacheable(annotated))
+    return annotated
+
+
 def validate_pickle_pipeline(
     path: str,
     policy_fingerprint: str,
@@ -72,6 +109,7 @@ def validate_pickle_pipeline(
     enable_path_b: bool = False,
     runtime: str = "runsc",
     file_hash: str | None = None,
+    pickle_role: PickleRole | str = PickleRole.GENERIC_PICKLE,
 ) -> dict:
     file_hash = file_hash or sha256_file(path)
     cache_key = build_cache_key(
@@ -84,7 +122,7 @@ def validate_pickle_pipeline(
     if cached and _cached_pickle_result_satisfies_request(cached, enable_path_b):
         cached["cached"] = True
         cached["cache_key"] = cache_key
-        return cached
+        return _annotate_pickle_result(cached, pickle_role)
 
     yara_result = scan_with_yara(path)
     if yara_result["status"] == "BLOCK":
@@ -95,8 +133,7 @@ def validate_pickle_pipeline(
             "file_sha256": file_hash,
             **yara_result,
         }
-        set_cache(cache_key, _make_cacheable(result))
-        return result
+        return _cache_pickle_result(cache_key, result, pickle_role)
 
     modelscan_result = scan_with_modelscan(path)
     if modelscan_result["status"] == "BLOCK":
@@ -107,8 +144,7 @@ def validate_pickle_pipeline(
             "file_sha256": file_hash,
             **modelscan_result,
         }
-        set_cache(cache_key, _make_cacheable(result))
-        return result
+        return _cache_pickle_result(cache_key, result, pickle_role)
 
     path_a_result = validate_pickle(path)
     if path_a_result["status"] == "BLOCK":
@@ -121,8 +157,32 @@ def validate_pickle_pipeline(
             "modelscan": modelscan_result,
             "path_a": path_a_result,
         }
-        set_cache(cache_key, _make_cacheable(result))
-        return result
+        if enable_path_b and _path_a_block_allows_path_b_evidence(path_a_result):
+            path_b_result = run_in_docker(
+                file_path=path,
+                image_name=sandbox_image,
+                timeout_sec=10,
+                runtime=runtime,
+            )
+            result["path_b"] = path_b_result
+
+            if path_b_result.get("status") == "BLOCK":
+                result["stage"] = "PATH_B"
+                result["reason_code"] = path_b_result.get(
+                    "reason_code",
+                    "PICKLE_PATH_B_BLOCKED",
+                )
+                result["reason"] = path_b_result.get(
+                    "reason",
+                    "Path B sandbox validation blocked pickle",
+                )
+            else:
+                result["diff"] = {
+                    "status": "SKIPPED",
+                    "reason_code": "PICKLE_PATH_AB_COMPARE_SKIPPED",
+                    "reason": "PATH_A_BLOCKED_BEFORE_TENSOR_REPORT",
+                }
+        return _cache_pickle_result(cache_key, result, pickle_role)
 
     result = {
         "status": "PASS",
@@ -157,8 +217,7 @@ def validate_pickle_pipeline(
                 "reason",
                 "Path B sandbox validation blocked pickle",
             )
-            set_cache(cache_key, _make_cacheable(result))
-            return result
+            return _cache_pickle_result(cache_key, result, pickle_role)
 
         path_b_tensors = path_b_result.get("tensors")
 
@@ -171,8 +230,7 @@ def validate_pickle_pipeline(
                 result["stage"] = "DIFF"
                 result["reason_code"] = "PICKLE_PATH_AB_MISMATCH"
                 result["reason"] = "Path A and Path B tensor reports do not match"
-                set_cache(cache_key, _make_cacheable(result))
-                return result
+                return _cache_pickle_result(cache_key, result, pickle_role)
         else:
             result["diff"] = {
                 "status": "SKIPPED",
@@ -202,8 +260,7 @@ def validate_pickle_pipeline(
                 "reason",
                 "pickle to safetensors conversion failed",
             )
-            set_cache(cache_key, _make_cacheable(result))
-            return result
+            return _cache_pickle_result(cache_key, result, pickle_role)
     else:
         result["status"] = "BLOCK"
         result["stage"] = "CONVERT"
@@ -217,11 +274,9 @@ def validate_pickle_pipeline(
             "reason_code": "PICKLE_PATH_A_NO_CONVERTIBLE_TENSOR_DICT",
             "reason": "NO_TENSOR_DICT_FROM_PATH_A",
         }
-        set_cache(cache_key, _make_cacheable(result))
-        return result
+        return _cache_pickle_result(cache_key, result, pickle_role)
 
-    set_cache(cache_key, _make_cacheable(result))
-    return result
+    return _cache_pickle_result(cache_key, result, pickle_role)
 
 
 def validate(
@@ -230,11 +285,18 @@ def validate(
     expected_sha256: str | None = None,
     file_kind: str | None = None,
     enable_path_b: bool = False,
+    repo_path: str | None = None,
+    file_name: str | None = None,
 ):
     file_hash = sha256_file(path)
 
     normalized_kind = file_kind or (
         "SAFETENSORS" if path.endswith(".safetensors") else "PICKLE"
+    )
+    pickle_role = (
+        classify_pickle_role(repo_path or path, file_name=file_name)
+        if normalized_kind == "PICKLE"
+        else None
     )
 
     cache_key = build_cache_key(
@@ -250,12 +312,15 @@ def validate(
     # expected_sha256 검증은 cache lookup보다 먼저 수행해야 함.
     # cached PASS가 잘못된 expected hash 요청을 우회하면 안 됨.
     if expected_sha256 and expected_sha256 != file_hash:
-        return _hash_mismatch_result(
+        result = _hash_mismatch_result(
             file_hash=file_hash,
             expected_sha256=expected_sha256,
             file_kind=normalized_kind,
             cache_key=cache_key,
         )
+        if pickle_role is not None:
+            return _annotate_pickle_result(result, pickle_role)
+        return result
 
     if normalized_kind == "SAFETENSORS":
         cached = get_cache(cache_key)
@@ -275,6 +340,7 @@ def validate(
             policy_fingerprint=policy_fingerprint,
             enable_path_b=enable_path_b,
             file_hash=file_hash,
+            pickle_role=pickle_role or PickleRole.GENERIC_PICKLE,
         )
 
     return {

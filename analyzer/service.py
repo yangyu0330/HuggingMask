@@ -18,10 +18,27 @@ from analyzer.schemas import (
     ValidationStatus,
 )
 from analyzer.validators.weight.pipeline import validate
+from analyzer.validators.weight.pickle_roles import PickleRole
 
 
 WEIGHT_FILE_KINDS = {"SAFETENSORS", "PICKLE"}
 ORCHESTRATOR_FILE_KINDS = {"PYTHON", "CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
+PICKLE_HARD_BLOCK_REASON_CODES = {
+    "ARTIFACT_HASH_MISMATCH",
+    "PICKLE_OPCODE_BLOCKED",
+    "PICKLE_YARA_BLOCKED",
+    "PICKLE_MODELSCAN_BLOCKED",
+    "PICKLE_PATH_B_BLOCKED",
+    "PICKLE_PATH_B_RUNTIME_POLICY_VIOLATION",
+    "PICKLE_PATH_B_SECURITY_EVENT",
+    "PICKLE_PATH_AB_MISMATCH",
+}
+PICKLE_NON_AUXILIARY_HARD_BLOCK_REASON_CODES = {
+    "PICKLE_PATH_B_EXECUTION_FAILED",
+    "PICKLE_PATH_B_INVALID_ARGUMENT",
+    "PICKLE_PATH_B_UNSUPPORTED_OBJECT",
+}
+PICKLE_HARD_BLOCK_STAGES = {"YARA", "MODELSCAN", "DIFF"}
 STATUS_PRIORITY = {
     "PASS": 0,
     "PENDING_REVIEW": 1,
@@ -100,6 +117,51 @@ def _extract_reason(core_result: dict):
     return reason_code or "UNKNOWN", reason_message or "no message"
 
 
+def _collect_reason_codes(core_result: dict) -> set[str]:
+    codes = set()
+    for key in ("reason_code",):
+        value = core_result.get(key)
+        if value:
+            codes.add(str(value))
+
+    for key in ("path_a", "path_b", "diff", "converted", "yara", "modelscan"):
+        sub = core_result.get(key)
+        if isinstance(sub, dict) and sub.get("reason_code"):
+            codes.add(str(sub["reason_code"]))
+
+    return codes
+
+
+def _is_pickle_hard_block(core_result: dict) -> bool:
+    if core_result.get("stage") in PICKLE_HARD_BLOCK_STAGES:
+        return True
+
+    codes = _collect_reason_codes(core_result)
+    if codes & PICKLE_HARD_BLOCK_REASON_CODES:
+        return True
+
+    if _pickle_role_value(core_result) == PickleRole.AUXILIARY_TRAINING.value:
+        return False
+
+    return bool(codes & PICKLE_NON_AUXILIARY_HARD_BLOCK_REASON_CODES)
+
+
+def _pickle_role_value(core_result: dict) -> str:
+    return str(core_result.get("pickle_role") or PickleRole.GENERIC_PICKLE.value)
+
+
+def _details_with_release_policy(
+    core_result: dict,
+    *,
+    release_eligible: bool,
+    release_target,
+) -> dict:
+    details = dict(core_result)
+    details["release_eligible"] = release_eligible
+    details["release_target"] = release_target
+    return details
+
+
 def _route_kind_for(artifact) -> RouteKind:
     if artifact.file_kind == "SAFETENSORS":
         return RouteKind.SAFETENSORS_FAST_PATH
@@ -141,6 +203,7 @@ def _build_result(
     reason_message: str,
     details: dict,
     generated_artifact=None,
+    review_action: ReviewAction | str = ReviewAction.NONE,
 ) -> ArtifactValidationResult:
     safe_details = _json_safe(details)
     return ArtifactValidationResult(
@@ -148,7 +211,7 @@ def _build_result(
         route_kind=_route_kind_for(artifact),
         status=ValidationStatus(status),
         grade=CodeGrade.NA,
-        review_action=ReviewAction.NONE,
+        review_action=ReviewAction(review_action),
         cache_key=safe_details.get("cache_key", ""),
         cache_hit=bool(safe_details.get("cached", False)),
         reason_entries=[
@@ -165,6 +228,9 @@ def _build_result(
 
 
 def _map_result(artifact, core_result, policy_fingerprint):
+    if str(artifact.file_kind) == "PICKLE":
+        return _map_pickle_result(artifact, core_result)
+
     status = "PASS" if core_result.get("status") == "PASS" else "BLOCK"
     reason_code, reason_message = _extract_reason(core_result)
     return _build_result(
@@ -174,6 +240,87 @@ def _map_result(artifact, core_result, policy_fingerprint):
         reason_message=reason_message,
         details=core_result,
         generated_artifact=_build_generated_artifact(artifact, core_result),
+    )
+
+
+def _map_pickle_result(artifact, core_result):
+    role = _pickle_role_value(core_result)
+    reason_code, reason_message = _extract_reason(core_result)
+    generated_artifact = _build_generated_artifact(artifact, core_result)
+
+    if _is_pickle_hard_block(core_result):
+        return _build_result(
+            artifact=artifact,
+            status="BLOCK",
+            reason_code=reason_code,
+            reason_message=reason_message,
+            details=_details_with_release_policy(
+                core_result,
+                release_eligible=False,
+                release_target=None,
+            ),
+            generated_artifact=None,
+            review_action=ReviewAction.BLOCK_IMMEDIATELY,
+        )
+
+    if role == PickleRole.AUXILIARY_TRAINING.value:
+        return _build_result(
+            artifact=artifact,
+            status="SKIPPED",
+            reason_code="PICKLE_AUXILIARY_NOT_RELEASE_ARTIFACT",
+            reason_message="auxiliary training pickle is not a release artifact",
+            details=_details_with_release_policy(
+                core_result,
+                release_eligible=False,
+                release_target=None,
+            ),
+            generated_artifact=None,
+        )
+
+    if core_result.get("status") == "PASS" and generated_artifact is not None:
+        return _build_result(
+            artifact=artifact,
+            status="PASS",
+            reason_code=reason_code,
+            reason_message=reason_message,
+            details=_details_with_release_policy(
+                core_result,
+                release_eligible=True,
+                release_target="GENERATED_SAFETENSORS",
+            ),
+            generated_artifact=generated_artifact,
+            review_action=ReviewAction.AUTO_APPROVE_REGENERATED,
+        )
+
+    if role == PickleRole.UNSUPPORTED_CHECKPOINT.value:
+        return _build_result(
+            artifact=artifact,
+            status="PENDING_REVIEW",
+            reason_code="UNSUPPORTED_PICKLE_CHECKPOINT",
+            reason_message="pickle checkpoint artifacts are unsupported in this policy scope",
+            details=_details_with_release_policy(
+                core_result,
+                release_eligible=False,
+                release_target=None,
+            ),
+            generated_artifact=None,
+            review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
+        )
+
+    return _build_result(
+        artifact=artifact,
+        status="PENDING_REVIEW",
+        reason_code="PICKLE_WEIGHT_REQUIRES_REVIEW_OR_CONVERSION",
+        reason_message=(
+            "raw pickle weight requires converted safetensors or explicit review"
+        ),
+        details=_details_with_release_policy(
+            core_result,
+            release_eligible=False,
+            release_target=None,
+        ),
+        generated_artifact=None,
+        review_action=ReviewAction.MANUAL_REVIEW_REQUIRED,
     )
 
 
@@ -221,32 +368,19 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
             expected_sha256=artifact.sha256,
             file_kind=artifact.file_kind,
             enable_path_b=getattr(job, "enable_path_b", False),
+            repo_path=artifact.repo_path,
+            file_name=artifact.file_name,
         )
         mapped = _map_result(artifact, core, policy_fingerprint)
         results.append(mapped)
-
-        if mapped.generated_artifact is not None:
-            generated_artifacts.append(mapped.generated_artifact)
 
         if mapped.status == ValidationStatus.BLOCK:
             overall_status = "BLOCK"
             blocked_artifact_ids.append(artifact.artifact_id)
         elif mapped.status == ValidationStatus.PASS:
             if str(artifact.file_kind) == "PICKLE":
-                if mapped.generated_artifact is None:
-                    overall_status = "BLOCK"
-                    blocked_artifact_ids.append(artifact.artifact_id)
-                    mapped.status = ValidationStatus.BLOCK
-                    mapped.reason_entries.append(
-                        ReasonEntry(
-                            code="PICKLE_RELEASE_REQUIRES_CONVERTED_SAFETENSORS",
-                            message=(
-                                "pickle passed validation but no converted "
-                                "safetensors artifact is available for release"
-                            ),
-                        )
-                    )
-                else:
+                if mapped.generated_artifact is not None:
+                    generated_artifacts.append(mapped.generated_artifact)
                     approved_artifact_ids.append(mapped.generated_artifact.artifact_id)
             else:
                 approved_artifact_ids.append(artifact.artifact_id)
