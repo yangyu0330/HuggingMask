@@ -184,3 +184,35 @@ def test_context_api_scan_payload_is_json_serializable() -> None:
     payload = scan.to_dict()
     assert payload["summary_decision"] == SAFE
     json.loads(json.dumps(payload))
+
+
+# ─────────────────────────────────────────────
+# ast_call_metadata 생성기 (적대검증 2026-06-08 CRITICAL)
+# ─────────────────────────────────────────────
+
+def test_build_metadata_extracts_open_write_mode():
+    from analyzer.validators.code_context import build_ast_call_metadata
+    meta = build_ast_call_metadata('f = open("/tmp/x", "w")\n', "modeling_x.py")
+    opens = [m for m in meta if m["api"] == "open"]
+    assert len(opens) == 1
+    assert opens[0]["args"][1]["value"] == "w"
+    assert opens[0]["args"][1]["is_constant"] is True
+    # 이 메타데이터로 분석하면 쓰기 모드가 BLOCK으로 잡힌다
+    scan = analyze_contextual_api_calls([], meta)
+    assert scan.summary_decision == BLOCK
+
+
+def test_build_metadata_marks_function_arg_path_as_user_input():
+    from analyzer.validators.code_context import build_ast_call_metadata
+    src = "def load(path):\n    return open(path, 'r')\n"
+    meta = build_ast_call_metadata(src, "tokenization_x.py")
+    opens = [m for m in meta if m["api"] == "open"]
+    assert opens[0]["args"][0].get("is_user_input") is True
+
+
+def test_build_metadata_skips_irrelevant_calls_and_bad_syntax():
+    from analyzer.validators.code_context import build_ast_call_metadata
+    # torch 연산 등 비관련 호출은 메타에 안 들어간다(노이즈 방지)
+    assert build_ast_call_metadata("y = torch.relu(x)\n", "m.py") == []
+    # 문법 오류는 빈 리스트(기존 동작 호환)
+    assert build_ast_call_metadata("def broken(:\n", "m.py") == []

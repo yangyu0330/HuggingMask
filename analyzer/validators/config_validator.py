@@ -632,6 +632,10 @@ def _load_error_details(loaded: dict[str, Any]) -> dict[str, Any]:
 
 
 def _linked_status_for_load_error(error: str) -> str:
+    # 참조 코드 미해결(미제출/로더 없음)은 BLOCK이 아니라 MISSING→PENDING으로
+    # 둔다(의도된 fail-closed-to-review 설계, test_snapshot_missing_auto_map_
+    # source_is_fail_closed). 저장소에 존재하나 검증에서 누락된 실행 파일을
+    # 잡는 책임은 full_pipeline의 스냅샷 인벤토리 대조 게이트에 있다.
     if error in {"source_loader_not_provided", "referenced_source_not_found", "MISSING_SOURCE"}:
         return "MISSING"
     return "ERROR"
