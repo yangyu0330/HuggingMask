@@ -189,6 +189,16 @@ def dispatch_artifacts(
                     source_resolver=source_resolver,
                     linked_code_result_collector=_collect_linked_code_result,
                 )
+                if artifact.file_kind is FileKind.TOKENIZER_CONFIG_JSON:
+                    semantic_result = validate_preprocessing_metadata_artifact(
+                        artifact=artifact,
+                        source=source,
+                        policy=policy,
+                    )
+                    result = _merge_tokenizer_config_semantic_result(
+                        result,
+                        semantic_result,
+                    )
             elif is_preprocessing_metadata_kind(artifact.file_kind):
                 result = validate_preprocessing_metadata_artifact(
                     artifact=artifact,
@@ -509,10 +519,54 @@ def _refresh_config_linked_results(
 
     effective_status = _config_status_from_linked_statuses(parent, statuses)
     parent.status = effective_status
-    parent.review_action = _config_review_action_for_status(effective_status)
+    parent.review_action = _strongest_review_action(
+        effective_status,
+        _config_review_action_for_status(effective_status),
+        _preprocessing_semantic_review_action(parent),
+    )
     details["effective_status"] = effective_status.value
     parent.details = details
     return parent
+
+
+def _merge_tokenizer_config_semantic_result(
+    config_result: ArtifactValidationResult,
+    semantic_result: ArtifactValidationResult,
+) -> ArtifactValidationResult:
+    details = dict(config_result.details)
+    details.update({
+        "preprocessing_semantic_result": {
+            "route_kind": semantic_result.route_kind.value,
+            "status": semantic_result.status.value,
+            "grade": semantic_result.grade.value,
+            "review_action": semantic_result.review_action.value,
+            "reason_codes": [entry.code for entry in semantic_result.reason_entries],
+            "cache_key": semantic_result.cache_key,
+        },
+        "preprocessing_semantic_route_kind": semantic_result.route_kind.value,
+    })
+    for key in ("semantic_check", "semantic_inventory", "semantic_findings"):
+        if key in semantic_result.details:
+            details[key] = semantic_result.details[key]
+
+    combined_status = _strongest_status(
+        config_result.status,
+        semantic_result.status,
+    )
+    details["effective_status"] = combined_status.value
+
+    config_result.status = combined_status
+    config_result.grade = _strongest_grade(config_result.grade, semantic_result.grade)
+    config_result.review_action = _strongest_review_action(
+        combined_status,
+        config_result.review_action,
+        semantic_result.review_action,
+    )
+    config_result.reason_entries = _dedupe_reason_entries(
+        config_result.reason_entries + semantic_result.reason_entries
+    )
+    config_result.details = details
+    return config_result
 
 
 def _linked_result_summary(result: ArtifactValidationResult) -> dict[str, Any]:
@@ -565,17 +619,104 @@ def _config_status_from_linked_statuses(
     linked_statuses: list[str],
 ) -> ValidationStatus:
     if not linked_statuses:
-        return parent.status
-    normalized = {status.upper() for status in linked_statuses}
-    if "BLOCK" in normalized:
-        return ValidationStatus.BLOCK
-    if "ERROR" in normalized:
-        return ValidationStatus.ERROR
-    if "PENDING_REVIEW" in normalized or "MISSING" in normalized:
+        linked_status = parent.status
+    else:
+        normalized = {status.upper() for status in linked_statuses}
+        if "BLOCK" in normalized:
+            linked_status = ValidationStatus.BLOCK
+        elif "ERROR" in normalized:
+            linked_status = ValidationStatus.ERROR
+        elif "PENDING_REVIEW" in normalized or "MISSING" in normalized:
+            linked_status = ValidationStatus.PENDING_REVIEW
+        elif normalized == {"PASS"}:
+            linked_status = ValidationStatus.PASS
+        else:
+            linked_status = ValidationStatus.PENDING_REVIEW
+
+    semantic_status = _preprocessing_semantic_status(parent)
+    if semantic_status is None:
+        return linked_status
+    return _strongest_status(linked_status, semantic_status)
+
+
+def _preprocessing_semantic_status(
+    result: ArtifactValidationResult,
+) -> ValidationStatus | None:
+    semantic_result = result.details.get("preprocessing_semantic_result")
+    if not isinstance(semantic_result, dict):
+        return None
+    raw_status = semantic_result.get("status")
+    if raw_status is None:
+        return None
+    try:
+        return ValidationStatus(raw_status)
+    except ValueError:
         return ValidationStatus.PENDING_REVIEW
-    if normalized == {"PASS"}:
-        return ValidationStatus.PASS
-    return ValidationStatus.PENDING_REVIEW
+
+
+def _preprocessing_semantic_review_action(
+    result: ArtifactValidationResult,
+) -> ReviewAction | None:
+    semantic_result = result.details.get("preprocessing_semantic_result")
+    if not isinstance(semantic_result, dict):
+        return None
+    raw_action = semantic_result.get("review_action")
+    if raw_action is None:
+        return None
+    try:
+        return ReviewAction(raw_action)
+    except ValueError:
+        return ReviewAction.MANUAL_REVIEW_REQUIRED
+
+
+def _strongest_status(*statuses: ValidationStatus) -> ValidationStatus:
+    rank = {
+        ValidationStatus.PASS: 0,
+        ValidationStatus.SKIPPED: 1,
+        ValidationStatus.PENDING_REVIEW: 2,
+        ValidationStatus.ERROR: 3,
+        ValidationStatus.BLOCK: 4,
+    }
+    return max(statuses, key=lambda status: rank[status])
+
+
+def _strongest_grade(*grades: CodeGrade) -> CodeGrade:
+    rank = {
+        CodeGrade.NA: 0,
+        CodeGrade.A: 1,
+        CodeGrade.B1: 2,
+        CodeGrade.B2: 3,
+        CodeGrade.C: 4,
+    }
+    return max(grades, key=lambda grade: rank[grade])
+
+
+def _strongest_review_action(
+    status: ValidationStatus,
+    *actions: ReviewAction | None,
+) -> ReviewAction:
+    present_actions = [action for action in actions if action is not None]
+    if status is ValidationStatus.BLOCK:
+        return ReviewAction.BLOCK_IMMEDIATELY
+    if status is ValidationStatus.ERROR:
+        return ReviewAction.MANUAL_REVIEW_REQUIRED
+    if status is ValidationStatus.PENDING_REVIEW:
+        if ReviewAction.MANUAL_REVIEW_REQUIRED in present_actions:
+            return ReviewAction.MANUAL_REVIEW_REQUIRED
+        return ReviewAction.SECURITY_OWNER_GATE
+    return ReviewAction.NONE
+
+
+def _dedupe_reason_entries(entries: list[ReasonEntry]) -> list[ReasonEntry]:
+    deduped: list[ReasonEntry] = []
+    seen: set[tuple[str, tuple[str, ...]]] = set()
+    for entry in entries:
+        key = (entry.code, tuple(entry.evidence))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(entry)
+    return deduped
 
 
 def _config_review_action_for_status(status: ValidationStatus) -> ReviewAction:
