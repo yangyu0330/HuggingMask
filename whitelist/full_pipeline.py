@@ -42,6 +42,7 @@ from analyzer.schemas import (
     ValidationStatus,
 )
 from analyzer.service import validate_job as _validate_weight_job
+from analyzer.validators.code_semantic import is_preprocessing_metadata_kind
 
 WEIGHT_KINDS = {"SAFETENSORS", "PICKLE"}
 CODE_CONFIG_KINDS = {"PYTHON", "CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}
@@ -179,7 +180,16 @@ def _release(status: ValidationStatus) -> str:
 def _code_config_route_kind(artifact) -> RouteKind:
     if artifact.file_kind.value in {"CONFIG_JSON", "TOKENIZER_CONFIG_JSON"}:
         return RouteKind.CONFIG_SCHEMA_VALIDATION
+    if is_preprocessing_metadata_kind(artifact.file_kind):
+        return RouteKind.PREPROCESSING_SEMANTIC_SCAN
     return RouteKind.CODE_AST_SCAN
+
+
+def _routes_through_orchestrator(artifact) -> bool:
+    kind = artifact.file_kind.value
+    if kind in CODE_CONFIG_KINDS:
+        return True
+    return is_preprocessing_metadata_kind(artifact.file_kind)
 
 
 def _source_error_result(
@@ -421,12 +431,12 @@ def run_full_validation(
         request = ValidationJobRequest.from_dict(request)
 
     weight_arts = [a for a in request.artifacts if a.file_kind.value in WEIGHT_KINDS]
-    codecfg_arts = [
-        a for a in request.artifacts if a.file_kind.value in CODE_CONFIG_KINDS
-    ]
-    routed_kinds = WEIGHT_KINDS | CODE_CONFIG_KINDS
+    codecfg_arts = [a for a in request.artifacts if _routes_through_orchestrator(a)]
+    routed_kinds = WEIGHT_KINDS | CODE_CONFIG_KINDS | PREPROCESSING_METADATA_KINDS
     unrouted_arts = [
-        a for a in request.artifacts if a.file_kind.value not in routed_kinds
+        a for a in request.artifacts
+        if a.file_kind.value not in WEIGHT_KINDS
+        and not _routes_through_orchestrator(a)
     ]
 
     results: list = []
