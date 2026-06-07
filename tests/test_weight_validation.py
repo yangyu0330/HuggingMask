@@ -911,6 +911,114 @@ def test_path_b_execution_failure_blocks_release(
     assert result["details"]["release_target"] is None
 
 
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "PICKLE_PATH_B_EXECUTION_FAILED",
+        "PICKLE_PATH_B_INVALID_ARGUMENT",
+        "PICKLE_PATH_B_UNSUPPORTED_OBJECT",
+    ],
+)
+def test_auxiliary_path_b_loader_failures_do_not_deny_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    reason_code: str,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    path = tmp_path / "training_args.bin"
+    with open(path, "wb") as f:
+        pickle.dump(("args", 1), f, protocol=4)
+
+    def fake_run_in_docker(**kwargs):
+        return {
+            "status": "BLOCK",
+            "reason_code": reason_code,
+            "reason": reason_code,
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    response = client.post(
+        "/internal/v1/validation/jobs",
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".bin",
+            f"test-auxiliary-path-b-{reason_code.lower()}",
+            enable_path_b=True,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["artifact_results"][0]
+
+    assert body["overall_status"] == "PASS"
+    assert body["overall_decision"] == "APPROVE"
+    assert body["release_action"] == "APPROVE"
+    assert body["approved_artifact_ids"] == []
+    assert body["blocked_artifact_ids"] == []
+    assert body["pending_artifact_ids"] == []
+    assert result["status"] == "SKIPPED"
+    assert result["reason_entries"][0]["code"] == (
+        "PICKLE_AUXILIARY_NOT_RELEASE_ARTIFACT"
+    )
+    assert result["details"]["stage"] == "PATH_B"
+    assert result["details"]["path_b"]["reason_code"] == reason_code
+    assert result["details"]["pickle_role"] == "AUXILIARY_TRAINING"
+    assert result["details"]["release_eligible"] is False
+    assert result["details"]["release_target"] is None
+
+
+def test_auxiliary_path_b_security_event_still_blocks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    path = tmp_path / "training_args.bin"
+    with open(path, "wb") as f:
+        pickle.dump(("args", 1), f, protocol=4)
+
+    def fake_run_in_docker(**kwargs):
+        return {
+            "status": "BLOCK",
+            "reason_code": "PICKLE_PATH_B_SECURITY_EVENT",
+            "reason": "sandbox security event detected",
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    response = client.post(
+        "/internal/v1/validation/jobs",
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".bin",
+            "test-auxiliary-path-b-security-event",
+            enable_path_b=True,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["artifact_results"][0]
+
+    assert body["overall_status"] == "BLOCK"
+    assert body["overall_decision"] == "DENY"
+    assert body["approved_artifact_ids"] == []
+    assert body["blocked_artifact_ids"] == [result["artifact"]["artifact_id"]]
+    assert body["pending_artifact_ids"] == []
+    assert result["status"] == "BLOCK"
+    assert result["reason_entries"][0]["code"] == "PICKLE_PATH_B_SECURITY_EVENT"
+    assert result["details"]["pickle_role"] == "AUXILIARY_TRAINING"
+    assert result["details"]["release_eligible"] is False
+    assert result["details"]["release_target"] is None
+
+
 def test_actual_torch_state_dict_pickle_is_explicitly_blocked_by_path_a(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

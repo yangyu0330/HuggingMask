@@ -29,12 +29,14 @@ PICKLE_HARD_BLOCK_REASON_CODES = {
     "PICKLE_YARA_BLOCKED",
     "PICKLE_MODELSCAN_BLOCKED",
     "PICKLE_PATH_B_BLOCKED",
-    "PICKLE_PATH_B_EXECUTION_FAILED",
-    "PICKLE_PATH_B_INVALID_ARGUMENT",
     "PICKLE_PATH_B_RUNTIME_POLICY_VIOLATION",
     "PICKLE_PATH_B_SECURITY_EVENT",
-    "PICKLE_PATH_B_UNSUPPORTED_OBJECT",
     "PICKLE_PATH_AB_MISMATCH",
+}
+PICKLE_NON_AUXILIARY_HARD_BLOCK_REASON_CODES = {
+    "PICKLE_PATH_B_EXECUTION_FAILED",
+    "PICKLE_PATH_B_INVALID_ARGUMENT",
+    "PICKLE_PATH_B_UNSUPPORTED_OBJECT",
 }
 PICKLE_HARD_BLOCK_STAGES = {"YARA", "MODELSCAN", "DIFF"}
 STATUS_PRIORITY = {
@@ -133,7 +135,15 @@ def _collect_reason_codes(core_result: dict) -> set[str]:
 def _is_pickle_hard_block(core_result: dict) -> bool:
     if core_result.get("stage") in PICKLE_HARD_BLOCK_STAGES:
         return True
-    return bool(_collect_reason_codes(core_result) & PICKLE_HARD_BLOCK_REASON_CODES)
+
+    codes = _collect_reason_codes(core_result)
+    if codes & PICKLE_HARD_BLOCK_REASON_CODES:
+        return True
+
+    if _pickle_role_value(core_result) == PickleRole.AUXILIARY_TRAINING.value:
+        return False
+
+    return bool(codes & PICKLE_NON_AUXILIARY_HARD_BLOCK_REASON_CODES)
 
 
 def _pickle_role_value(core_result: dict) -> str:
