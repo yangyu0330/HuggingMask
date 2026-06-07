@@ -709,6 +709,155 @@ def test_deployable_raw_pickle_requires_review_without_release_approval(
     assert result["details"]["release_target"] is None
 
 
+def test_path_a_parse_failure_preserves_path_b_review_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    path = tmp_path / "pytorch_model.bin"
+    torch.save(
+        {"linear.weight": torch.ones((2, 2), dtype=torch.float32)},
+        path,
+    )
+
+    calls = []
+
+    def fake_run_in_docker(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "PASS",
+            "reason_code": "PICKLE_PATH_B_LOAD_OK",
+            "reason": "pickle loaded in sandbox for review evidence",
+            "tensors": {
+                "linear.weight": {
+                    "hash": "sandbox-hash",
+                    "shape": [2, 2],
+                    "dtype": "torch.float32",
+                }
+            },
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    result = validate(
+        str(path),
+        policy_fingerprint="test-path-b-review-evidence",
+        file_kind="PICKLE",
+        enable_path_b=True,
+        repo_path="pytorch_model.bin",
+    )
+
+    assert len(calls) == 1
+    assert result["status"] == "BLOCK"
+    assert result["stage"] == "PATH_A"
+    assert result["path_a"]["reason_code"] == "PICKLE_PARSE_ERROR"
+    assert result["path_b"]["reason_code"] == "PICKLE_PATH_B_LOAD_OK"
+    assert result["diff"]["reason"] == "PATH_A_BLOCKED_BEFORE_TENSOR_REPORT"
+    assert result["pickle_role"] == "DEPLOYABLE_WEIGHT"
+    assert result["release_eligible"] is False
+    assert result["release_target"] is None
+
+
+def test_path_b_success_does_not_approve_raw_pickle_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    path = tmp_path / "pytorch_model.bin"
+    torch.save(
+        {"linear.weight": torch.ones((2, 2), dtype=torch.float32)},
+        path,
+    )
+
+    def fake_run_in_docker(**kwargs):
+        return {
+            "status": "PASS",
+            "reason_code": "PICKLE_PATH_B_LOAD_OK",
+            "reason": "pickle loaded in sandbox for review evidence",
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    response = client.post(
+        "/internal/v1/validation/jobs",
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".bin",
+            "test-path-b-success-no-raw-release",
+            enable_path_b=True,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["artifact_results"][0]
+
+    assert body["overall_status"] == "PENDING_REVIEW"
+    assert body["overall_decision"] == "REVIEW_REQUIRED"
+    assert body["approved_artifact_ids"] == []
+    assert body["blocked_artifact_ids"] == []
+    assert body["pending_artifact_ids"] == [result["artifact"]["artifact_id"]]
+    assert result["status"] == "PENDING_REVIEW"
+    assert result["details"]["path_b"]["reason_code"] == "PICKLE_PATH_B_LOAD_OK"
+    assert result["details"]["pickle_role"] == "DEPLOYABLE_WEIGHT"
+    assert result["details"]["release_eligible"] is False
+    assert result["details"]["release_target"] is None
+
+
+def test_path_b_unavailable_evidence_requires_review_without_raw_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    path = tmp_path / "pytorch_model.bin"
+    torch.save(
+        {"linear.weight": torch.ones((2, 2), dtype=torch.float32)},
+        path,
+    )
+
+    def fake_run_in_docker(**kwargs):
+        return {
+            "status": "BLOCK",
+            "reason_code": "PICKLE_PATH_B_NOT_AVAILABLE",
+            "reason": "Path B is not available in this environment",
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    response = client.post(
+        "/internal/v1/validation/jobs",
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".bin",
+            "test-path-b-unavailable-review",
+            enable_path_b=True,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["artifact_results"][0]
+
+    assert body["overall_status"] == "PENDING_REVIEW"
+    assert body["overall_decision"] == "REVIEW_REQUIRED"
+    assert body["approved_artifact_ids"] == []
+    assert body["blocked_artifact_ids"] == []
+    assert body["pending_artifact_ids"] == [result["artifact"]["artifact_id"]]
+    assert result["status"] == "PENDING_REVIEW"
+    assert result["details"]["stage"] == "PATH_B"
+    assert result["details"]["path_b"]["reason_code"] == "PICKLE_PATH_B_NOT_AVAILABLE"
+    assert result["details"]["release_eligible"] is False
+    assert result["details"]["release_target"] is None
+
+
 def test_actual_torch_state_dict_pickle_is_explicitly_blocked_by_path_a(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -853,6 +1002,51 @@ def test_malicious_auxiliary_training_pickle_still_blocks(
     assert result["details"]["pickle_role"] == "AUXILIARY_TRAINING"
     assert result["details"]["release_eligible"] is False
     assert result["details"]["release_target"] is None
+
+
+def test_malicious_opcode_block_skips_path_b_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    class Exploit:
+        def __reduce__(self):
+            import os
+
+            return (os.system, ("echo hacked",))
+
+    path = tmp_path / "malicious.pkl"
+    with open(path, "wb") as f:
+        pickle.dump(Exploit(), f, protocol=4)
+
+    calls = []
+
+    def fake_run_in_docker(**kwargs):
+        calls.append(kwargs)
+        return {
+            "status": "PASS",
+            "reason_code": "PICKLE_PATH_B_LOAD_OK",
+            "reason": "should not be called for malicious opcode",
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    result = validate(
+        str(path),
+        policy_fingerprint="test-malicious-skips-path-b",
+        file_kind="PICKLE",
+        enable_path_b=True,
+        repo_path="malicious.pkl",
+    )
+
+    assert calls == []
+    assert result["status"] == "BLOCK"
+    assert result["stage"] == "PATH_A"
+    assert result["path_a"]["reason_code"] == "PICKLE_OPCODE_BLOCKED"
+    assert "path_b" not in result
+    assert result["pickle_role"] == "GENERIC_PICKLE"
 
 
 def test_path_b_block_blocks_pipeline(

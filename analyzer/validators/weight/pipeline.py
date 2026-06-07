@@ -49,6 +49,13 @@ def _pickle_cache_kind(enable_path_b: bool) -> str:
     return "PICKLE"
 
 
+def _path_a_block_allows_path_b_evidence(path_a_result: dict) -> bool:
+    return path_a_result.get("reason_code") in {
+        "PICKLE_PARSE_ERROR",
+        "UNSUPPORTED_PICKLE_FORMAT",
+    }
+
+
 def _hash_mismatch_result(
     file_hash: str,
     expected_sha256: str,
@@ -150,6 +157,31 @@ def validate_pickle_pipeline(
             "modelscan": modelscan_result,
             "path_a": path_a_result,
         }
+        if enable_path_b and _path_a_block_allows_path_b_evidence(path_a_result):
+            path_b_result = run_in_docker(
+                file_path=path,
+                image_name=sandbox_image,
+                timeout_sec=10,
+                runtime=runtime,
+            )
+            result["path_b"] = path_b_result
+
+            if path_b_result.get("status") == "BLOCK":
+                result["stage"] = "PATH_B"
+                result["reason_code"] = path_b_result.get(
+                    "reason_code",
+                    "PICKLE_PATH_B_BLOCKED",
+                )
+                result["reason"] = path_b_result.get(
+                    "reason",
+                    "Path B sandbox validation blocked pickle",
+                )
+            else:
+                result["diff"] = {
+                    "status": "SKIPPED",
+                    "reason_code": "PICKLE_PATH_AB_COMPARE_SKIPPED",
+                    "reason": "PATH_A_BLOCKED_BEFORE_TENSOR_REPORT",
+                }
         return _cache_pickle_result(cache_key, result, pickle_role)
 
     result = {
