@@ -34,10 +34,24 @@ from analyzer.schemas import FileKind
         ("chat_template.jinja", FileKind.CHAT_TEMPLATE_JINJA),
         ("README.md", FileKind.OTHER),
         ("weights.json", FileKind.OTHER),
+        ("weights.pth", FileKind.OTHER),
+        ("checkpoint.ckpt", FileKind.OTHER),
     ],
 )
 def test_classify_file_kind(path: str, expected: FileKind) -> None:
     assert classify_file_kind(path) is expected
+
+
+def test_public_file_kind_contract_does_not_expose_pickle_roles() -> None:
+    internal_pickle_roles = {
+        "DEPLOYABLE_WEIGHT",
+        "AUXILIARY_TRAINING",
+        "GENERIC_PICKLE",
+        "UNSUPPORTED_CHECKPOINT",
+    }
+
+    assert FileKind.PICKLE.value == "PICKLE"
+    assert internal_pickle_roles.isdisjoint({kind.value for kind in FileKind})
 
 
 def test_config_names_take_priority_over_json_suffix() -> None:
