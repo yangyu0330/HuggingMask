@@ -141,6 +141,19 @@ _PATH_OR_NETWORK_HINTS = (
     "c:\\",
 )
 
+# 커스텀 코드(trust_remote_code) 참조 필드 — 전처리 메타데이터가 이 필드를
+# 가지면 모델 로드 시 저장소의 임의 .py가 실행될 수 있다. tokenizer_config.json /
+# config.json은 config_validator가 별도로 링크 코드까지 스캔하지만,
+# processor_config.json / preprocessor_config.json / special_tokens_map.json 등
+# 2차 메타데이터는 이 의미 검사만 거치므로, 여기서 명시적 finding으로 surface해야
+# BASELINE_MISSING 노이즈에 묻히지 않는다 (적대검증 2026-06-08 HIGH).
+_CUSTOM_CODE_CLASS_KEYS = (
+    "processor_class",
+    "image_processor_class",
+    "feature_extractor_class",
+    "tokenizer_class",
+)
+
 _SPECIAL_TOKEN_KEYS = (
     "bos_token",
     "eos_token",
@@ -592,6 +605,8 @@ def _build_semantic_findings(
     for template in templates:
         findings.extend(_chat_template_findings(template))
 
+    findings.extend(_custom_code_findings(payload))
+
     lowered = source_text.lower()
     if any(hint in lowered for hint in _PATH_OR_NETWORK_HINTS):
         findings.append(
@@ -603,6 +618,65 @@ def _build_semantic_findings(
         )
 
     return _dedupe_findings(findings)
+
+
+def _custom_code_findings(payload: Any) -> list[dict[str, Any]]:
+    """전처리 메타데이터의 커스텀 코드(trust_remote_code) 참조를 명시적 finding으로.
+
+    탐지 대상:
+      - ``auto_map``  : Auto* 클래스를 ``module.Class`` 커스텀 코드에 매핑
+      - ``custom_pipelines`` : ``impl: "module.Class"`` 커스텀 파이프라인
+      - ``*_class`` 값에 ``.``(module 경로) 포함 — 인라인 커스텀 클래스 참조
+
+    참조된 모듈/심볼 문자열을 evidence로 모아, 후속 리뷰/링크 스캔이
+    어떤 코드를 봐야 하는지 알 수 있게 한다.
+    """
+    if not isinstance(payload, dict):
+        return []
+
+    references: list[str] = []
+
+    auto_map = payload.get("auto_map")
+    if isinstance(auto_map, dict) and auto_map:
+        references.extend(sorted(_collect_code_refs(auto_map.values())))
+    elif isinstance(auto_map, str) and auto_map:
+        references.append(auto_map)
+
+    custom_pipelines = payload.get("custom_pipelines")
+    if isinstance(custom_pipelines, dict) and custom_pipelines:
+        references.extend(sorted(_collect_code_refs(custom_pipelines.values())))
+
+    for key in _CUSTOM_CODE_CLASS_KEYS:
+        value = payload.get(key)
+        if isinstance(value, str) and "." in value:
+            references.append(f"{key}={value}")
+
+    if not references:
+        return []
+
+    deduped_refs = sorted(dict.fromkeys(references))
+    return [
+        _finding(
+            "PREPROCESSING_CUSTOM_CODE_REF",
+            "HIGH",
+            "preprocessing metadata references custom code (trust_remote_code): "
+            + ", ".join(deduped_refs[:20]),
+        )
+    ]
+
+
+def _collect_code_refs(values: Any) -> list[str]:
+    """auto_map / custom_pipelines 값에서 ``module.Class`` 문자열을 평탄화 추출."""
+    refs: list[str] = []
+    for value in values:
+        if isinstance(value, str):
+            if value:
+                refs.append(value)
+        elif isinstance(value, (list, tuple)):
+            refs.extend(item for item in value if isinstance(item, str) and item)
+        elif isinstance(value, dict):
+            refs.extend(_collect_code_refs(value.values()))
+    return refs
 
 
 def _extract_chat_templates(file_kind: FileKind, source_text: str, payload: Any) -> list[str]:
@@ -671,7 +745,9 @@ def _semantic_check_status(
 ) -> str:
     if parse_error is not None:
         return "ERROR"
-    if any(item["code"] == "CHAT_TEMPLATE_HIDDEN_SYSTEM_INJECTION" for item in findings):
+    # HIGH 심각도 finding(숨은 시스템 주입 / 커스텀 코드 참조 등)은 baseline
+    # 유무와 무관하게 FAILED로 격상 — BASELINE_MISSING 노이즈에 묻히지 않게.
+    if any(item.get("severity") == "HIGH" for item in findings):
         return "FAILED"
     if baseline_text is None:
         return "BASELINE_MISSING"
@@ -733,6 +809,7 @@ def _reason_message(code: str) -> str:
         "BASELINE_MISSING": "baseline is missing, semantic preservation cannot be proven",
         "SEMANTIC_PARSE_ERROR": "preprocessing metadata could not be parsed",
         "CHAT_TEMPLATE_HIDDEN_SYSTEM_INJECTION": "chat template contains hidden system-instruction indicators",
+        "PREPROCESSING_CUSTOM_CODE_REF": "preprocessing metadata references custom code (trust_remote_code) requiring review",
         "SEMANTIC_REVIEW_REQUIRED": "preprocessing metadata requires semantic review",
         "SEMANTIC_CHECK_PASSED": "preprocessing semantic check passed against baseline",
     }.get(code, "preprocessing metadata requires semantic review")

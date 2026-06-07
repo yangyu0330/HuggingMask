@@ -244,3 +244,55 @@ def test_hidden_system_injection_is_c_pending_review() -> None:
     assert "CHAT_TEMPLATE_HIDDEN_SYSTEM_INJECTION" in [
         item["code"] for item in result.details["semantic_findings"]
     ]
+
+
+def test_processor_config_auto_map_custom_code_is_surfaced_not_baseline_missing() -> None:
+    """auto_map(trust_remote_code) 커스텀 코드 참조는 BASELINE_MISSING 노이즈에
+    묻히지 않고 PREPROCESSING_CUSTOM_CODE_REF 로 명시 surface 되어야 한다.
+
+    processor_config.json은 config_validator를 거치지 않고 이 의미 검사만
+    거치므로, 여기서 잡지 않으면 악성 auto_map이 무차별 PENDING 더미에 섞인다
+    (적대검증 2026-06-08 HIGH 대응).
+    """
+    source = json.dumps(
+        {
+            "processor_class": "WhisperProcessor",
+            "auto_map": {"AutoProcessor": "evil_processing.EvilProcessor"},
+        }
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
+    assert result.details["semantic_check"]["status"] == "FAILED"
+    codes = [item["code"] for item in result.details["semantic_findings"]]
+    assert "PREPROCESSING_CUSTOM_CODE_REF" in codes
+    custom_finding = next(
+        item for item in result.details["semantic_findings"]
+        if item["code"] == "PREPROCESSING_CUSTOM_CODE_REF"
+    )
+    assert any("evil_processing.EvilProcessor" in ev for ev in custom_finding["evidence"])
+
+
+def test_special_tokens_map_without_custom_code_stays_baseline_missing() -> None:
+    """커스텀 코드 참조가 없는 평범한 전처리 메타는 기존대로 BASELINE_MISSING.
+
+    커스텀 코드 탐지가 일반 파일을 과오탐(false positive)하지 않음을 보장.
+    """
+    source = json.dumps(
+        {
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "pad_token": "<pad>",
+        }
+    )
+    artifact = build_artifact_ref("special_tokens_map.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    codes = [item["code"] for item in result.details["semantic_findings"]]
+    assert "PREPROCESSING_CUSTOM_CODE_REF" not in codes
