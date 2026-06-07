@@ -65,50 +65,69 @@ def _apply_review(
     return body.get("applied") is True
 
 
-def bulk_approve_auto(
-    client: httpx.Client, base: str, reviewer_id: str = "auto_system",
-) -> int:
-    """AUTO_APPROVE 분류된 PENDING API만 일괄 승인."""
-    total_approved = 0
-    # 승인에 실패한 api_path는 PENDING에 그대로 남아 offset 0 재조회 시 다시 잡힌다.
-    # 무한 재시도를 막기 위해 실패 항목을 기록하고 대상에서 제외한다.
-    failed: set[str] = set()
-    page = 0
+def collect_pending_auto_approve(
+    client: httpx.Client, base: str,
+) -> list[dict]:
+    """AUTO_APPROVE + PENDING 전부를 read-only로 수집.
+
+    승인 작업과 수집을 분리한다 (Issue #28). 동일 루프에서 offset=0
+    재조회로 승인하면 첫 페이지 50개가 전부 실패할 때 그 50개가 ``failed``에
+    묶이면서 ``targets``가 빈 셋이 되어 51번째 이후 PENDING 항목까지
+    스킵될 수 있다. 수집 단계는 목록을 변경하지 않으므로 offset 페이지네이션이
+    안정적이며, 모든 초기 PENDING 항목이 정확히 한 번씩 승인 시도된다.
+    """
+    collected: list[dict] = []
+    offset = 0
     while True:
-        # PENDING + AUTO_APPROVE만 조회. 승인하면 PENDING에서 빠지니 항상 offset 0.
         r = client.get(
             f"{base}/pending",
             params={
                 "classification": "AUTO_APPROVE",
                 "review_status": "PENDING",
                 "limit": 50,
-                "offset": 0,
+                "offset": offset,
             },
         )
         r.raise_for_status()
         items = r.json().get("items", [])
-        # 아직 실패하지 않은 항목만 이번 페이지 대상으로.
-        targets = [it for it in items if it["api_path"] not in failed]
-        if not targets:
-            # 남은 PENDING이 없거나 전부 실패 항목 → 진행 불가, 종료.
+        if not items:
             break
+        collected.extend(items)
+        offset += 50
+    return collected
 
-        page += 1
-        print(f"  페이지 {page}: {len(targets)}개 자동 승인 중...")
 
-        for item in targets:
-            applied = _apply_review(
-                client, base, item["api_path"], reviewer_id,
-                "namespace rule auto-approved (AUTO_APPROVE)",
+def bulk_approve_auto(
+    client: httpx.Client, base: str, reviewer_id: str = "auto_system",
+) -> int:
+    """AUTO_APPROVE 분류된 PENDING API만 일괄 승인."""
+    pending = collect_pending_auto_approve(client, base)
+    if not pending:
+        return 0
+
+    print(f"  대상 수집 {len(pending)}개. 승인 시도 중...")
+
+    total_approved = 0
+    failed_count = 0
+    for item in pending:
+        applied = _apply_review(
+            client, base, item["api_path"], reviewer_id,
+            "namespace rule auto-approved (AUTO_APPROVE)",
+        )
+        if applied:
+            total_approved += 1
+        else:
+            failed_count += 1
+            print(
+                f"    경고: 승인 실패 — {item['api_path']} (스킵)",
+                file=sys.stderr,
             )
-            if applied:
-                total_approved += 1
-            else:
-                failed.add(item["api_path"])
-                print(
-                    f"    경고: 승인 실패 — {item['api_path']} (스킵)",
-                    file=sys.stderr,
-                )
+
+    if failed_count:
+        print(
+            f"  실패 {failed_count}개 (PENDING에 남음, 운영자 수동 확인 필요)",
+            file=sys.stderr,
+        )
     return total_approved
 
 

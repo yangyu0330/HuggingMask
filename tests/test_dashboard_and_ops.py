@@ -301,6 +301,34 @@ class TestBulkApproveResponseValidation:
             n = ba.bulk_approve_auto(c, "http://x/internal/v1")
         assert n == 120
 
+    def test_first_page_all_fail_still_reaches_later_items(self):
+        """Issue #28 — 첫 페이지 50개가 전부 실패해도 51번째 이후 PENDING
+        항목이 스킵되지 않고 모두 한 번씩 승인 시도돼야 한다.
+
+        옛 구현: offset=0 재조회 + failed set 필터링 → 첫 50개가 다 failed면
+        다음 페이지 응답이 같은 50개라 targets가 빈 셋 → 51+ 항목 미처리.
+        새 구현: collect_pending_auto_approve 후 process.
+        """
+        import scripts.bulk_approve as ba
+        items = [{"api_path": f"torch.nn.Bad{i}"} for i in range(50)]
+        items += [{"api_path": f"torch.nn.Ok{i}"} for i in range(3)]
+        fail = {f"torch.nn.Bad{i}" for i in range(50)}
+        api = _FakeWhitelistAPI(items, fail_paths=fail)
+        with self._client(api) as c:
+            n = ba.bulk_approve_auto(c, "http://x/internal/v1")
+        assert n == 3, "첫 페이지 전부 실패 후 51번째 이후 3개가 승인돼야 함"
+        # 모든 53개 항목에 정확히 한 번씩 승인 시도 (재시도 없음)
+        assert api.review_calls == 53
+
+    def test_collect_pending_paginates(self):
+        """collect_pending_auto_approve가 130개 → 3페이지 안정적 수집."""
+        import scripts.bulk_approve as ba
+        items = [{"api_path": f"torch.nn.L{i}"} for i in range(130)]
+        api = _FakeWhitelistAPI(items)
+        with self._client(api) as c:
+            collected = ba.collect_pending_auto_approve(c, "http://x/internal/v1")
+        assert len(collected) == 130
+
 
 class TestBulkConditionalPagination:
     """bulk_conditional.py:110 — pagination offset 버그.
