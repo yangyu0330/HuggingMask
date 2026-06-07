@@ -10,6 +10,7 @@ from analyzer.classifier import (
     sha256_bytes,
 )
 from analyzer.schemas import FileKind
+from analyzer.validators.weight.pickle_roles import PickleRole, classify_pickle_role
 
 
 @pytest.mark.parametrize(
@@ -52,6 +53,29 @@ def test_public_file_kind_contract_does_not_expose_pickle_roles() -> None:
 
     assert FileKind.PICKLE.value == "PICKLE"
     assert internal_pickle_roles.isdisjoint({kind.value for kind in FileKind})
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("pytorch_model.bin", PickleRole.DEPLOYABLE_WEIGHT),
+        ("pytorch_model-00001-of-00002.bin", PickleRole.DEPLOYABLE_WEIGHT),
+        ("adapter_model.bin", PickleRole.DEPLOYABLE_WEIGHT),
+        ("diffusion_pytorch_model.bin", PickleRole.DEPLOYABLE_WEIGHT),
+        ("training_args.bin", PickleRole.AUXILIARY_TRAINING),
+        ("checkpoint-12/optimizer.pt", PickleRole.AUXILIARY_TRAINING),
+        ("rng_state_0.pt", PickleRole.AUXILIARY_TRAINING),
+        ("weights.pkl", PickleRole.GENERIC_PICKLE),
+        ("custom/model.pt", PickleRole.GENERIC_PICKLE),
+        ("weights.pth", PickleRole.UNSUPPORTED_CHECKPOINT),
+        ("checkpoint.ckpt", PickleRole.UNSUPPORTED_CHECKPOINT),
+    ],
+)
+def test_classify_pickle_role_is_internal_and_deterministic(
+    path: str,
+    expected: PickleRole,
+) -> None:
+    assert classify_pickle_role(path) is expected
 
 
 def test_config_names_take_priority_over_json_suffix() -> None:
