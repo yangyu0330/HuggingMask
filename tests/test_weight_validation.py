@@ -858,6 +858,59 @@ def test_path_b_unavailable_evidence_requires_review_without_raw_release(
     assert result["details"]["release_target"] is None
 
 
+def test_path_b_execution_failure_blocks_release(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+):
+    monkeypatch.setattr(pipeline_mod, "scan_with_yara", _scanner_pass)
+    monkeypatch.setattr(pipeline_mod, "scan_with_modelscan", _scanner_pass)
+
+    path = tmp_path / "pytorch_model.bin"
+    torch.save(
+        {"linear.weight": torch.ones((2, 2), dtype=torch.float32)},
+        path,
+    )
+
+    def fake_run_in_docker(**kwargs):
+        return {
+            "status": "BLOCK",
+            "reason_code": "PICKLE_PATH_B_EXECUTION_FAILED",
+            "reason": "sandbox loader failed",
+        }
+
+    monkeypatch.setattr(pipeline_mod, "run_in_docker", fake_run_in_docker)
+
+    response = client.post(
+        "/internal/v1/validation/jobs",
+        json=_payload_with_real_hash(
+            path,
+            "PICKLE",
+            ".bin",
+            "test-path-b-execution-failure-block",
+            enable_path_b=True,
+        ),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    result = body["artifact_results"][0]
+
+    assert body["overall_status"] == "BLOCK"
+    assert body["overall_decision"] == "DENY"
+    assert body["release_action"] == "DENY"
+    assert body["approved_artifact_ids"] == []
+    assert body["blocked_artifact_ids"] == [result["artifact"]["artifact_id"]]
+    assert body["pending_artifact_ids"] == []
+    assert result["status"] == "BLOCK"
+    assert result["reason_entries"][0]["code"] == "PICKLE_PATH_B_EXECUTION_FAILED"
+    assert result["details"]["stage"] == "PATH_B"
+    assert result["details"]["path_b"]["reason_code"] == (
+        "PICKLE_PATH_B_EXECUTION_FAILED"
+    )
+    assert result["details"]["release_eligible"] is False
+    assert result["details"]["release_target"] is None
+
+
 def test_actual_torch_state_dict_pickle_is_explicitly_blocked_by_path_a(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
