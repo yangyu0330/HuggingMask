@@ -285,6 +285,12 @@ class ValidationJobRequest(Serializable):
     artifacts: list[ArtifactRef] = field(default_factory=list)
     requested_routes: list[RouteKind] = field(default_factory=list)
     stop_on_first_block: bool = False
+    # Path B = pickle gVisor/Docker 동적 샌드박스(검증3 defense-in-depth).
+    # 기본 False — 정적 opcode 화이트리스트(Path A)가 1차 게이트이고, Path B는
+    # runsc/Docker + b2 이미지가 실제로 프로비저닝된 환경에서만 의미가 있다.
+    # 미프로비저닝 환경에서 켜면 모든 pickle이 PICKLE_PATH_B_NOT_AVAILABLE로
+    # 검토/차단 강등되므로 자동 ON 하지 않는다. 프로덕션에서 gVisor 방어를
+    # 켜려면 요청에서 명시하거나 프록시 env HUGGINGMASK_ENABLE_PATH_B=1 설정.
     enable_path_b: bool = False
     policy_fingerprint: str | None = None
     schema_version: str = SCHEMA_VERSION
