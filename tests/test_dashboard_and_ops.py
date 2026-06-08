@@ -234,6 +234,61 @@ class TestDashboardProxyAuth:
         assert body[0]["api_path"] == "torch.nn.DashboardProxyLayer"
         assert token not in r.text
 
+    def test_proxy_forwards_reviewer_id_header(self):
+        # Review routes need X-Reviewer-Id as the reviewer principal once token
+        # auth is on; the proxy must pass through what the browser sends or the
+        # dashboard's approve/reject 401s. Guards the #60/#61 interaction.
+        from starlette.requests import Request
+
+        from proxy.app.main import _dashboard_proxy_headers
+
+        raw = [(b"content-type", b"application/json"), (b"x-reviewer-id", b"security_admin")]
+        request = Request({"type": "http", "method": "POST", "headers": raw})
+
+        forwarded = _dashboard_proxy_headers(request)
+        assert forwarded.get("x-reviewer-id") == "security_admin"
+
+    def test_dashboard_html_sends_reviewer_id_header(self, client):
+        # Browser half of the fix: the review fetch must carry X-Reviewer-Id.
+        assert "X-Reviewer-Id" in client.get("/dashboard").text
+
+    def test_review_through_dashboard_proxy_with_token(self, client, monkeypatch):
+        # Real dashboard approve flow through the proxy with token auth on. Stays
+        # 200 because the reviewer principal header is forwarded; regresses to 401
+        # if the proxy drops it once the reviewer-principal check is in place.
+        token = "dashboard-proxy-secret"
+        monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", token)
+        api_path = "torch.nn.ReviewProxyLayer"
+        payload = {
+            "schema_version": "1.0",
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "model": {
+                "repo_id": "dashboard/test",
+                "revision": "main",
+                "source_host": "huggingface.co",
+                "source_url": "https://huggingface.co/dashboard/test",
+                "requested_by": "dashboard",
+                "requested_at": "2026-05-08T00:00:00Z",
+                "endpoint_mode": "HF_ENDPOINT_PROXY",
+            },
+            "apis": [api_path],
+        }
+        assert client.post("/dashboard/api/whitelist/check", json=payload).status_code == 200
+
+        r = client.post(
+            "/dashboard/api/review",
+            headers={"X-Reviewer-Id": "security_admin"},
+            json={
+                "api_path": api_path,
+                "decision": "approve",
+                "reviewer_id": "security_admin",
+                "review_note": "approved via dashboard proxy",
+            },
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["applied"] is True
+
 
 class TestBulkScripts:
 

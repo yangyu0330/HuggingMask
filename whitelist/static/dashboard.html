@@ -239,7 +239,8 @@ function openReview(a,c){document.getElementById('review-api').value=a;document.
 function closeModal(){document.getElementById('review-modal').classList.remove('active')}
 
 async function submitReview(dec){
-  const d=await fetchJson(API+'/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({api_path:document.getElementById('review-api').value,decision:dec,reviewer_id:document.getElementById('review-reviewer').value,review_note:document.getElementById('review-note').value})});
+  const reviewer=document.getElementById('review-reviewer').value;
+  const d=await fetchJson(API+'/review',{method:'POST',headers:{'Content-Type':'application/json','X-Reviewer-Id':reviewer},body:JSON.stringify({api_path:document.getElementById('review-api').value,decision:dec,reviewer_id:reviewer,review_note:document.getElementById('review-note').value})});
   if(d?.applied){showToast(d.api_path+' → '+{approve:'승인',reject:'거부',defer:'보류'}[dec]+' 완료');closeModal();loadStats();loadPending()}
 }
 

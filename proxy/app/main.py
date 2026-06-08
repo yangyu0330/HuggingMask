@@ -116,7 +116,10 @@ def dashboard() -> HTMLResponse:
 
 def _dashboard_proxy_headers(request: Request) -> dict[str, str]:
     headers: dict[str, str] = {}
-    for name in ("content-type", "accept"):
+    # ``x-reviewer-id``: review routes require the reviewer principal header when
+    # token auth is enabled. Without forwarding it the dashboard's approve/reject
+    # would 401 once a token is configured, so pass through what the browser sends.
+    for name in ("content-type", "accept", "x-reviewer-id"):
         value = request.headers.get(name)
         if value:
             headers[name] = value
