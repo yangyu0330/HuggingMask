@@ -42,6 +42,53 @@ def test_safe_code_not_flagged_dangerous(src):
     assert result.dangerous_calls == [], result.dangerous_calls
 
 
+# ── 스코프/순서 정밀도: 별칭 오탐 방지(양유상 PR #57 리뷰 재현) ──────────────
+@pytest.mark.parametrize("src", [
+    # 다른 함수의 지역 alias가 콜백 파라미터 f(...)를 오염시키면 안 됨
+    "import os\n"
+    "def apply_callback(f, x):\n"
+    "    return f(x)\n"
+    "def unused_helper():\n"
+    "    f = os.system\n"
+    "    return f\n",
+    # 파라미터 shadowing은 전역 alias보다 우선
+    "import os\n"
+    "f = os.system\n"
+    "def forward(f, x):\n"
+    "    return f(x)\n",
+    # 호출 뒤의 alias 대입은 앞선 호출에 적용되면 안 됨
+    "import os\n"
+    "def forward(x):\n"
+    "    f = lambda y: y\n"
+    "    return f(x)\n"
+    "f = os.system\n",
+    # 조건부 재대입은 승격하지 않음(불확실 → 미해소)
+    "import os\n"
+    "def run(flag, x):\n"
+    "    f = print\n"
+    "    if flag:\n"
+    "        f = os.system\n"
+    "    return f(x)\n",
+    # 람다 파라미터 shadowing
+    "import os\n"
+    "f = os.system\n"
+    "g = lambda f: f(1)\n",
+    # 컴프리헨션 타깃 shadowing
+    "import os\n"
+    "f = os.system\n"
+    "ys = [f(1) for f in items]\n",
+])
+def test_alias_scope_and_order_no_false_positive(src):
+    result = extract_ast_candidates("m.py", src)
+    assert result.dangerous_calls == [], result.dangerous_calls
+
+
+def test_alias_chain_resolves_in_straight_line():
+    # 직선 실행에서 별칭 체이닝(t = s = os.system)은 여전히 승격되어야 함
+    result = extract_ast_candidates("m.py", "import os\ns = os.system\nt = s\nt('x')\n")
+    assert "os.system" in result.dangerous_calls, result.dangerous_calls
+
+
 # ── e2e: 우회가 통합 검증기에서 BLOCK 되는가 ────────────────────────────────
 @pytest.mark.parametrize("body", [
     'import os\n        return getattr(os, "system")(d)',
