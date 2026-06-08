@@ -4,7 +4,9 @@
 수집해 신뢰 ``runsc_logs`` 소스로 포장하고, 그것이 #55 게이트에서 strace 관측으로
 인정되는지. **runsc가 실제 strace를 그 경로에 쓰는지는 Linux+gVisor 호스트 필요(미검증).**
 """
+import os
 import subprocess
+import time
 
 from sandbox.b2.real_command_runner import (
     _container_from_logs_argv,
@@ -29,6 +31,54 @@ def test_read_runsc_strace_collects_container_files(tmp_path):
     (sub / "boot.log").write_text('1 openat(AT_FDCWD, "/x") = 3\n', encoding="utf-8")
     out = _read_runsc_strace(tmp_path, "cabc")
     assert out is not None and "openat" in out
+
+
+def test_read_runsc_strace_collects_single_recent_boot_log_without_container_name(tmp_path):
+    (tmp_path / "runsc.log.20260609-010203.000000.boot.txt").write_text(
+        '1 openat(AT_FDCWD, "/x") = 3\n',
+        encoding="utf-8",
+    )
+
+    out = _read_runsc_strace(tmp_path, "cabc", min_mtime=time.time() - 60)
+
+    assert out is not None and "openat" in out
+
+
+def test_read_runsc_strace_ignores_stale_boot_logs(tmp_path):
+    boot = tmp_path / "runsc.log.20260609-010203.000000.boot.txt"
+    boot.write_text('1 openat(AT_FDCWD, "/stale") = 3\n', encoding="utf-8")
+    stale_mtime = time.time() - 3600
+    os.utime(boot, (stale_mtime, stale_mtime))
+
+    assert _read_runsc_strace(tmp_path, "cabc", min_mtime=time.time() - 60) is None
+
+
+def test_read_runsc_strace_fails_closed_for_ambiguous_generic_boot_logs(tmp_path):
+    (tmp_path / "runsc.log.20260609-010203.000000.boot.txt").write_text(
+        '1 openat(AT_FDCWD, "/a") = 3\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "runsc.log.20260609-010204.000000.boot.txt").write_text(
+        '2 openat(AT_FDCWD, "/b") = 3\n',
+        encoding="utf-8",
+    )
+
+    assert _read_runsc_strace(tmp_path, "cabc", min_mtime=time.time() - 60) is None
+
+
+def test_read_runsc_strace_prefers_container_specific_logs_when_boot_logs_are_ambiguous(tmp_path):
+    (tmp_path / "runsc.log.20260609-010203.000000.boot.txt").write_text(
+        '1 openat(AT_FDCWD, "/generic") = 3\n',
+        encoding="utf-8",
+    )
+    specific = tmp_path / "runsc.log.cabc.boot.txt"
+    specific.write_text('2 openat(AT_FDCWD, "/specific") = 3\n', encoding="utf-8")
+
+    out = _read_runsc_strace(tmp_path, "cabc", min_mtime=time.time() - 60)
+
+    assert out is not None
+    assert "/specific" in out
+    assert "/generic" not in out
 
 
 def test_read_runsc_strace_none_when_no_match(tmp_path):

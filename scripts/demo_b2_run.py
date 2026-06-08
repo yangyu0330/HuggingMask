@@ -54,6 +54,7 @@ def run_demo(
     job_id: str = "job-b2-demo",
     revision: str = "demo-local",
     docker_binary: str = "docker",
+    runsc_strace_log_dir: Path | None = None,
     run_id: str | None = None,
     command_runner: CommandRunner | None = None,
 ) -> DemoRunResult:
@@ -68,7 +69,10 @@ def run_demo(
         docker_runtime=docker_runtime,
         docker_binary=docker_binary,
     )
-    lifecycle_runner = command_runner or RealDockerCommandRunner(evidence_dir=run_dir)
+    lifecycle_runner = command_runner or RealDockerCommandRunner(
+        evidence_dir=run_dir,
+        runsc_strace_log_dir=runsc_strace_log_dir,
+    )
     b2_runner = B2HostRunner(
         config=docker_config,
         output_dir=runner_output_dir,
@@ -304,6 +308,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--image-ref", default="huggingmask-b2-sandbox:local")
     parser.add_argument("--docker-runtime", default="runsc")
     parser.add_argument("--docker-binary", default="docker")
+    parser.add_argument("--runsc-strace-log-dir", type=Path, default=None)
     parser.add_argument("--evidence-dir", type=Path, default=Path("evidence/sandbox"))
     parser.add_argument("--request-id", default="req-b2-demo")
     parser.add_argument("--job-id", default="job-b2-demo")
@@ -317,6 +322,7 @@ def main(argv: list[str] | None = None) -> int:
         image_ref=args.image_ref,
         docker_runtime=args.docker_runtime,
         docker_binary=args.docker_binary,
+        runsc_strace_log_dir=args.runsc_strace_log_dir,
         evidence_dir=args.evidence_dir,
         request_id=args.request_id,
         job_id=args.job_id,

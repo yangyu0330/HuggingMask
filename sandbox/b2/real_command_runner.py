@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -68,6 +69,7 @@ class RealDockerCommandRunner:
     default_timeout: float = 30.0
     evidence_dir: Path | None = None
     runsc_strace_log_dir: Path | None = None
+    runsc_strace_log_min_mtime: float | None = field(default_factory=time.time)
 
     def __call__(self, step_name: str, argv: list[str]) -> CommandResult:
         command = list(argv)
@@ -128,7 +130,11 @@ class RealDockerCommandRunner:
         stderr = redact_text(_to_text(completed.stderr))
         exit_code = int(completed.returncode)
         fixtures, fixture_error, fixture_exit_code = _fixtures_for_step(
-            step_name, command, completed, runsc_strace_log_dir=self.runsc_strace_log_dir
+            step_name,
+            command,
+            completed,
+            runsc_strace_log_dir=self.runsc_strace_log_dir,
+            runsc_strace_log_min_mtime=self.runsc_strace_log_min_mtime,
         )
         if fixture_error:
             stderr = _append_stderr(stderr, fixture_error)
@@ -198,10 +204,11 @@ def _fixtures_for_step(
     argv: list[str],
     completed: subprocess.CompletedProcess[str],
     runsc_strace_log_dir: Path | None = None,
+    runsc_strace_log_min_mtime: float | None = None,
 ) -> tuple[dict[str, Any], str, int | None]:
     if int(completed.returncode) != 0:
         if step_name == "logs":
-            return _logs_fixtures(argv, completed, runsc_strace_log_dir)
+            return _logs_fixtures(argv, completed, runsc_strace_log_dir, runsc_strace_log_min_mtime)
         return {}, "", None
 
     if step_name == "inspect":
@@ -209,7 +216,7 @@ def _fixtures_for_step(
     if step_name == "wait":
         return _wait_fixture(_to_text(completed.stdout))
     if step_name == "logs":
-        return _logs_fixtures(argv, completed, runsc_strace_log_dir)
+        return _logs_fixtures(argv, completed, runsc_strace_log_dir, runsc_strace_log_min_mtime)
     if step_name == "cp":
         return _cp_fixture(argv)
     return {}, "", None
@@ -219,6 +226,7 @@ def _logs_fixtures(
     argv: list[str],
     completed: subprocess.CompletedProcess[str],
     runsc_strace_log_dir: Path | None,
+    runsc_strace_log_min_mtime: float | None = None,
 ) -> tuple[dict[str, Any], str, int | None]:
     """``logs`` 스텝 fixtures. runsc strace가 캡처되면 신뢰 ``runsc_logs``로 포장.
 
@@ -228,7 +236,11 @@ def _logs_fixtures(
     """
     fixtures: dict[str, Any] = {}
     if runsc_strace_log_dir is not None:
-        strace = _read_runsc_strace(runsc_strace_log_dir, _container_from_logs_argv(argv))
+        strace = _read_runsc_strace(
+            runsc_strace_log_dir,
+            _container_from_logs_argv(argv),
+            min_mtime=runsc_strace_log_min_mtime,
+        )
         if strace:
             fixtures["runsc_logs"] = redact_text(strace)
     logs = redact_text(_to_text(completed.stdout))
@@ -248,7 +260,7 @@ def _container_from_logs_argv(argv: list[str]) -> str:
     return ""
 
 
-def _read_runsc_strace(log_dir: Path | str, container: str) -> str | None:
+def _read_runsc_strace(log_dir: Path | str, container: str, *, min_mtime: float | None = None) -> str | None:
     """runsc ``--debug-log`` 디렉토리에서 이 컨테이너의 strace/debug 로그 수집.
 
     파일명 또는 상위 디렉토리명에 컨테이너 식별자가 포함된 파일을 모아 합친다.
@@ -257,17 +269,54 @@ def _read_runsc_strace(log_dir: Path | str, container: str) -> str | None:
     directory = Path(log_dir)
     if not directory.is_dir():
         return None
+    paths = _runsc_strace_paths(directory, container, min_mtime=min_mtime)
     parts: list[str] = []
+    for path in paths:
+        try:
+            parts.append(path.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            continue
+    text = "\n".join(p for p in parts if p)
+    return text or None
+
+
+def _runsc_strace_paths(directory: Path, container: str, *, min_mtime: float | None) -> list[Path]:
+    files = list(_recent_files(directory, min_mtime=min_mtime))
+    container_matches = [path for path in files if _path_matches_container(path, container)]
+    if container_matches:
+        return sorted(container_matches)
+
+    boot_logs = [path for path in files if _looks_like_runsc_boot_log(path)]
+    if len(boot_logs) == 1:
+        return boot_logs
+    return []
+
+
+def _recent_files(directory: Path, *, min_mtime: float | None) -> list[Path]:
+    files: list[Path] = []
     for path in sorted(directory.rglob("*")):
         if not path.is_file():
             continue
-        if container and (container in path.name or container in str(path.parent)):
+        if min_mtime is not None:
             try:
-                parts.append(path.read_text(encoding="utf-8", errors="replace"))
+                if path.stat().st_mtime < min_mtime:
+                    continue
             except OSError:
                 continue
-    text = "\n".join(p for p in parts if p)
-    return text or None
+        files.append(path)
+    return files
+
+
+def _path_matches_container(path: Path, container: str) -> bool:
+    if not container:
+        return False
+    pattern = re.compile(rf"(?<![A-Za-z0-9]){re.escape(container)}(?![A-Za-z0-9])")
+    return any(pattern.search(part) for part in (path.name, *path.parent.parts))
+
+
+def _looks_like_runsc_boot_log(path: Path) -> bool:
+    name = path.name.lower()
+    return ".boot" in name or name.endswith("boot")
 
 
 def _inspect_fixture(stdout: str) -> tuple[dict[str, Any], str, int | None]:
