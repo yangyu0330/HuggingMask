@@ -27,9 +27,23 @@ _DEFAULT_ALLOWED_EXACT = frozenset(
 _DEFAULT_BLOCKED_EXACT = frozenset(
     {
         "torch.load",
+        "torch.save",
+        "torch.hub.load",
+        "torch.hub.load_state_dict_from_url",
         "pickle.load",
+        "pickle.loads",
+        "marshal.load",
+        "marshal.loads",
         "numpy.load",
+        "joblib.load",
+        "dill.load",
+        "dill.loads",
+        "shelve.open",
+        "yaml.load",
+        "yaml.unsafe_load",
+        "importlib.import_module",
         "os.system",
+        "os.popen",
     }
 )
 
@@ -44,9 +58,21 @@ _DEFAULT_RISK_EXACT = frozenset(
         "compile",
         "__import__",
         "os.system",
+        "os.popen",
         "torch.load",
+        "torch.save",
+        "torch.hub.load",
         "pickle.load",
+        "pickle.loads",
+        "marshal.load",
+        "marshal.loads",
         "numpy.load",
+        "joblib.load",
+        "dill.load",
+        "dill.loads",
+        "yaml.load",
+        "yaml.unsafe_load",
+        "importlib.import_module",
     }
 )
 

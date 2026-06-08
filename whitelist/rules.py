@@ -68,12 +68,18 @@ NAMESPACE_RULES: dict[str, PendingClassification] = {
 PERMANENTLY_BLOCKED_APIS: set[str] = {
     "torch.load",
     "torch.save",
+    "torch.hub.load",                     # 원격 저장소 코드 다운로드+실행 (설계상 RCE)
+    "torch.hub.load_state_dict_from_url", # 원격 fetch
     "pickle.load",
     "pickle.loads",
     "numpy.load",
     "numpy.save",
     "shelve.open",
+    "marshal.load",
     "marshal.loads",
+    "joblib.load",                        # 내부적으로 pickle 역직렬화 → RCE
+    "dill.load",                          # pickle superset
+    "dill.loads",
     "yaml.load",          # yaml.safe_load만 허용
     "yaml.unsafe_load",
     "builtins.eval",

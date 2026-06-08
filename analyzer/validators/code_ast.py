@@ -13,7 +13,20 @@ from dataclasses import dataclass, field
 
 _DANGEROUS_IMPORT_ROOTS = {"subprocess", "socket", "requests", "urllib", "httpx"}
 _DANGEROUS_CALL_LEAVES = {"eval", "exec", "compile", "__import__"}
-_DANGEROUS_EXACT_CALLS = {"os.system", "os.popen", "torch.load", "pickle.load", "numpy.load"}
+# 역직렬화/동적실행/원격코드 sink. whitelist.rules.PERMANENTLY_BLOCKED_APIS와
+# 정렬해, monkey-patch(build_compatible_policy)가 적용되지 않는 직접 호출 경로
+# (validate_python_artifact 단독 사용)에서도 동일하게 BLOCK되도록 한다.
+_DANGEROUS_EXACT_CALLS = {
+    "os.system", "os.popen",
+    "torch.load", "torch.save", "torch.hub.load", "torch.hub.load_state_dict_from_url",
+    "pickle.load", "pickle.loads",
+    "marshal.load", "marshal.loads",
+    "numpy.load",
+    "joblib.load", "dill.load", "dill.loads",
+    "shelve.open",
+    "yaml.load", "yaml.unsafe_load",
+    "importlib.import_module",
+}
 _DANGEROUS_PREFIX_CALLS = ("subprocess.", "os.exec", "os.spawn")
 _DYNAMIC_CALL_LEAVES = {"getattr", "setattr", "delattr", "globals", "locals"}
 _OBFUSCATION_CALL_LEAVES = {"chr", "ord"}

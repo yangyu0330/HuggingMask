@@ -23,13 +23,23 @@ def _lock_file() -> Path:
     return CACHE_FILE.with_suffix(CACHE_FILE.suffix + ".lock")
 
 
+_DEFAULT_HMAC_KEY = "dev-only-weight-cache-hmac-key"
+
+
 def _hmac_key() -> bytes:
     # 운영 환경에서는 WEIGHT_CACHE_HMAC_KEY 환경변수를 주입하는 것을 권장.
-    # 없으면 dev/test용 기본 키를 사용한다.
-    return os.getenv(
-        "WEIGHT_CACHE_HMAC_KEY",
-        "dev-only-weight-cache-hmac-key",
-    ).encode("utf-8")
+    key = os.getenv("WEIGHT_CACHE_HMAC_KEY")
+    if key:
+        return key.encode("utf-8")
+    # env 미설정 → dev 기본 키. 기본 키는 공개값이라 누구나 위조 캐시 엔트리에
+    # 유효 서명을 만들어 검증 우회 PASS를 주입할 수 있다. 운영에서는
+    # HUGGINGMASK_REQUIRE_CACHE_KEY를 켜서 기본 키 사용 자체를 차단한다.
+    if os.getenv("HUGGINGMASK_REQUIRE_CACHE_KEY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        raise RuntimeError(
+            "WEIGHT_CACHE_HMAC_KEY가 설정되지 않았습니다. 운영 환경에서는 "
+            "기본(dev) 캐시 서명 키를 사용할 수 없습니다 (위조 캐시 주입 위험)."
+        )
+    return _DEFAULT_HMAC_KEY.encode("utf-8")
 
 
 def _canonical_json(obj: Any) -> bytes:

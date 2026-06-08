@@ -340,6 +340,7 @@ def _make_source_loader(artifacts: list) -> dict[str, bytes]:
 def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
     from analyzer.orchestrator import run_validation_job
     from analyzer.validators.code_semantic import is_preprocessing_metadata_kind
+    from analyzer.classifier import looks_like_executable_or_script
 
     # 파일 종류별로 분리
     weight_artifacts = [
@@ -406,16 +407,44 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
         )
     ]
 
-    # 지원하지 않는 파일 종류 → SKIPPED
+    # 지원하지 않는 파일 종류 → SKIPPED.
+    # 단, OTHER로 떨어졌지만 실제로는 실행 스크립트/바이너리(startup.sh,
+    # payload.py.txt, ELF/PE 등)인 파일은 무해한 SKIPPED로 자동 통과시키지 않고
+    # PENDING_REVIEW로 보낸다 (미검증 실행물 → 보안 검토 강제).
     for artifact in skipped_artifacts:
-        skipped = _build_result(
-            artifact=artifact,
-            status="SKIPPED",
-            reason_code="UNSUPPORTED_FILE_KIND",
-            reason_message=f"지원하지 않는 파일 종류: {artifact.file_kind}",
-            details={"status": "SKIPPED", "reason_code": "UNSUPPORTED_FILE_KIND"},
-        )
-        results.append(skipped)
+        content_head = None
+        try:
+            with open(artifact.temp_local_path, "rb") as _f:
+                content_head = _f.read(256)
+        except Exception:
+            content_head = None
+
+        if looks_like_executable_or_script(artifact.file_name, content_head):
+            review = _build_result(
+                artifact=artifact,
+                status="PENDING_REVIEW",
+                reason_code="UNVETTED_EXECUTABLE_FILE",
+                reason_message=(
+                    f"검증되지 않은 실행 가능 파일(OTHER): {artifact.file_name}. "
+                    "스크립트/바이너리는 자동 통과시키지 않고 보안 검토로 보낸다."
+                ),
+                details={
+                    "status": "PENDING_REVIEW",
+                    "reason_code": "UNVETTED_EXECUTABLE_FILE",
+                },
+            )
+            results.append(review)
+            overall_status = _merge_overall_status(overall_status, "PENDING_REVIEW")
+            pending_artifact_ids.append(artifact.artifact_id)
+        else:
+            skipped = _build_result(
+                artifact=artifact,
+                status="SKIPPED",
+                reason_code="UNSUPPORTED_FILE_KIND",
+                reason_message=f"지원하지 않는 파일 종류: {artifact.file_kind}",
+                details={"status": "SKIPPED", "reason_code": "UNSUPPORTED_FILE_KIND"},
+            )
+            results.append(skipped)
 
     if orchestrator_artifacts:
         source_loader = _make_source_loader(orchestrator_artifacts)
@@ -460,6 +489,11 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
                 results.append(err_result)
                 overall_status = _merge_overall_status(overall_status, "ERROR")
                 pending_artifact_ids.append(artifact.artifact_id)
+
+    # 검증 결과가 하나도 없으면(빈 아티팩트 집합 등) APPROVE로 fail-open하지
+    # 않는다. orchestrator._compute_overall_status([])와 동일하게 fail-closed.
+    if not results:
+        overall_status = "ERROR"
 
     if overall_status == "BLOCK":
         decision = OverallDecision.DENY

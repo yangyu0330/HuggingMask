@@ -39,6 +39,7 @@ from __future__ import annotations
 import ast
 import logging
 import multiprocessing as mp
+import sys
 import time
 import traceback as _traceback
 from dataclasses import asdict, dataclass, field
@@ -143,6 +144,13 @@ class RestrictedRuntimeResult:
     peak_memory_mb: float = 0.0
     exception_class: str | None = None
     traceback: str | None = None
+    # 메모리 상한 실제 강제 여부. Windows에는 RLIMIT_AS가 없어 강제 불가
+    # → False. 이 값이 False면 status=PASS여도 "메모리 폭탄을 못 잡았을 수 있음"을
+    # 뜻하므로, 소비측(code_validator)이 MEMORY_LIMIT 시그널 부재를 "안전 통과"로
+    # 오해하지 않도록 명시적으로 노출한다 (silent PASS 방지).
+    memory_limit_enforced: bool = field(
+        default_factory=lambda: sys.platform != "win32"
+    )
 
     def to_dict(self) -> dict[str, Any]:
         """양유상 ``runtime_check_loader`` 가 받는 dict 형식으로 변환."""
