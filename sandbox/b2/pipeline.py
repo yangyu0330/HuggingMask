@@ -190,7 +190,10 @@ def run_b2_sandbox_pipeline(
         runtime_setup_errors=runner_output.runtime_setup_errors,
         post_start_runtime_errors=runner_output.post_start_runtime_errors,
         log_complete=runner_output.log_complete if runner_output.log_complete is not None else log_complete,
-        strace_observed=runner_output.strace_observed if runner_output.strace_observed is not None else True,
+        # 러너가 strace_observed를 보고하지 않으면(None) "관측됨"으로 가정하지 않는다.
+        # fail-closed: 미보고 → 관측 안 함(False) → require_runsc_strace 게이트 발화.
+        # 실 B2HostRunner는 명시 set하므로 이 기본은 fake/미배선 러너에만 적용된다.
+        strace_observed=runner_output.strace_observed if runner_output.strace_observed is not None else False,
     )
 
 
