@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
 from analyzer.service import validate_job
+from whitelist.auth import require_internal_token
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
 
@@ -62,12 +63,18 @@ def _apply_operator_path_b(payload: ValidationJobRequest) -> ValidationJobReques
     return payload
 
 
-@app.post("/internal/v1/validation/jobs")
+@app.post(
+    "/internal/v1/validation/jobs",
+    dependencies=[Depends(require_internal_token)],
+)
 def validation_jobs(payload: ValidationJobRequest):
     return validate_job(_apply_operator_path_b(payload))
 
 
-@app.post("/internal/v1/validation/full")
+@app.post(
+    "/internal/v1/validation/full",
+    dependencies=[Depends(require_internal_token)],
+)
 def validation_full(payload: ValidationJobRequest, db: Session = Depends(get_db)):
     """통합 검증 — 가중치 + 코드 + config + 화이트리스트 + 제한 런타임을
     한 요청에서 모두 거쳐 단일 판정으로 응답.
@@ -104,4 +111,7 @@ def dashboard() -> HTMLResponse:
     return HTMLResponse(content=_DASHBOARD_HTML.read_text(encoding="utf-8"))
 
 
-app.include_router(whitelist_router)
+app.include_router(
+    whitelist_router,
+    dependencies=[Depends(require_internal_token)],
+)
