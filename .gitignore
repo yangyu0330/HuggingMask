@@ -12,6 +12,7 @@ generated/
 *.sqlite
 *.sqlite3
 .claude/
+.serena/
 demo_snapshots/
 hf_cache/
 .huggingface/
