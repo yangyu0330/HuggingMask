@@ -19,6 +19,7 @@ from analyzer.schemas import ValidationJobRequest
 from analyzer.service import validate_job
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
+from proxy.app.demo import router as demo_router
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
@@ -87,3 +88,4 @@ def dashboard() -> HTMLResponse:
 
 
 app.include_router(whitelist_router)
+app.include_router(demo_router)
