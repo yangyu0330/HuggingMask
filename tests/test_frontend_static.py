@@ -273,3 +273,37 @@ def test_operations_binds_required_endpoints_and_safe_rendering():
     assert "BLOCKED" in ops_source
     assert "PENDING" in ops_source
     assert "innerHTML" not in ops_source
+
+
+def test_evidence_route_binds_evidence_api_and_limitations():
+    api_source = (REPO_ROOT / "frontend" / "src" / "api" / "demo.ts").read_text(
+        encoding="utf-8"
+    )
+    routes_source = (REPO_ROOT / "frontend" / "src" / "app" / "routes.tsx").read_text(
+        encoding="utf-8"
+    )
+    evidence_source = (
+        REPO_ROOT
+        / "frontend"
+        / "src"
+        / "features"
+        / "evidence"
+        / "EvidencePage.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "apiGet<DemoEvidenceResponse>('/demo/evidence')" in api_source
+    assert 'path="/evidence"' in routes_source
+    assert "EvidencePage" in routes_source
+    assert "Evidence Matrix" in evidence_source
+    assert "Missing Evidence" in evidence_source
+    assert "Demo Documents" in evidence_source
+    assert "Known Limitations" in evidence_source
+    assert "B-2/gVisor" in evidence_source
+    assert "opt-in evidence" in evidence_source
+    assert "Live Hugging Face" in evidence_source
+    assert "not a production crawler claim" in evidence_source
+    assert "focused build and pytest checks" in evidence_source
+    assert "README.md" in evidence_source
+    assert "SETUP_GUIDE.md" in evidence_source
+    assert "docs/final_demo_script.md" in evidence_source
+    assert "innerHTML" not in evidence_source

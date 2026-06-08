@@ -290,6 +290,10 @@ export interface DemoEvidenceItem {
   last_modified: string | null;
 }
 
+export interface DemoEvidenceResponse {
+  items: DemoEvidenceItem[];
+}
+
 export interface DemoReadiness {
   health: { ok: boolean };
   openapi: { ok: boolean };

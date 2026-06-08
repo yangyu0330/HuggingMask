@@ -1,5 +1,6 @@
 import { apiGet, apiPost } from './client';
 import type {
+  DemoEvidenceResponse,
   DemoRunRequest,
   DemoRunResponse,
   DemoScenarioDetail,
@@ -29,6 +30,10 @@ export function runDemoScenario(
   });
 }
 
+export function getDemoEvidence(): Promise<DemoEvidenceResponse> {
+  return apiGet<DemoEvidenceResponse>('/demo/evidence');
+}
+
 export function saveLastDemoRun(run: DemoRunResponse) {
   window.localStorage.setItem(LAST_DEMO_RUN_KEY, JSON.stringify(run));
 }
@@ -44,4 +49,3 @@ export function loadLastDemoRun(): DemoRunResponse | null {
     return null;
   }
 }
-

@@ -760,6 +760,96 @@ td small {
   box-shadow: 0 12px 32px rgba(15, 32, 40, 0.16);
 }
 
+.evidence-panel {
+  width: min(1280px, 100%);
+}
+
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.document-list,
+.limitations-list,
+.presentation-flow {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.document-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 11px;
+  border: 1px solid #dbe4e8;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.document-list div,
+.limitations-list div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.document-list code,
+td code {
+  color: #1e3a8a;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  overflow-wrap: anywhere;
+}
+
+.document-list span,
+.limitations-list span {
+  color: #526973;
+  line-height: 1.45;
+}
+
+.limitations-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.limitations-list div {
+  padding: 12px;
+  border: 1px solid #dbe4e8;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.presentation-flow {
+  counter-reset: none;
+}
+
+.presentation-flow li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #dbe4e8;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.presentation-flow li span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: #ffffff;
+  background: #2d5661;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .pipeline-list {
   display: grid;
   grid-template-columns: repeat(7, minmax(92px, 1fr));
@@ -937,7 +1027,9 @@ td small {
   .operations-grid,
   .result-summary,
   .compact-list div,
-  .segmented-row {
+  .segmented-row,
+  .evidence-grid,
+  .limitations-list {
     grid-template-columns: 1fr;
   }
 
@@ -996,6 +1088,10 @@ td small {
   }
 
   .operations-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .evidence-grid {
     grid-template-columns: 1fr;
   }
 }
