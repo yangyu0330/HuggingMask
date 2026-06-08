@@ -149,7 +149,10 @@ class HeuristicJudgeBackend:
     )
     _DEFECT_HINTS = ("eval(", "exec(", "pickle.loads", "yaml.load(", "marshal.loads")
     _UNAUDITABLE_HINTS = ("ctypes", "cdll", "from_buffer", "bz2.decompress", "lazykernel")
-    _BENIGN_HINTS = ("save_vocabulary", "save_pretrained", 'open(', "write_text")
+    # 일반 파일 I/O(open()/write_text)는 단독으로는 정상 근거가 약해 BENIGN으로
+    # 내리지 않는다(→ default UNCERTAIN/MEDIUM). save_vocabulary처럼 정상성이 강한
+    # 구체 패턴이 있을 때만 BENIGN_FLAGGED/LOW. (양유상 PR #51 리뷰)
+    _BENIGN_HINTS = ("save_vocabulary", "save_pretrained", "save_vocab")
 
     def assess(self, *, finding_summary: str, code_excerpt: str) -> IntentAssessment:
         blob = f"{finding_summary}\n{code_excerpt}".lower()
@@ -320,7 +323,10 @@ def _audit_advisory(db: Any, advisory: ReviewAdvisory, *, reviewer_id: str) -> N
         actor=reviewer_id,
         detail=detail,
     )
-    db.commit()
+    # 자문 레이어는 트랜잭션 ownership을 갖지 않는다 — flush만 하고 commit은 caller
+    # (리뷰 UI/API handler)가 자신의 트랜잭션 경계에서 결정한다. 내부 commit은 같은
+    # 세션의 다른 변경까지 의도치 않게 확정할 수 있다. (양유상 PR #51 리뷰)
+    db.flush()
 
 
 __all__ = [

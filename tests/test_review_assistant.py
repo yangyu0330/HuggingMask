@@ -121,6 +121,45 @@ def test_heuristic_uncertain_when_no_signal_not_benign():
     assert a.intent_label is IntentLabel.UNCERTAIN
 
 
+def test_heuristic_generic_file_io_alone_is_uncertain_not_benign():
+    # 양유상 PR #51: open()/write_text 단독은 정상 근거가 약함 → BENIGN 아닌 UNCERTAIN
+    from whitelist.review_assistant import TriagePriority
+
+    a = HeuristicJudgeBackend().assess(
+        finding_summary="reason=CONTEXT_API",
+        code_excerpt="def helper(self, p):\n    open(p, 'w').write('data')\n",
+    )
+    assert a.intent_label is IntentLabel.UNCERTAIN
+    assert a.priority is TriagePriority.MEDIUM
+
+
+def test_heuristic_strong_benign_pattern_is_benign():
+    from whitelist.review_assistant import TriagePriority
+
+    a = HeuristicJudgeBackend().assess(
+        finding_summary="reason=CONTEXT_API",
+        code_excerpt="def save_vocabulary(self, path):\n    open(path, 'w')\n",
+    )
+    assert a.intent_label is IntentLabel.BENIGN_FLAGGED
+    assert a.priority is TriagePriority.LOW
+
+
+def test_triage_does_not_commit_caller_transaction(db_session):
+    # 양유상 PR #51: 자문 audit helper가 내부 commit하면 caller의 미커밋 변경까지
+    # 확정된다 → flush만 해야 한다(트랜잭션 ownership은 caller).
+    from whitelist.models import WhitelistSource
+    from whitelist.tables import ApprovedApi
+
+    db_session.add(ApprovedApi(
+        api_path="caller.uncommitted", namespace="x",
+        source=WhitelistSource.MANUAL_REVIEW, matched_rule="x", is_blocked=False,
+    ))
+    triage_pending_result(_result("PENDING_REVIEW"), code_excerpt="import torch", db=db_session)
+    db_session.rollback()
+    # flush만 했으면 rollback이 caller 변경을 되돌린다(내부 commit했으면 남아있음)
+    assert db_session.query(ApprovedApi).filter_by(api_path="caller.uncommitted").count() == 0
+
+
 def test_default_backend_is_heuristic_when_none_given():
     advisory = triage_pending_result(_result("PENDING_REVIEW"), code_excerpt="parameters = eval(content)")
     assert advisory.judge_backend == "heuristic-fallback"
