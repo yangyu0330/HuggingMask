@@ -424,10 +424,19 @@ def _coverage_summary(
 
 
 # 저장소에 존재하면 모델 로드 시 실행/적재될 수 있는 위험 확장자.
-# (file_kind PYTHON/PICKLE은 별도로 본다)
+# file_kind는 호출자가 OTHER로 위장할 수 있어 신뢰하지 않고, 확장자를 항상 본다.
+# (양유상 PR #50 리뷰: file_kind 과신으로 hidden.py(OTHER)가 게이트 우회됨)
 _EXECUTABLE_RISK_EXTENSIONS = {
+    # 네이티브/스크립트 실행
     ".so", ".dll", ".dylib", ".pyd", ".pyc", ".pyo",
     ".sh", ".bash", ".zsh", ".exe", ".bat", ".cmd", ".ps1", ".scr",
+    # 파이썬 소스
+    ".py", ".pyw",
+    # pickle/역직렬화 계열 (임의 코드 실행 위험)
+    ".pkl", ".pickle", ".pt", ".pth", ".bin", ".ckpt",
+    ".npy", ".npz", ".joblib", ".dill",
+    # Keras/HDF5 Lambda 레이어 RCE
+    ".h5", ".hdf5", ".keras",
 }
 
 
@@ -447,13 +456,22 @@ def _make_ast_call_metadata_loader(sources: dict[str, str]):
 
 
 def _is_executable_risk_snapshot_file(file_kind_value: str, repo_path: str) -> bool:
-    if file_kind_value in {"PYTHON", "PICKLE"}:
-        return True
-    return PurePosixPath(repo_path).suffix.lower() in _EXECUTABLE_RISK_EXTENSIONS
+    # file_kind는 보조 신호일 뿐(호출자가 OTHER로 위장 가능) — 확장자를 항상 본다.
+    suffix = PurePosixPath(repo_path).suffix.lower()
+    return file_kind_value in {"PYTHON", "PICKLE"} or suffix in _EXECUTABLE_RISK_EXTENSIONS
 
 
-def _snapshot_unvalidated_result(inv) -> ArtifactValidationResult:
-    """스냅샷 인벤토리에는 있으나 검증 제출에서 누락된 실행 파일을 게이트하는 결과."""
+def _snapshot_unvalidated_result(
+    inv,
+    *,
+    reason_code: str = "SNAPSHOT_UNVALIDATED_EXECUTABLE",
+    message: str = (
+        "executable file is present in the model snapshot inventory but "
+        "was not submitted for validation (possible hidden code)"
+    ),
+    evidence: list[str] | None = None,
+) -> ArtifactValidationResult:
+    """스냅샷 인벤토리에는 있으나 검증 제출에서 누락/불일치한 실행 파일 게이트 결과."""
     started_at = _now()
     file_kind_value = inv.file_kind.value if hasattr(inv.file_kind, "value") else str(inv.file_kind)
     posix = PurePosixPath(inv.repo_path)
@@ -478,13 +496,10 @@ def _snapshot_unvalidated_result(inv) -> ArtifactValidationResult:
         cache_hit=False,
         reason_entries=[
             ReasonEntry(
-                code="SNAPSHOT_UNVALIDATED_EXECUTABLE",
-                message=(
-                    "executable file is present in the model snapshot inventory but "
-                    "was not submitted for validation (possible hidden code)"
-                ),
+                code=reason_code,
+                message=message,
                 severity="HIGH",
-                evidence=[inv.repo_path],
+                evidence=evidence or [inv.repo_path],
                 review_required=True,
             )
         ],
@@ -492,7 +507,7 @@ def _snapshot_unvalidated_result(inv) -> ArtifactValidationResult:
         finished_at=_now(),
         details={
             "validation_coverage": "unvalidated",
-            "reason_code": "SNAPSHOT_UNVALIDATED_EXECUTABLE",
+            "reason_code": reason_code,
             "file_kind": file_kind_value,
             "repo_path": inv.repo_path,
             "requires_manual_review": True,
@@ -515,16 +530,41 @@ def _snapshot_inventory_gate(
     inventory = getattr(request, "model_snapshot_inventory", None) or []
     if not inventory:
         return []
-    covered = {a.repo_path for a in request.artifacts}
-    covered |= {r.artifact.repo_path for r in results}
+    # 제출 아티팩트: repo_path → sha256 (같은 경로라도 내용이 다르면 covered 아님)
+    submitted: dict[str, str] = {}
+    for a in request.artifacts:
+        submitted.setdefault(a.repo_path, a.sha256)
+    result_paths = {r.artifact.repo_path for r in results}
     gated: list = []
     seen: set[str] = set()
     for inv in inventory:
         repo_path = getattr(inv, "repo_path", None)
-        if not isinstance(repo_path, str) or repo_path in covered or repo_path in seen:
+        if not isinstance(repo_path, str) or repo_path in seen:
             continue
         file_kind_value = inv.file_kind.value if hasattr(inv.file_kind, "value") else str(inv.file_kind)
-        if _is_executable_risk_snapshot_file(file_kind_value, repo_path):
+        is_risk = _is_executable_risk_snapshot_file(file_kind_value, repo_path)
+        inv_sha = getattr(inv, "sha256", None)
+
+        if repo_path in submitted:
+            # 같은 repo_path가 제출됐더라도 sha256이 다르면 제출본과 스냅샷이
+            # 서로 다른 파일 → 검증된 건 깨끗한 제출본이고 실제 배포되는 스냅샷
+            # 파일은 미검증일 수 있다(치환 공격). 위험 파일이면 게이트.
+            sub_sha = submitted[repo_path]
+            if is_risk and inv_sha and sub_sha and inv_sha != sub_sha:
+                gated.append(_snapshot_unvalidated_result(
+                    inv,
+                    reason_code="SNAPSHOT_INTEGRITY_MISMATCH",
+                    message=(
+                        "snapshot inventory file has a different sha256 than the "
+                        "submitted artifact at the same repo_path (possible substitution)"
+                    ),
+                    evidence=[f"{repo_path} submitted={sub_sha[:12]} snapshot={inv_sha[:12]}"],
+                ))
+                seen.add(repo_path)
+            continue
+        if repo_path in result_paths:
+            continue
+        if is_risk:
             gated.append(_snapshot_unvalidated_result(inv))
             seen.add(repo_path)
     return gated
