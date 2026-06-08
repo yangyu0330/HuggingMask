@@ -144,6 +144,8 @@ def main() -> int:
     )
     args = p.parse_args()
     _headers = {"X-Internal-Token": args.internal_token} if args.internal_token else {}
+    if args.internal_token:
+        _headers["X-Reviewer-Id"] = args.reviewer_id
 
     print("=" * 60)
     print("  HuggingMask 일괄 자동 승인")

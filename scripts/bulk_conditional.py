@@ -121,6 +121,8 @@ def main() -> int:
     )
     args = p.parse_args()
     _headers = {"X-Internal-Token": args.internal_token} if args.internal_token else {}
+    if args.internal_token:
+        _headers["X-Reviewer-Id"] = args.reviewer_id
 
     with httpx.Client(timeout=120, headers=_headers) as client:
         try:
