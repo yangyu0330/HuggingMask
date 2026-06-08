@@ -18,7 +18,7 @@
 .chip-btn{border:1px solid #d6d3f0;background:#f3f2fc;color:#4a42a8;border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;font-family:monospace;transition:all .15s}
 .chip-btn:hover{background:#e7e4f8}
 .chip-btn .tag{font-family:'Segoe UI',sans-serif;font-weight:600;margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px}
-.chip-btn .tag.deny{background:#fcebeb;color:#a32d2d}.chip-btn .tag.ok{background:#e1f5ee;color:#0f6e56}.chip-btn .tag.wt{background:#e6f1fb;color:#185fa5}
+.chip-btn .tag.deny{background:#fcebeb;color:#a32d2d}.chip-btn .tag.ok{background:#e1f5ee;color:#0f6e56}.chip-btn .tag.wt{background:#e6f1fb;color:#185fa5}.chip-btn .tag.sb{background:#f3eafc;color:#7b3fb8}
 .spinner{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .insp-empty{padding:48px 20px;text-align:center;color:#9a9a9a;font-size:14px;line-height:1.7}
@@ -122,9 +122,9 @@
 </div>
 <div class="quick-row"><span class="ql">데모 모델</span>
 <button class="chip-btn" onclick="quickPick('THUDM/chatglm3-6b',true)">THUDM/chatglm3-6b<span class="tag deny">코드 DENY</span></button>
+<button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-custom-architecture',false)">tiny-random-custom-architecture<span class="tag sb">샌드박스 레인</span></button>
 <button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-bert',false)">tiny-random-bert<span class="tag wt">가중치 단계</span></button>
 <button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3',true)">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
-<button class="chip-btn" onclick="quickPick('tiiuae/falcon-7b-instruct',true)">tiiuae/falcon-7b-instruct</button>
 </div>
 </div>
 <div id="insp-result"><div class="insp-empty"><span class="big">🔬</span>모델 repo_id를 입력하고 <b>검사 실행</b>을 누르면<br>각 파일이 어떤 검증 단계를 거쳐 최종 판정에 이르는지 전 과정이 표시됩니다.</div></div>
@@ -389,8 +389,10 @@ function toggleDetail(el){const row=el.parentElement;row.classList.toggle('open'
 function idleReason(k,data){
   if(k==='SAFETENSORS_FAST_PATH'||k==='PICKLE_PATH_A'||k==='PICKLE_PATH_B')
     return data.skip_weights?'가중치 제외 옵션 — safetensors/pickle 미제출':'해당 가중치 파일 없음';
-  if(k==='CODE_RESTRICTED_RUNTIME'||k==='CODE_SANDBOX_RUNTIME')
-    return '동적 실행 대상 없음 — 정적 분석 단계에서 판정 완료';
+  if(k==='CODE_RESTRICTED_RUNTIME')
+    return '제한런타임 대상 없음 — 정적 분석에서 확정(B-1 후보 아님)';
+  if(k==='CODE_SANDBOX_RUNTIME')
+    return '샌드박스 검토 대상(커스텀 코드) 없음';
   return '이번 모델에 해당 종류 파일 없음';
 }
 
