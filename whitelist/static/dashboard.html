@@ -88,6 +88,9 @@
 .art-detail{margin-top:7px;padding:9px 11px;background:#fafbfc;border:1px solid #f0f0f0;border-radius:8px}
 .art-meta{font-size:10px;color:#999;font-family:monospace;margin-top:7px;word-break:break-all}
 .pass-note{font-size:11px;color:#0f6e56}
+.idle-reason{padding:2px 14px 11px;font-size:10px;color:#b3b3b3;font-style:italic}
+.flow-legend{margin:0 20px 12px;font-size:11px;color:#888;line-height:1.6;background:#fafbfc;border:1px solid #eee;border-radius:8px;padding:9px 13px}
+.flow-legend b{color:#666}
 </style>
 </head>
 <body>
@@ -381,6 +384,14 @@ function quickPick(id){document.getElementById('insp-repo').value=id;inspectMode
 function durMs(r){const a=Date.parse(r.started_at),b=Date.parse(r.finished_at);if(isNaN(a)||isNaN(b))return null;return Math.max(0,b-a)}
 function fmtMs(n){if(n==null)return '';if(n<1)return '<1ms';if(n<1000)return Math.round(n)+'ms';return (n/1000).toFixed(2)+'s'}
 function toggleDetail(el){const row=el.parentElement;row.classList.toggle('open');const d=row.querySelector('.art-detail');if(d)d.style.display=row.classList.contains('open')?'block':'none'}
+// 미사용(대상 없음) 단계의 이유 — '고장'이 아니라 라우팅 결과임을 명확히
+function idleReason(k,data){
+  if(k==='SAFETENSORS_FAST_PATH'||k==='PICKLE_PATH_A'||k==='PICKLE_PATH_B')
+    return data.skip_weights?'가중치 제외 옵션 — safetensors/pickle 미제출':'해당 가중치 파일 없음';
+  if(k==='CODE_RESTRICTED_RUNTIME'||k==='CODE_SANDBOX_RUNTIME')
+    return '동적 실행 대상 없음 — 정적 분석 단계에서 판정 완료';
+  return '이번 모델에 해당 종류 파일 없음';
+}
 
 async function inspectModel(){
   const repo=document.getElementById('insp-repo').value.trim();
@@ -420,6 +431,9 @@ function renderInspect(data){
   h+='<div class="insp-counts">'+cntCard('pass','통과',c.PASS)+cntCard('block','차단',c.BLOCK)
     +cntCard('pending','검토대기',c.PENDING_REVIEW)+cntCard('skip','건너뜀',c.SKIPPED)
     +(c.ERROR?cntCard('error','오류',c.ERROR):'')+'</div>';
+  // 라우팅 안내 — '미사용/대상 없음'이 비활성이 아님을 명확히
+  h+='<div class="flow-legend">ℹ <b>각 파일은 종류·위험도에 따라 적합한 단계로만 검사됩니다</b> (전 단계 일괄 통과 아님). '
+    +'<b>대상 없음</b> = 이번 모델에 해당 파일이 없거나, 앞 단계에서 이미 판정돼 더 비싼 검사가 불필요한 경우입니다.</div>';
   // 3-컬럼 흐름: 입력 → 단계 → 판정 (단계가 파이프라인 순서로 순차 등장)
   h+='<div class="flow"><div><div class="flow-col-title">입력 아티팩트</div>';
   let fi=0;
@@ -436,7 +450,8 @@ function renderInspect(data){
     let laneMs=0;for(const r of arts){const m=durMs(r);if(m!=null)laneMs+=m;}
     h+='<div class="lane reveal '+(active?'active scanning':'idle')+'" style="animation-delay:'+delay+'ms" data-st="'+s.k+'"><div class="lane-head">'
       +'<span class="lic">'+s.icon+'</span><div><div class="lname">'+s.name+'</div><div class="lowner">'+s.owner+'</div></div>'
-      +'<span class="lcount">'+(active?arts.length+'개'+(laneMs?'<span class="lane-time">'+fmtMs(laneMs)+'</span>':''):'미사용')+'</span></div>';
+      +'<span class="lcount">'+(active?arts.length+'개'+(laneMs?'<span class="lane-time">'+fmtMs(laneMs)+'</span>':''):'대상 없음')+'</span></div>';
+    if(!active){h+='<div class="idle-reason">'+esc(idleReason(s.k,data))+'</div>';}
     if(active){
       h+='<div class="lane-body">';
       for(const r of arts){
