@@ -296,3 +296,29 @@ def test_special_tokens_map_without_custom_code_stays_baseline_missing() -> None
     assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
     codes = [item["code"] for item in result.details["semantic_findings"]]
     assert "PREPROCESSING_CUSTOM_CODE_REF" not in codes
+
+
+def test_video_processor_class_custom_code_is_surfaced() -> None:
+    """video_processor_class도 커스텀 코드 참조로 surface되어야 한다.
+
+    config_validator는 이미 video_processor_class를 custom class key로 보지만,
+    processor_config.json은 config_validator를 거치지 않으므로 이 semantic
+    detector가 빠지면 video processor 경로에 gap이 남는다 (PR #49 리뷰 반영).
+    """
+    source = json.dumps(
+        {"video_processor_class": "evil_video.EvilVideoProcessor"}
+    )
+    artifact = build_artifact_ref("processor_config.json", source)
+
+    result = validate_preprocessing_metadata_artifact(artifact, source, _make_policy())
+
+    assert result.grade is CodeGrade.C
+    assert result.status is ValidationStatus.PENDING_REVIEW
+    assert result.details["semantic_check"]["status"] == "FAILED"
+    codes = [item["code"] for item in result.details["semantic_findings"]]
+    assert "PREPROCESSING_CUSTOM_CODE_REF" in codes
+    custom_finding = next(
+        item for item in result.details["semantic_findings"]
+        if item["code"] == "PREPROCESSING_CUSTOM_CODE_REF"
+    )
+    assert any("evil_video.EvilVideoProcessor" in ev for ev in custom_finding["evidence"])

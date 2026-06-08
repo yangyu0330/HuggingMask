@@ -1,21 +1,17 @@
 {
   "scenario_id": "hm-05-bad-config-automap",
-  "demo_title": "auto_map 커스텀 코드 config (trust_remote_code)",
-  "demo_policy_profile": "scan_and_decide",
-  "expected_overall_decision": "REVIEW_REQUIRED",
-  "expected_overall_status": "PENDING_REVIEW",
+  "demo_title": "악성 config",
+  "demo_policy_profile": "strict_default",
+  "expected_overall_decision": "DENY",
+  "expected_overall_status": "BLOCK",
   "expected_primary_stage": "VALIDATE_CONFIG",
-  "expected_release_action": "REVIEW_QUEUE",
-  "expected_grade": "B-2",
+  "expected_release_action": "DENY",
+  "expected_grade": "N/A",
   "expected_reason_codes": [
-    "CONFIG_TRIGGER_FIELD_FOUND",
-    "CONFIG_REFERENCED_CODE_ROUTED",
-    "GRADE_B2_GATE_REQUIRED"
+    "CONFIG_TRIGGER_FIELD_FOUND"
   ],
   "notes": [
-    "modeling_safe.py is non-malicious but uses an UNREGISTERED API, so the linked code grades B-2 (not pure PASS).",
-    "Implemented policy is scan-and-decide: auto_map reroutes to the code validator. Dangerous linked code -> DENY/BLOCK (see hm-04); provably-safe grade-A code -> PASS; benign-but-unregistered or uncertain code -> REVIEW_REQUIRED (security owner gate).",
-    "Therefore the config trigger surfaces (CONFIG_TRIGGER_FIELD_FOUND) and routes the referenced code to review; the whole-system verdict is REVIEW_REQUIRED, not silent APPROVE.",
-    "POLICY OPTION (not yet implemented): a strict_default profile that DENYs any trust_remote_code/auto_map regardless of code safety. The original fixture encoded that stricter intent (DENY). Tracked as future work; scan-and-decide is the shipped design and is exercised by test_auto_map_extracts_referenced_python_and_links_passed_code."
+    "modeling_safe.py should remain non-malicious.",
+    "The failure must be explained as a config trigger problem, not a code problem."
   ]
 }

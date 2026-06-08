@@ -150,6 +150,7 @@ _PATH_OR_NETWORK_HINTS = (
 _CUSTOM_CODE_CLASS_KEYS = (
     "processor_class",
     "image_processor_class",
+    "video_processor_class",
     "feature_extractor_class",
     "tokenizer_class",
 )
