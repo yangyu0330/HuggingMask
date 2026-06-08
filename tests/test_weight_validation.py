@@ -1510,3 +1510,76 @@ def test_modelscan_wrapper_falls_back_to_legacy_top_level_import(
     assert import_calls == ["modelscan.modelscan", "modelscan"]
     assert result["status"] == "PASS"
     assert result["reason_code"] == "MODELSCAN_NO_ISSUE"
+
+
+# ─────────────────────────────────────────────
+# safetensors 메모리 DoS 가드 (적대검증 2026-06-08 MED)
+# ─────────────────────────────────────────────
+
+class _FakeSlice:
+    def __init__(self, shape):
+        self._shape = shape
+
+    def get_shape(self):
+        return self._shape
+
+
+class _FakeSafeOpen:
+    def __init__(self, shapes):
+        self._shapes = shapes
+
+    def get_slice(self, key):
+        return _FakeSlice(self._shapes[key])
+
+
+def test_oversized_tensor_blocked_before_materialize():
+    from analyzer.validators.weight.validators import safetensors_validator as sv
+    # 각 차원은 MAX_DIM_SIZE(100000) 이하지만 곱이 1e15 → materialize 전 차단
+    huge = _FakeSafeOpen({"w": [100000, 100000, 100000]})
+    blocked = sv._oversized_tensor_block(huge, "w")
+    assert blocked is not None
+    assert blocked["status"] == "BLOCK"
+    assert blocked["reason"] == "TENSOR_TOO_LARGE"
+
+
+def test_normal_tensor_not_blocked_by_size_guard():
+    from analyzer.validators.weight.validators import safetensors_validator as sv
+    normal = _FakeSafeOpen({"w": [4096, 4096]})  # 1.6e7 — 정상
+    assert sv._oversized_tensor_block(normal, "w") is None
+
+
+def test_size_guard_degrades_when_get_slice_unavailable():
+    from analyzer.validators.weight.validators import safetensors_validator as sv
+
+    class _NoSlice:
+        pass
+
+    # get_slice 미지원 환경 → None(기존 경로로 진행, 동작 악화 없음)
+    assert sv._oversized_tensor_block(_NoSlice(), "w") is None
+
+
+# ─────────────────────────────────────────────
+# Path B 운영자 env 토글 (적대검증 2026-06-08 MED)
+# ─────────────────────────────────────────────
+
+def test_operator_path_b_toggle(monkeypatch):
+    from proxy.app import main as proxy_main
+    from analyzer.schemas import ValidationJobRequest
+
+    monkeypatch.setenv("HUGGINGMASK_ENABLE_PATH_B", "1")
+    assert proxy_main._path_b_enabled_by_operator() is True
+    req = ValidationJobRequest.from_dict({"request_id": "r", "job_id": "j", "artifacts": []})
+    assert req.enable_path_b is False
+    proxy_main._apply_operator_path_b(req)
+    assert req.enable_path_b is True
+
+
+def test_operator_path_b_default_off(monkeypatch):
+    from proxy.app import main as proxy_main
+    from analyzer.schemas import ValidationJobRequest
+
+    monkeypatch.delenv("HUGGINGMASK_ENABLE_PATH_B", raising=False)
+    assert proxy_main._path_b_enabled_by_operator() is False
+    req = ValidationJobRequest.from_dict({"request_id": "r", "job_id": "j", "artifacts": []})
+    proxy_main._apply_operator_path_b(req)
+    assert req.enable_path_b is False

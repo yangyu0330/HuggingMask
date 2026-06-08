@@ -9,6 +9,7 @@ It does not import or execute model code.
 
 from __future__ import annotations
 
+import ast
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -725,3 +726,120 @@ def _is_path_mutation_api(api: str) -> bool:
 
 def _is_file_mutation_api(api: str) -> bool:
     return api in _OS_FILE_MUTATION_APIS or _is_path_mutation_api(api)
+
+
+# ─────────────────────────────────────────────
+# ast_call_metadata 생성기
+#
+# 컨텍스트 분석기는 호출별 인자 메타데이터(open()의 mode/path 등)에 의존하는데,
+# 프로덕션 파이프라인엔 이 메타데이터를 만드는 코드가 없어 항상 []로 들어왔다.
+# 그 결과 ``open(path, "w")`` 쓰기처럼 위험이 *인자*에 있는 호출이 BLOCK이 아니라
+# REVIEW로 강등됐다(적대검증 2026-06-08 CRITICAL). 아래 생성기가 소스를 AST로
+# 파싱해 컨텍스트 관련 호출의 인자/키워드를 _normalize_arg 호환 형태로 만든다.
+# ─────────────────────────────────────────────
+
+_CONTEXT_RELEVANT_PREFIXES = (
+    "os.",
+    "subprocess.",
+    "socket.",
+    "requests.",
+    "urllib.",
+    "httpx.",
+    "shutil.",
+)
+_CONTEXT_RELEVANT_SUFFIXES = (
+    ".open",
+    ".read_text",
+    ".read_bytes",
+) + _PATH_MUTATION_SUFFIXES
+
+
+def _is_context_relevant_api(api: str) -> bool:
+    if api == "open":
+        return True
+    if api.startswith(_CONTEXT_RELEVANT_PREFIXES):
+        return True
+    if api.endswith(_CONTEXT_RELEVANT_SUFFIXES):
+        return True
+    return api.startswith("Path.") or api.startswith("pathlib.Path.")
+
+
+def _resolve_call_name(func: ast.AST) -> str:
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        base = _resolve_call_name(func.value)
+        return f"{base}.{func.attr}" if base else func.attr
+    if isinstance(func, ast.Call):
+        return _resolve_call_name(func.func)
+    return ""
+
+
+def _collect_param_names(tree: ast.AST) -> set[str]:
+    params: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            a = node.args
+            for arg in (*a.posonlyargs, *a.args, *a.kwonlyargs):
+                params.add(arg.arg)
+            if a.vararg:
+                params.add(a.vararg.arg)
+            if a.kwarg:
+                params.add(a.kwarg.arg)
+    return params
+
+
+def _arg_meta(node: ast.AST, params: set[str]) -> dict[str, Any]:
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, str):
+            return {"kind": "constant_str", "value": node.value, "is_constant": True, "repr": node.value}
+        return {"kind": "constant", "value": repr(node.value), "is_constant": False, "repr": repr(node.value)}
+    if isinstance(node, ast.Name):
+        if node.id in params:
+            return {"source": "function_arg", "is_user_input": True, "is_constant": False, "repr": node.id}
+        return {"kind": "name", "is_constant": False, "repr": node.id}
+    if isinstance(node, ast.JoinedStr):
+        # f-string — 일부 동적
+        return {"kind": "fstring", "is_constant": False, "repr": "<fstring>"}
+    return {"kind": "dynamic", "is_constant": False, "repr": type(node).__name__}
+
+
+def build_ast_call_metadata(source: str | bytes, repo_path: str = "") -> list[dict[str, Any]]:
+    """소스에서 컨텍스트 관련 호출의 인자 메타데이터를 추출한다.
+
+    반환 형식은 ``analyze_contextual_api_calls``가 받는 ``ast_call_metadata``:
+    각 항목은 ``{"api", "repo_path", "args": [...], "kwargs": {...}}``.
+    파싱 실패/비관련 호출은 건너뛴다(빈 리스트 가능 — 기존 동작과 호환).
+    """
+    if isinstance(source, bytes):
+        source = source.decode("utf-8", errors="replace")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return []
+
+    params = _collect_param_names(tree)
+    metadata: list[dict[str, Any]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        api = _resolve_call_name(node.func)
+        if not api or not _is_context_relevant_api(api):
+            continue
+        entry: dict[str, Any] = {
+            "api": api,
+            "repo_path": repo_path,
+            "args": [_arg_meta(arg, params) for arg in node.args],
+            "kwargs": {
+                kw.arg: _arg_meta(kw.value, params)
+                for kw in node.keywords
+                if kw.arg is not None
+            },
+        }
+        # pathlib 메서드는 receiver(앞부분)를 path로 본다
+        if (api.startswith("Path.") or api.startswith("pathlib.Path.")) and isinstance(
+            node.func, ast.Attribute
+        ):
+            entry["receiver"] = _arg_meta(node.func.value, params)
+        metadata.append(entry)
+    return metadata

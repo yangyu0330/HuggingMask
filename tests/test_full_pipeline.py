@@ -151,8 +151,10 @@ class TestCombineStatus:
         rs = [self._R(ValidationStatus.PASS), self._R(ValidationStatus.PASS)]
         assert _combine_status(rs) is ValidationStatus.PASS
 
-    def test_empty_is_pass(self):
-        assert _combine_status([]) is ValidationStatus.PASS
+    def test_empty_requires_review_not_auto_approve(self):
+        # 검증 대상 0건은 "아무것도 검증 안 함"이므로 PASS(자동승인)가 아니라
+        # PENDING_REVIEW여야 한다 (빈 job fail-open 차단, 적대검증 2026-06-08).
+        assert _combine_status([]) is ValidationStatus.PENDING_REVIEW
 
     def test_skipped_requires_review(self):
         rs = [self._R(ValidationStatus.SKIPPED)]
@@ -511,3 +513,152 @@ class TestFullPipelineRouting:
             and result.reason_entries[0].code == "DUPLICATE_REPO_PATH"
             for result in resp.artifact_results
         )
+
+
+class TestAdversarialHardening:
+    """적대검증 2026-06-08에서 나온 갭들의 회귀 잠금."""
+
+    def test_empty_artifacts_not_auto_approved(self, db_session):
+        # 빈 아티팩트 job은 "아무것도 검증 안 함" → APPROVE로 새면 안 됨(fail-open)
+        req = _request([])
+        resp = run_full_validation(req, db=db_session)
+        assert resp.overall_decision is not OverallDecision.APPROVE
+        assert resp.overall_status is ValidationStatus.PENDING_REVIEW
+
+    def test_snapshot_inventory_unvalidated_python_is_gated(self, db_session, tmp_path):
+        # 저장소 스냅샷에 .py가 있는데 검증 아티팩트로 제출 안 됨 = 코드 숨김.
+        # 제출된 건 깨끗한 config뿐이라도 전체는 자동승인되면 안 된다.
+        cfg = tmp_path / "config.json"
+        cfg.write_text(CONFIG_JSON, encoding="utf-8")
+        hidden_sha = _sha256_bytes(b"import os\nos.system('id')\n")
+        req = ValidationJobRequest.from_dict({
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "artifacts": [_artifact(cfg, "config.json", "CONFIG_JSON")],
+            "policy_fingerprint": "test-policy",
+            "model_snapshot_inventory": [
+                {
+                    "repo_path": "utils_hidden.py",
+                    "temp_local_path": str(tmp_path / "utils_hidden.py"),
+                    "sha256": hidden_sha,
+                    "size_bytes": 26,
+                    "file_kind": "PYTHON",
+                },
+            ],
+        })
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_decision is not OverallDecision.APPROVE
+        gated = [
+            r for r in resp.artifact_results
+            if r.reason_entries and r.reason_entries[0].code == "SNAPSHOT_UNVALIDATED_EXECUTABLE"
+        ]
+        assert len(gated) == 1
+        assert gated[0].artifact.repo_path == "utils_hidden.py"
+        assert gated[0].status is ValidationStatus.PENDING_REVIEW
+
+    def test_snapshot_inventory_submitted_file_not_double_gated(self, db_session, tmp_path):
+        # 인벤토리에 있고 + 제출도 된 파일은 중복 게이트되면 안 됨(과오탐 방지)
+        cfg = tmp_path / "config.json"
+        cfg.write_text(CONFIG_JSON, encoding="utf-8")
+        cfg_art = _artifact(cfg, "config.json", "CONFIG_JSON")
+        req = ValidationJobRequest.from_dict({
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "artifacts": [cfg_art],
+            "policy_fingerprint": "test-policy",
+            "model_snapshot_inventory": [
+                {
+                    "repo_path": "config.json",
+                    "temp_local_path": str(cfg),
+                    "sha256": cfg_art["sha256"],
+                    "size_bytes": cfg_art["size_bytes"],
+                    "file_kind": "CONFIG_JSON",
+                },
+            ],
+        })
+        resp = run_full_validation(req, db=db_session)
+        assert not any(
+            r.reason_entries and r.reason_entries[0].code == "SNAPSHOT_UNVALIDATED_EXECUTABLE"
+            for r in resp.artifact_results
+        )
+
+    def test_snapshot_inventory_other_kind_executable_is_gated(self, db_session, tmp_path):
+        # 양유상 PR #50 리뷰 재현: file_kind=OTHER로 위장한 .py도 확장자로 게이트돼야 함.
+        cfg = tmp_path / "config.json"
+        cfg.write_text(CONFIG_JSON, encoding="utf-8")
+        hidden_sha = _sha256_bytes(b"import os\nos.system('id')\n")
+        req = ValidationJobRequest.from_dict({
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "artifacts": [_artifact(cfg, "config.json", "CONFIG_JSON")],
+            "policy_fingerprint": "test-policy",
+            "model_snapshot_inventory": [
+                {
+                    "repo_path": "hidden.py",
+                    "temp_local_path": str(tmp_path / "hidden.py"),
+                    "sha256": hidden_sha,
+                    "size_bytes": 26,
+                    "file_kind": "OTHER",  # 위장 — file_kind를 신뢰하면 우회됨
+                },
+            ],
+        })
+        resp = run_full_validation(req, db=db_session)
+        assert resp.overall_decision is not OverallDecision.APPROVE
+        gated = [
+            r for r in resp.artifact_results
+            if r.reason_entries and r.reason_entries[0].code == "SNAPSHOT_UNVALIDATED_EXECUTABLE"
+        ]
+        assert len(gated) == 1
+        assert gated[0].artifact.repo_path == "hidden.py"
+        assert gated[0].status is ValidationStatus.PENDING_REVIEW
+
+    def test_snapshot_inventory_integrity_mismatch_is_gated(self, db_session, tmp_path):
+        # 같은 repo_path인데 제출본과 스냅샷 sha256이 다르면 치환 의심 → 게이트.
+        py = tmp_path / "modeling.py"
+        py.write_text("import torch\n", encoding="utf-8")
+        py_art = _artifact(py, "modeling.py", "PYTHON")
+        req = ValidationJobRequest.from_dict({
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "artifacts": [py_art],
+            "policy_fingerprint": "test-policy",
+            "model_snapshot_inventory": [
+                {
+                    "repo_path": "modeling.py",
+                    "temp_local_path": str(py),
+                    "sha256": _sha256_bytes(b"import os\nos.system('id')\n"),  # 제출본과 다른 내용
+                    "size_bytes": 26,
+                    "file_kind": "OTHER",
+                },
+            ],
+        })
+        resp = run_full_validation(req, db=db_session)
+        mismatch = [
+            r for r in resp.artifact_results
+            if r.reason_entries and r.reason_entries[0].code == "SNAPSHOT_INTEGRITY_MISMATCH"
+        ]
+        assert len(mismatch) == 1
+        assert resp.overall_decision is not OverallDecision.APPROVE
+
+    def test_open_write_mode_blocks_via_generated_metadata(self, db_session, tmp_path):
+        # ast_call_metadata 생성기가 활성화되어 open(path,"w") 쓰기가 컨텍스트
+        # 분석기에서 BLOCK으로 잡혀야 한다(예전엔 metadata가 []라 REVIEW 강등).
+        src = (
+            "class M:\n"
+            "    def forward(self, x):\n"
+            "        f = open('/tmp/exfil', 'w')\n"
+            "        f.write('data')\n"
+            "        return x\n"
+        )
+        py = tmp_path / "modeling_writer.py"
+        py.write_text(src, encoding="utf-8")
+        req = _request([_artifact(py, "modeling_writer.py", "PYTHON")])
+        resp = run_full_validation(req, db=db_session)
+
+        assert resp.overall_status is ValidationStatus.BLOCK
+        writer = next(
+            r for r in resp.artifact_results if r.artifact.file_name == "modeling_writer.py"
+        )
+        ctx = writer.details.get("context_api_scan", {})
+        assert ctx.get("summary_decision") == "block"

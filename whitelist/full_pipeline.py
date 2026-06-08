@@ -24,11 +24,12 @@ from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from sqlalchemy.orm import Session
 
 from analyzer.schemas import (
+    ArtifactRef,
     ArtifactValidationResult,
     CodeGrade,
     ModelRef,
@@ -42,6 +43,7 @@ from analyzer.schemas import (
     ValidationStatus,
 )
 from analyzer.service import validate_job as _validate_weight_job
+from analyzer.validators.code_context import build_ast_call_metadata
 from analyzer.validators.code_semantic import is_preprocessing_metadata_kind
 
 WEIGHT_KINDS = {"SAFETENSORS", "PICKLE"}
@@ -153,8 +155,10 @@ def _combine_status(results: list) -> ValidationStatus:
         return ValidationStatus.PENDING_REVIEW
     if ValidationStatus.PASS in statuses:
         return ValidationStatus.PASS
-    # 전부 SKIPPED 거나 빈 경우
-    return ValidationStatus.SKIPPED if results else ValidationStatus.PASS
+    # 검증 대상이 0건(빈 아티팩트 리스트 / 전부 드롭)이면 "아무것도 검증하지
+    # 않은" 상태다. 이를 PASS로 두면 빈 job이 APPROVE로 새는 fail-open이 된다
+    # (적대검증 2026-06-08 CRITICAL). 자동 승인하지 않고 검토 큐로 보낸다.
+    return ValidationStatus.PENDING_REVIEW
 
 
 def _decision(status: ValidationStatus) -> OverallDecision:
@@ -419,6 +423,153 @@ def _coverage_summary(
     }
 
 
+# 저장소에 존재하면 모델 로드 시 실행/적재될 수 있는 위험 확장자.
+# file_kind는 호출자가 OTHER로 위장할 수 있어 신뢰하지 않고, 확장자를 항상 본다.
+# (양유상 PR #50 리뷰: file_kind 과신으로 hidden.py(OTHER)가 게이트 우회됨)
+_EXECUTABLE_RISK_EXTENSIONS = {
+    # 네이티브/스크립트 실행
+    ".so", ".dll", ".dylib", ".pyd", ".pyc", ".pyo",
+    ".sh", ".bash", ".zsh", ".exe", ".bat", ".cmd", ".ps1", ".scr",
+    # 파이썬 소스
+    ".py", ".pyw",
+    # pickle/역직렬화 계열 (임의 코드 실행 위험)
+    ".pkl", ".pickle", ".pt", ".pth", ".bin", ".ckpt",
+    ".npy", ".npz", ".joblib", ".dill",
+    # Keras/HDF5 Lambda 레이어 RCE
+    ".h5", ".hdf5", ".keras",
+}
+
+
+def _make_ast_call_metadata_loader(sources: dict[str, str]):
+    """소스 맵에서 repo_path별 ast_call_metadata를 생성하는 loader.
+
+    컨텍스트 분석기가 open()의 mode/path 등 인자 의존 위험을 보게 한다
+    (적대검증 2026-06-08 CRITICAL — 프로덕션에서 metadata가 항상 []였던 갭).
+    """
+    def _loader(repo_path: str):
+        source = sources.get(repo_path)
+        if source is None:
+            return None
+        return build_ast_call_metadata(source, repo_path)
+
+    return _loader
+
+
+def _is_executable_risk_snapshot_file(file_kind_value: str, repo_path: str) -> bool:
+    # file_kind는 보조 신호일 뿐(호출자가 OTHER로 위장 가능) — 확장자를 항상 본다.
+    suffix = PurePosixPath(repo_path).suffix.lower()
+    return file_kind_value in {"PYTHON", "PICKLE"} or suffix in _EXECUTABLE_RISK_EXTENSIONS
+
+
+def _snapshot_unvalidated_result(
+    inv,
+    *,
+    reason_code: str = "SNAPSHOT_UNVALIDATED_EXECUTABLE",
+    message: str = (
+        "executable file is present in the model snapshot inventory but "
+        "was not submitted for validation (possible hidden code)"
+    ),
+    evidence: list[str] | None = None,
+) -> ArtifactValidationResult:
+    """스냅샷 인벤토리에는 있으나 검증 제출에서 누락/불일치한 실행 파일 게이트 결과."""
+    started_at = _now()
+    file_kind_value = inv.file_kind.value if hasattr(inv.file_kind, "value") else str(inv.file_kind)
+    posix = PurePosixPath(inv.repo_path)
+    artifact = ArtifactRef(
+        artifact_id=f"sha256:{inv.sha256}",
+        repo_path=inv.repo_path,
+        file_name=posix.name,
+        file_kind=inv.file_kind,
+        detected_extension=posix.suffix.lower(),
+        size_bytes=inv.size_bytes,
+        sha256=inv.sha256,
+        source_url="",
+        temp_local_path=inv.temp_local_path,
+    )
+    return ArtifactValidationResult(
+        artifact=artifact,
+        route_kind=_unvalidated_route_kind(artifact),
+        status=ValidationStatus.PENDING_REVIEW,
+        grade=CodeGrade.NA,
+        review_action=ReviewAction.SECURITY_OWNER_GATE,
+        cache_key=f"{inv.sha256}:{file_kind_value}:snapshot-unvalidated",
+        cache_hit=False,
+        reason_entries=[
+            ReasonEntry(
+                code=reason_code,
+                message=message,
+                severity="HIGH",
+                evidence=evidence or [inv.repo_path],
+                review_required=True,
+            )
+        ],
+        started_at=started_at,
+        finished_at=_now(),
+        details={
+            "validation_coverage": "unvalidated",
+            "reason_code": reason_code,
+            "file_kind": file_kind_value,
+            "repo_path": inv.repo_path,
+            "requires_manual_review": True,
+            "snapshot_only": True,
+        },
+    )
+
+
+def _snapshot_inventory_gate(
+    request: ValidationJobRequest,
+    results: list,
+) -> list:
+    """스냅샷 인벤토리 ↔ 검증된 아티팩트 대조.
+
+    저장소(스냅샷)에 실재하나 검증 아티팩트 집합에 없는 실행 파일(.py/.so/.sh/
+    pickle 등)은 "검증을 우회한 실행 코드"이므로 검토 게이트로 끌어올린다.
+    인벤토리가 비어 있으면(호출자가 제공 안 함) no-op — 기존 동작 보존.
+    (적대검증 2026-06-08 HIGH-2: coverage = 호출자 제출 목록 한계 보완)
+    """
+    inventory = getattr(request, "model_snapshot_inventory", None) or []
+    if not inventory:
+        return []
+    # 제출 아티팩트: repo_path → sha256 (같은 경로라도 내용이 다르면 covered 아님)
+    submitted: dict[str, str] = {}
+    for a in request.artifacts:
+        submitted.setdefault(a.repo_path, a.sha256)
+    result_paths = {r.artifact.repo_path for r in results}
+    gated: list = []
+    seen: set[str] = set()
+    for inv in inventory:
+        repo_path = getattr(inv, "repo_path", None)
+        if not isinstance(repo_path, str) or repo_path in seen:
+            continue
+        file_kind_value = inv.file_kind.value if hasattr(inv.file_kind, "value") else str(inv.file_kind)
+        is_risk = _is_executable_risk_snapshot_file(file_kind_value, repo_path)
+        inv_sha = getattr(inv, "sha256", None)
+
+        if repo_path in submitted:
+            # 같은 repo_path가 제출됐더라도 sha256이 다르면 제출본과 스냅샷이
+            # 서로 다른 파일 → 검증된 건 깨끗한 제출본이고 실제 배포되는 스냅샷
+            # 파일은 미검증일 수 있다(치환 공격). 위험 파일이면 게이트.
+            sub_sha = submitted[repo_path]
+            if is_risk and inv_sha and sub_sha and inv_sha != sub_sha:
+                gated.append(_snapshot_unvalidated_result(
+                    inv,
+                    reason_code="SNAPSHOT_INTEGRITY_MISMATCH",
+                    message=(
+                        "snapshot inventory file has a different sha256 than the "
+                        "submitted artifact at the same repo_path (possible substitution)"
+                    ),
+                    evidence=[f"{repo_path} submitted={sub_sha[:12]} snapshot={inv_sha[:12]}"],
+                ))
+                seen.add(repo_path)
+            continue
+        if repo_path in result_paths:
+            continue
+        if is_risk:
+            gated.append(_snapshot_unvalidated_result(inv))
+            seen.add(repo_path)
+    return gated
+
+
 def run_full_validation(
     request: ValidationJobRequest | dict,
     *,
@@ -488,6 +639,7 @@ def run_full_validation(
 
         if verified_codecfg_arts:
             runtime_loader = make_restricted_runtime_loader(sources)
+            ast_call_metadata_loader = _make_ast_call_metadata_loader(sources)
             policy = request.policy or _default_policy()
             # orchestrator용 analyzer ModelRef (request에 채워 forward)
             analyzer_model = request.model or _default_model()
@@ -504,6 +656,7 @@ def run_full_validation(
                 model=wl_model,
                 source_loader=sources,
                 runtime_check_loader=runtime_loader,
+                ast_call_metadata_loader=ast_call_metadata_loader,
             )
             results.extend(cresp.artifact_results)
             _extend_unique(approved_artifact_ids, cresp.approved_artifact_ids)
@@ -538,6 +691,11 @@ def run_full_validation(
             )
         )
         _extend_unique(pending_artifact_ids, [artifact.artifact_id])
+
+    # 스냅샷 인벤토리에 있으나 검증에서 누락된 실행 파일 게이트(코드 숨김 차단)
+    for inventory_result in _snapshot_inventory_gate(request, results):
+        results.append(inventory_result)
+        _extend_unique(pending_artifact_ids, [inventory_result.artifact.artifact_id])
 
     gated_artifact_ids = set(blocked_artifact_ids) | set(pending_artifact_ids)
     approved_artifact_ids = [

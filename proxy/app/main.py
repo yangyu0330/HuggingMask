@@ -8,6 +8,7 @@
 analyzer/sandbox 라우터는 각 모듈 구현 완료 후 추가 예정.
 """
 
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -44,9 +45,26 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def _path_b_enabled_by_operator() -> bool:
+    """배포 단위 Path B(gVisor) 활성 토글.
+
+    스키마 기본값(enable_path_b=False)은 그대로 두되, b2 샌드박스가 실제로
+    프로비저닝된 프로덕션에서는 env ``HUGGINGMASK_ENABLE_PATH_B=1``로 코드 변경
+    없이 켤 수 있다. 미프로비저닝 환경(dev/CI/데모)에서는 설정하지 않으므로
+    pickle이 정적 opcode 게이트(Path A)만 거쳐 기존 동작을 보존한다.
+    """
+    return os.getenv("HUGGINGMASK_ENABLE_PATH_B", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _apply_operator_path_b(payload: ValidationJobRequest) -> ValidationJobRequest:
+    if not payload.enable_path_b and _path_b_enabled_by_operator():
+        payload.enable_path_b = True
+    return payload
+
+
 @app.post("/internal/v1/validation/jobs")
 def validation_jobs(payload: ValidationJobRequest):
-    return validate_job(payload)
+    return validate_job(_apply_operator_path_b(payload))
 
 
 @app.post("/internal/v1/validation/full")
@@ -57,7 +75,7 @@ def validation_full(payload: ValidationJobRequest, db: Session = Depends(get_db)
     ``/jobs``(가중치 전용)와 달리 PYTHON/CONFIG_JSON/TOKENIZER_CONFIG_JSON도
     실제 검증 경로(양유상 orchestrator + 본인 화이트리스트/제한 런타임)로 보낸다.
     """
-    return run_full_validation(payload, db=db)
+    return run_full_validation(_apply_operator_path_b(payload), db=db)
 
 
 # ─────────────────────────────────────────────
