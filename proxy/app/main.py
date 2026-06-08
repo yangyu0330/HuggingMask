@@ -96,13 +96,19 @@ class InspectModelRequest(BaseModel):
     enable_path_b: bool = False
 
 
-@app.post("/internal/v1/validation/inspect")
+@app.post(
+    "/internal/v1/validation/inspect",
+    dependencies=[Depends(require_internal_token)],
+)
 def validation_inspect(payload: InspectModelRequest, db: Session = Depends(get_db)):
     """repo_id를 받아 서버에서 텍스트 아티팩트를 내려받아 통합 검증 실행.
 
     대시보드 '모델 검사' 탭의 가시화용. 브라우저가 HF 모델을 직접 받을 수
     없으므로 서버가 다운로드까지 대행한다. ``/validation/full``과 동일한
     응답 + 다운로드/분류 메타를 묶어 반환(실패도 200 + ``ok:false``).
+
+    실 검증 파이프라인을 돌리므로 ``/full``과 동일하게 내부 토큰 인증
+    적용(미설정 시 no-op — 데모/dev 경로 보존).
     """
     return inspect_model_repo(
         payload.repo_id,

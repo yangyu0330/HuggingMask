@@ -71,6 +71,23 @@
 .reason .rev{font-family:monospace;color:#a32d2d;font-size:10px}
 .grade-tag{font-size:10px;font-family:monospace;color:#999;margin-left:6px}
 .insp-skipped{margin:0 20px 20px;font-size:11px;color:#999;line-height:1.6}
+/* 폴리싱: 진행 애니메이션 / 소요시간 / 펼쳐보기 */
+@keyframes fadeUp{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes popIn{0%{opacity:0;transform:scale(.96)}60%{transform:scale(1.012)}100%{opacity:1;transform:scale(1)}}
+@keyframes scan{0%{left:-30%}100%{left:130%}}
+.reveal{animation:fadeUp .34s ease both}
+.verdict.pop{animation:popIn .5s ease both}
+.lane.scanning{position:relative}
+.lane.scanning::after{content:'';position:absolute;top:0;bottom:0;width:30%;background:linear-gradient(90deg,transparent,rgba(83,74,183,.10),transparent);animation:scan .7s ease-out 1}
+.art-row .arl{cursor:pointer;user-select:none}
+.art-row .arl:hover{opacity:.85}
+.caret{font-size:10px;color:#aaa;transition:transform .15s;display:inline-block;width:10px}
+.art-row.open .caret{transform:rotate(90deg)}
+.ms{font-size:10px;font-family:monospace;color:#9a9a9a;white-space:nowrap}
+.lane-time{font-size:10px;color:#aaa;font-family:monospace;margin-left:8px;font-style:normal}
+.art-detail{margin-top:7px;padding:9px 11px;background:#fafbfc;border:1px solid #f0f0f0;border-radius:8px}
+.art-meta{font-size:10px;color:#999;font-family:monospace;margin-top:7px;word-break:break-all}
+.pass-note{font-size:11px;color:#0f6e56}
 </style>
 </head>
 <body>
@@ -361,6 +378,9 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','
 function cntCard(c,l,n){return '<div class="cnt '+c+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
 function hlStage(k,on){document.querySelectorAll(".lane[data-st='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on));document.querySelectorAll(".fcard[data-rk='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on))}
 function quickPick(id){document.getElementById('insp-repo').value=id;inspectModel()}
+function durMs(r){const a=Date.parse(r.started_at),b=Date.parse(r.finished_at);if(isNaN(a)||isNaN(b))return null;return Math.max(0,b-a)}
+function fmtMs(n){if(n==null)return '';if(n<1)return '<1ms';if(n<1000)return Math.round(n)+'ms';return (n/1000).toFixed(2)+'s'}
+function toggleDetail(el){const row=el.parentElement;row.classList.toggle('open');const d=row.querySelector('.art-detail');if(d)d.style.display=row.classList.contains('open')?'block':'none'}
 
 async function inspectModel(){
   const repo=document.getElementById('insp-repo').value.trim();
@@ -392,51 +412,67 @@ function renderInspect(data){
   const c={PASS:0,BLOCK:0,PENDING_REVIEW:0,SKIPPED:0,ERROR:0};
   for(const r of results){c[r.status]=(c[r.status]||0)+1}
   const dec=DEC[resp.overall_decision]||{l:resp.overall_decision,s:'',c:'dec-error'};
+  // 단계별/전체 소요시간(started_at~finished_at)
+  let totalMs=0;for(const r of results){const m=durMs(r);if(m!=null)totalMs+=m;}
   let h='';
-  h+='<div class="verdict '+dec.c+'"><div><div class="vbig">'+esc(dec.l)+'</div><div class="vsub">'+esc(dec.s)+'</div></div>'
-    +'<div class="vmeta"><b>'+esc(data.repo_id)+'</b>@'+esc(data.revision)+'<br>검사 '+data.validated_count+'개 · release='+esc(resp.release_action)+'</div></div>';
+  h+='<div class="verdict pop '+dec.c+'"><div><div class="vbig">'+esc(dec.l)+'</div><div class="vsub">'+esc(dec.s)+'</div></div>'
+    +'<div class="vmeta"><b>'+esc(data.repo_id)+'</b>@'+esc(data.revision)+'<br>검사 '+data.validated_count+'개 · '+fmtMs(totalMs)+' · release='+esc(resp.release_action)+'</div></div>';
   h+='<div class="insp-counts">'+cntCard('pass','통과',c.PASS)+cntCard('block','차단',c.BLOCK)
     +cntCard('pending','검토대기',c.PENDING_REVIEW)+cntCard('skip','건너뜀',c.SKIPPED)
     +(c.ERROR?cntCard('error','오류',c.ERROR):'')+'</div>';
-  // 3-컬럼 흐름: 입력 → 단계 → 판정
+  // 3-컬럼 흐름: 입력 → 단계 → 판정 (단계가 파이프라인 순서로 순차 등장)
   h+='<div class="flow"><div><div class="flow-col-title">입력 아티팩트</div>';
+  let fi=0;
   for(const r of results){
     const cc=(ST[r.status]||{c:'skip'}).c;
-    h+='<div class="fcard b-'+cc+'" data-rk="'+esc(r.route_kind)+'" onmouseenter="hlStage(\''+esc(r.route_kind)+'\',1)" onmouseleave="hlStage(\''+esc(r.route_kind)+'\',0)">'
+    h+='<div class="fcard reveal b-'+cc+'" style="animation-delay:'+(fi++*45)+'ms" data-rk="'+esc(r.route_kind)+'" onmouseenter="hlStage(\''+esc(r.route_kind)+'\',1)" onmouseleave="hlStage(\''+esc(r.route_kind)+'\',0)">'
       +'<div class="fn">'+esc(r.artifact.file_name)+'</div><div class="fk">'+esc(r.artifact.file_kind)+'</div></div>';
   }
   h+='</div><div class="flow-arrow">→</div><div><div class="flow-col-title">검증 단계 (행위 기반)</div>';
+  let li=0;
   for(const s of STAGES){
     const arts=byStage[s.k]||[];const active=arts.length>0;
-    h+='<div class="lane '+(active?'active':'idle')+'" data-st="'+s.k+'"><div class="lane-head">'
+    const delay=(active?(li++):0)*130+results.length*45;  // 입력 카드 다음에 단계가 순차로
+    let laneMs=0;for(const r of arts){const m=durMs(r);if(m!=null)laneMs+=m;}
+    h+='<div class="lane reveal '+(active?'active scanning':'idle')+'" style="animation-delay:'+delay+'ms" data-st="'+s.k+'"><div class="lane-head">'
       +'<span class="lic">'+s.icon+'</span><div><div class="lname">'+s.name+'</div><div class="lowner">'+s.owner+'</div></div>'
-      +'<span class="lcount">'+(active?arts.length+'개':'미사용')+'</span></div>';
+      +'<span class="lcount">'+(active?arts.length+'개'+(laneMs?'<span class="lane-time">'+fmtMs(laneMs)+'</span>':''):'미사용')+'</span></div>';
     if(active){
       h+='<div class="lane-body">';
       for(const r of arts){
         const st=ST[r.status]||{l:r.status,c:'skip'};
-        h+='<div class="art-row"><div class="arl"><span class="afn">'+esc(r.artifact.file_name)+'</span>'
+        const reasons=r.reason_entries||[];
+        const m=durMs(r);
+        // 펼침 헤더(클릭) — PASS 포함 모든 아티팩트 상세 열람 가능
+        h+='<div class="art-row"><div class="arl" onclick="toggleDetail(this)"><span class="caret">▸</span>'
+          +'<span class="afn">'+esc(r.artifact.file_name)+'</span>'
+          +(m!=null?'<span class="ms">'+fmtMs(m)+'</span>':'')
           +(r.grade&&r.grade!=='NA'?'<span class="grade-tag">등급 '+esc(r.grade)+'</span>':'')
           +'<span class="st-chip st-'+st.c+'">'+esc(st.l)+'</span></div>';
-        const reasons=r.reason_entries||[];
+        h+='<div class="art-detail" style="display:none">';
         if(reasons.length){
           h+='<div class="reasons">';
-          for(const re of reasons.slice(0,4)){
+          for(const re of reasons){  // 전체 사유(잘림 없음)
             const ev=(re.evidence||[]).join(', ');
             h+='<div class="reason"><span class="sev sev-'+esc(re.severity||'LOW')+'">'+esc(re.severity||'')+'</span>'
               +'<div><span class="rc">'+esc(re.code)+'</span> <span class="rm">'+esc(re.message||'')+'</span>'
               +(ev?'<br><span class="rev">'+esc(ev)+'</span>':'')+'</div></div>';
           }
           h+='</div>';
+        }else{
+          h+='<div class="pass-note">✓ 위험 신호 없음 — 이 단계 통과</div>';
         }
-        h+='</div>';
+        const sha=(r.artifact.sha256||'').slice(0,12);
+        h+='<div class="art-meta">'+esc(r.route_kind)+' · '+esc(r.review_action||'')
+          +(sha?' · sha256:'+esc(sha)+'…':'')+(r.cache_hit?' · cache-hit':'')+'</div>';
+        h+='</div></div>';
       }
       h+='</div>';
     }
     h+='</div>';
   }
   h+='</div><div class="flow-arrow">→</div><div><div class="flow-col-title">최종 판정</div>'
-    +'<div class="verdict '+dec.c+'" style="margin:0;flex-direction:column;align-items:flex-start;gap:6px">'
+    +'<div class="verdict pop '+dec.c+'" style="margin:0;flex-direction:column;align-items:flex-start;gap:6px;animation-delay:'+(li*130+results.length*45)+'ms">'
     +'<div class="vbig" style="font-size:24px">'+esc(dec.l)+'</div>'
     +'<div class="vsub">'+(c.BLOCK?c.BLOCK+'건 차단':c.PENDING_REVIEW?c.PENDING_REVIEW+'건 검토대기':'위험 없음')+'</div></div></div></div>';
   const so=data.skipped_other||[],sw=data.skipped_weights||[];
