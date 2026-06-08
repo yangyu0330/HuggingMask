@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -137,7 +138,13 @@ def main() -> int:
                    help="/validation/jobs(가중치 전용) 사용. 기본은 /validation/full "
                         "(가중치+코드+config+화이트리스트+제한런타임 통합)")
     p.add_argument("--cache-dir", default=None, help="다운로드 캐시 경로")
+    p.add_argument(
+        "--internal-token",
+        default=os.environ.get("HUGGINGMASK_INTERNAL_API_TOKEN"),
+        help="X-Internal-Token 헤더 (기본: $HUGGINGMASK_INTERNAL_API_TOKEN)",
+    )
     args = p.parse_args()
+    _headers = {"X-Internal-Token": args.internal_token} if args.internal_token else {}
 
     try:
         from huggingface_hub import snapshot_download
@@ -177,7 +184,7 @@ def main() -> int:
 
     endpoint = "jobs" if args.weight_only else "full"
     print(f"[3/3] POST {args.api}/internal/v1/validation/{endpoint} ...")
-    with httpx.Client(timeout=300) as client:
+    with httpx.Client(timeout=300, headers=_headers) as client:
         try:
             r = client.post(f"{args.api}/internal/v1/validation/{endpoint}", json=job)
             r.raise_for_status()

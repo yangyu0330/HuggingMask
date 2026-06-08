@@ -37,6 +37,19 @@ def test_token_set_missing_header_rejected(monkeypatch):
     assert r.status_code == 401
 
 
+def test_blank_token_is_fail_closed(monkeypatch):
+    # 양유상 PR #54 P1: 설정됐는데 빈 문자열이면 무인증(fail-open) 아니라 fail-closed(503)
+    monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", "")
+    r = client.post("/internal/v1/validation/jobs", json=_EMPTY_JOB)
+    assert r.status_code == 503
+
+
+def test_whitespace_token_is_fail_closed(monkeypatch):
+    monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", "   ")
+    r = client.post("/internal/v1/validation/jobs", json=_EMPTY_JOB)
+    assert r.status_code == 503
+
+
 def test_token_set_wrong_header_rejected(monkeypatch):
     monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", _TOKEN)
     r = client.post(

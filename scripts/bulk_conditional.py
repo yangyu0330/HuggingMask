@@ -21,6 +21,7 @@ namespace + 위험 키워드 없음 항목만 승인.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import httpx
@@ -113,9 +114,15 @@ def main() -> int:
     )
     p.add_argument("--api", default=DEFAULT_API_BASE)
     p.add_argument("--reviewer-id", default="auto_system")
+    p.add_argument(
+        "--internal-token",
+        default=os.environ.get("HUGGINGMASK_INTERNAL_API_TOKEN"),
+        help="X-Internal-Token 헤더 (기본: $HUGGINGMASK_INTERNAL_API_TOKEN)",
+    )
     args = p.parse_args()
+    _headers = {"X-Internal-Token": args.internal_token} if args.internal_token else {}
 
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=120, headers=_headers) as client:
         try:
             stats = client.get(f"{args.api}/stats").json()
         except httpx.HTTPError as e:

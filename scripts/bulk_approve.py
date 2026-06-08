@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 import httpx
@@ -135,13 +136,20 @@ def main() -> int:
     p = argparse.ArgumentParser(description="HuggingMask Pending AUTO_APPROVE 일괄 승인")
     p.add_argument("--api", default=DEFAULT_API_BASE, help="API base URL")
     p.add_argument("--reviewer-id", default="auto_system")
+    # 프록시 인증(HUGGINGMASK_INTERNAL_API_TOKEN)이 켜진 경우 토큰 헤더 주입
+    p.add_argument(
+        "--internal-token",
+        default=os.environ.get("HUGGINGMASK_INTERNAL_API_TOKEN"),
+        help="X-Internal-Token 헤더 (기본: $HUGGINGMASK_INTERNAL_API_TOKEN)",
+    )
     args = p.parse_args()
+    _headers = {"X-Internal-Token": args.internal_token} if args.internal_token else {}
 
     print("=" * 60)
     print("  HuggingMask 일괄 자동 승인")
     print("=" * 60)
 
-    with httpx.Client(timeout=120) as client:
+    with httpx.Client(timeout=120, headers=_headers) as client:
         try:
             stats = get_stats(client, args.api)
         except httpx.HTTPError as e:

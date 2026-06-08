@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
 from analyzer.service import validate_job
-from whitelist.auth import require_internal_token
+from proxy.auth import require_internal_token
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
 
