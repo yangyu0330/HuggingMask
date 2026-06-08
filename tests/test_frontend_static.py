@@ -181,3 +181,46 @@ def test_overview_binds_required_readiness_endpoints():
     assert "pipelineStages" in overview_source
     assert "ErrorPanel" in overview_source
     assert "aria-busy" in overview_source
+
+
+def test_demo_console_binds_scenarios_and_validation_detail():
+    api_source = (REPO_ROOT / "frontend" / "src" / "api" / "demo.ts").read_text(
+        encoding="utf-8"
+    )
+    routes_source = (REPO_ROOT / "frontend" / "src" / "app" / "routes.tsx").read_text(
+        encoding="utf-8"
+    )
+    demo_source = (
+        REPO_ROOT / "frontend" / "src" / "features" / "demo" / "DemoConsolePage.tsx"
+    ).read_text(encoding="utf-8")
+    validation_source = (
+        REPO_ROOT
+        / "frontend"
+        / "src"
+        / "features"
+        / "validation"
+        / "ValidationDetailPage.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "apiGet<DemoScenarioListResponse>('/demo/scenarios')" in api_source
+    assert "/demo/scenarios/${encodeURIComponent(scenarioId)}/run" in api_source
+    assert "repeat_cache_check: false" in api_source
+    assert "enable_path_b: false" in api_source
+    assert "window.localStorage" in api_source
+
+    assert 'path="/demo"' in routes_source
+    assert 'path="/validation"' in routes_source
+    assert "scenario-list" in demo_source
+    assert "matched_expectation" in demo_source
+    assert "Expectation Match" in demo_source
+    assert "Job Decision" in demo_source
+    assert "Artifact Status" in demo_source
+    assert "generated_artifacts" in demo_source
+    assert "safetensors" in demo_source
+    assert "validation_response" in demo_source
+    assert "Raw JSON" in demo_source
+    assert "Decision Hierarchy" in validation_source
+    assert "Route Explanation" in validation_source
+    assert "coverage_summary" in validation_source
+    assert "innerHTML" not in demo_source
+    assert "innerHTML" not in validation_source

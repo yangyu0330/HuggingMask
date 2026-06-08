@@ -1,5 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { OverviewPage } from '../features/overview/OverviewPage';
+import { DemoConsolePage } from '../features/demo/DemoConsolePage';
+import { ValidationDetailPage } from '../features/validation/ValidationDetailPage';
 import { PlaceholderPage } from './PlaceholderPage';
 
 export function AppRoutes() {
@@ -7,8 +9,8 @@ export function AppRoutes() {
     <Routes>
       <Route index element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<OverviewPage />} />
-      <Route path="/demo" element={<PlaceholderPage section="demo" />} />
-      <Route path="/validation" element={<PlaceholderPage section="validation" />} />
+      <Route path="/demo" element={<DemoConsolePage />} />
+      <Route path="/validation" element={<ValidationDetailPage />} />
       <Route path="/operations" element={<PlaceholderPage section="operations" />} />
       <Route path="/evidence" element={<PlaceholderPage section="evidence" />} />
       <Route path="*" element={<Navigate to="/overview" replace />} />

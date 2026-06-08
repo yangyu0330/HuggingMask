@@ -76,6 +76,26 @@ export interface DemoScenarioSummary {
   notes: string[];
 }
 
+export interface DemoSourcePreview {
+  repo_path: string;
+  exists: boolean;
+  size_bytes?: number;
+  sha256?: string;
+  preview: string;
+  truncated: boolean;
+}
+
+export interface DemoScenarioDetail extends DemoScenarioSummary {
+  required_repo_files: string[];
+  files_present_in_repo: string[];
+  artifacts_to_generate: Array<Record<string, unknown>>;
+  expected: Record<string, unknown>;
+  manifest: Record<string, unknown>;
+  source_files: DemoSourcePreview[];
+  presentation_notes: string[];
+  limitations: string[];
+}
+
 export interface DemoScenarioListResponse {
   items: DemoScenarioSummary[];
 }
