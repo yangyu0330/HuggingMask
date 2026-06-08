@@ -310,6 +310,14 @@ def _step2_danger_scan(tree: ast.Module, result: _InternalResult) -> None:
 
     for node in ast.walk(tree):
 
+        # __builtins__는 런타임 builtins dict 그 자체 — __builtins__["eval"] /
+        # __builtins__.exec / getattr(__builtins__, ...) 등 첨자·속성·별칭으로
+        # eval/exec/__import__를 꺼내는 우회 진입점이다. 전처리 코드에 정당한
+        # 사용이 없으므로 어떤 형태의 참조든 차단한다.
+        if isinstance(node, ast.Name) and node.id == "__builtins__":
+            result.block("__builtins__ 참조 — eval/exec/__import__ 우회 진입점")
+            return
+
         if isinstance(node, ast.Import):
             for alias in node.names:
                 mod = alias.name.split(".")[0]

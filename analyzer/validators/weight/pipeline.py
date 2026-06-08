@@ -192,7 +192,33 @@ def validate_pickle_pipeline(
         "yara": yara_result,
         "modelscan": modelscan_result,
         "path_a": path_a_result,
+        # 스캐너 적용 가시성: SKIP이면 해당 레이어가 실제로 돌지 않았다는 뜻.
+        "scanner_coverage": {
+            "yara": yara_result.get("status"),
+            "modelscan": modelscan_result.get("status"),
+        },
     }
+
+    # opt-in fail-closed: 운영자가 HUGGINGMASK_REQUIRE_WEIGHT_SCANNERS로 스캐너
+    # 필수를 선언했는데 yara/modelscan이 부재·오류(SKIP)면 Path A만으로 자동
+    # PASS시키지 않고 BLOCK한다. 기본값(미설정)에서는 동작 변화 없음.
+    import os as _os
+    if _os.getenv("HUGGINGMASK_REQUIRE_WEIGHT_SCANNERS", "").strip().lower() in {"1", "true", "yes", "on"}:
+        if (
+            yara_result.get("status") not in {"PASS", "BLOCK"}
+            or modelscan_result.get("status") not in {"PASS", "BLOCK"}
+        ):
+            # env 의존 결정이므로 캐시하지 않는다(토글 변경 시 stale 방지).
+            return _annotate_pickle_result(
+                {
+                    **result,
+                    "status": "BLOCK",
+                    "stage": "SCANNER_COVERAGE",
+                    "reason_code": "WEIGHT_SCANNER_REQUIRED",
+                    "reason": "required malware scanner unavailable (HUGGINGMASK_REQUIRE_WEIGHT_SCANNERS)",
+                },
+                pickle_role,
+            )
 
     path_a_tensors = path_a_result.get("tensors")
     path_a_tensor_dict = path_a_result.get("tensor_dict")

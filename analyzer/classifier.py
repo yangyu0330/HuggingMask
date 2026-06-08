@@ -58,6 +58,54 @@ def classify_file_kind(repo_path: str | Path) -> FileKind:
     return FileKind.OTHER
 
 
+# OTHER로 분류되지만 실제로는 스크립트/실행 바이너리인 확장자.
+# (.py/.bin 등은 위에서 이미 PYTHON/PICKLE로 분기하므로 여기서 다루지 않는다.)
+_SCRIPT_EXEC_FINAL_EXTS = {
+    "sh", "bash", "zsh", "ksh", "fish", "ps1", "psm1", "bat", "cmd", "com",
+    "scr", "vbs", "wsf", "exe", "dll", "so", "dylib", "pyc", "pyo", "pyd",
+    "jar", "class", "msi", "run", "elf", "out", "appimage", "deb", "rpm",
+}
+# 이중 확장자로 코드를 숨기는 경우(payload.py.txt, evil.sh.bak)를 잡기 위한
+# "중간 세그먼트" 검사용 코드 확장자.
+_CODE_INNER_EXTS = _SCRIPT_EXEC_FINAL_EXTS | {"py", "pyw"}
+# 실행 바이너리 매직 넘버 (ELF / PE(MZ) / Mach-O 32·64 / Java class).
+_EXEC_MAGICS = (
+    b"\x7fELF", b"MZ", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf",
+    b"\xce\xfa\xed\xfe", b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe",
+)
+
+
+def looks_like_executable_or_script(
+    file_name: str | Path, content: bytes | str | None = None
+) -> bool:
+    """OTHER 버킷에 떨어진 파일이 실제로는 실행 가능한 스크립트/바이너리인지 판정.
+
+    README.md 같은 무해한 메타데이터는 False, ``startup.sh`` / ``payload.py.txt`` /
+    ELF·PE 바이너리는 True. 내용 없이 이름만으로도 동작한다(내용 주면 매직넘버·
+    shebang 추가 확인).
+    """
+    name = PurePosixPath(str(file_name)).name.lower()
+    parts = name.split(".")
+
+    # 1) 최종 확장자가 스크립트/실행 바이너리
+    if len(parts) >= 2 and parts[-1] in _SCRIPT_EXEC_FINAL_EXTS:
+        return True
+    # 2) 이중 확장자로 코드 숨김 (중간 세그먼트가 코드 확장자)
+    if len(parts) >= 3 and any(p in _CODE_INNER_EXTS for p in parts[1:-1]):
+        return True
+
+    # 3) 내용 기반 — shebang / 실행 바이너리 매직넘버
+    if content:
+        head = content if isinstance(content, bytes) else content.encode("utf-8", "ignore")
+        head = head[:16]
+        if head.startswith(b"#!"):
+            return True
+        if any(head.startswith(magic) for magic in _EXEC_MAGICS):
+            return True
+
+    return False
+
+
 def sha256_bytes(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 

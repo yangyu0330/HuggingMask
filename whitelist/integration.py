@@ -116,6 +116,15 @@ class WhitelistEngineLookup:
         False인 경우 ``api``를 누적해두고, ``flush_pending()`` 또는 context
         종료 시점에 PENDING으로 일괄 등록한다.
         """
+        # 방어심층: 영구 차단 목록은 ApprovedApi 행이 (실수로/악의로) is_blocked=False로
+        # 존재하더라도 절대 ALLOWED를 반환하지 않는다. DB 한 행이 오염돼도
+        # is_allowed_exact가 위험 API를 보증하지 못하게 한다. (engine.check_batch도
+        # PERMANENTLY_BLOCKED를 최우선 검사하므로 flush 시 BLOCKED로 집계된다.)
+        if api in PERMANENTLY_BLOCKED_APIS:
+            if api not in self._unregistered_apis:
+                self._unregistered_apis.append(api)
+            return False
+
         approved = self._db.execute(
             select(ApprovedApi).where(ApprovedApi.api_path == api)
         ).scalar_one_or_none()

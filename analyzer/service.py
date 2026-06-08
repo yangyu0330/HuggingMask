@@ -1,6 +1,6 @@
 from datetime import UTC, datetime
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from analyzer.schemas import (
@@ -340,6 +340,7 @@ def _make_source_loader(artifacts: list) -> dict[str, bytes]:
 def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
     from analyzer.orchestrator import run_validation_job
     from analyzer.validators.code_semantic import is_preprocessing_metadata_kind
+    from analyzer.classifier import looks_like_executable_or_script
 
     # 파일 종류별로 분리
     weight_artifacts = [
@@ -406,16 +407,66 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
         )
     ]
 
-    # 지원하지 않는 파일 종류 → SKIPPED
+    # 지원하지 않는 파일 종류 → SKIPPED.
+    # 단, OTHER로 떨어졌지만 실제로는 실행 스크립트/바이너리(startup.sh,
+    # payload.py.txt, ELF/PE 등)인 파일은 무해한 SKIPPED로 자동 통과시키지 않고
+    # PENDING_REVIEW로 보낸다 (미검증 실행물 → 보안 검토 강제).
     for artifact in skipped_artifacts:
-        skipped = _build_result(
-            artifact=artifact,
-            status="SKIPPED",
-            reason_code="UNSUPPORTED_FILE_KIND",
-            reason_message=f"지원하지 않는 파일 종류: {artifact.file_kind}",
-            details={"status": "SKIPPED", "reason_code": "UNSUPPORTED_FILE_KIND"},
+        content_head = None
+        try:
+            with open(artifact.temp_local_path, "rb") as _f:
+                content_head = _f.read(256)
+        except Exception:
+            content_head = None
+
+        # 메타데이터 조작 우회 방지: file_name만 신뢰하지 않고 repo_path / temp
+        # basename도 함께 검사한다. (양유상 PR #53 리뷰: repo_path=payload.py.txt +
+        # file_name=README.md로 OTHER 실행물 검토가 우회됨.) 또한 repo_path
+        # basename과 file_name이 불일치하면 그 자체가 조작 신호이므로 fail-closed.
+        candidate_names = [artifact.file_name, artifact.repo_path]
+        try:
+            candidate_names.append(Path(artifact.temp_local_path).name)
+        except Exception:
+            pass
+        exec_like = any(
+            looks_like_executable_or_script(name, content_head)
+            for name in candidate_names
+            if name
         )
-        results.append(skipped)
+        name_mismatch = PurePosixPath(artifact.repo_path).name != artifact.file_name
+
+        if exec_like or name_mismatch:
+            reason_code = (
+                "UNVETTED_EXECUTABLE_FILE" if exec_like else "ARTIFACT_NAME_MISMATCH"
+            )
+            reason_message = (
+                f"검증되지 않은 실행 가능 파일(OTHER): {artifact.repo_path}. "
+                "스크립트/바이너리는 자동 통과시키지 않고 보안 검토로 보낸다."
+                if exec_like
+                else (
+                    f"artifact 메타데이터 불일치: repo_path={artifact.repo_path} vs "
+                    f"file_name={artifact.file_name} (조작 의심) — 보안 검토로 보낸다."
+                )
+            )
+            review = _build_result(
+                artifact=artifact,
+                status="PENDING_REVIEW",
+                reason_code=reason_code,
+                reason_message=reason_message,
+                details={"status": "PENDING_REVIEW", "reason_code": reason_code},
+            )
+            results.append(review)
+            overall_status = _merge_overall_status(overall_status, "PENDING_REVIEW")
+            pending_artifact_ids.append(artifact.artifact_id)
+        else:
+            skipped = _build_result(
+                artifact=artifact,
+                status="SKIPPED",
+                reason_code="UNSUPPORTED_FILE_KIND",
+                reason_message=f"지원하지 않는 파일 종류: {artifact.file_kind}",
+                details={"status": "SKIPPED", "reason_code": "UNSUPPORTED_FILE_KIND"},
+            )
+            results.append(skipped)
 
     if orchestrator_artifacts:
         source_loader = _make_source_loader(orchestrator_artifacts)
@@ -460,6 +511,11 @@ def validate_job(job: ValidationJobRequest) -> ValidationJobResponse:
                 results.append(err_result)
                 overall_status = _merge_overall_status(overall_status, "ERROR")
                 pending_artifact_ids.append(artifact.artifact_id)
+
+    # 검증 결과가 하나도 없으면(빈 아티팩트 집합 등) APPROVE로 fail-open하지
+    # 않는다. orchestrator._compute_overall_status([])와 동일하게 fail-closed.
+    if not results:
+        overall_status = "ERROR"
 
     if overall_status == "BLOCK":
         decision = OverallDecision.DENY

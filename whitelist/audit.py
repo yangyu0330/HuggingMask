@@ -1,16 +1,31 @@
 """
-감사 로그 — append-only + SHA256 해시 체인
+감사 로그 — append-only + HMAC-SHA256 해시 체인
 
 상세설계 9.2절 / HuggingMask 인터페이스 정의서 reason code AUDIT_LOG_WRITTEN.
 
 체인 규칙:
   prev_hash  = 직전 항목의 entry_hash (없으면 GENESIS)
-  entry_hash = SHA256(prev_hash || action || api_path || actor || timestamp || detail)
+  entry_hash = HMAC-SHA256(key, prev_hash || action || api_path || actor || timestamp || detail)
 
-이 값을 다음 항목의 prev_hash로 사용. 사후 변조 시 entry_hash 재계산이 깨진다.
+이 값을 다음 항목의 prev_hash로 사용.
+
+왜 HMAC인가:
+  평문 SHA256 체인은 한 행을 변조하면 그 이후 entry_hash를 "공개 알고리즘으로"
+  전부 재계산해 일관된 가짜 체인을 만들 수 있다(키가 없으므로). HMAC은 서버가
+  보유한 비밀 키(HUGGINGMASK_AUDIT_HMAC_KEY) 없이는 재계산이 불가능하므로
+  변조 후 위조가 막힌다.
+
+알려진 한계(정직 고지):
+  - 꼬리 절단(마지막 N개 행 DELETE)은 in-DB 체인만으로는 탐지 불가하다. 남은
+    프리픽스는 여전히 유효하기 때문. 완전한 방지는 외부 앵커(서명된 head 포인터/
+    카운트의 out-of-band 보관)가 필요하며 이는 후속 과제다.
+  - 기본 키(dev)를 쓰면 위조 방지가 무력하다 — 운영에서는 반드시 환경변수로
+    비밀 키를 주입해야 한다.
 """
 
 import hashlib
+import hmac
+import os
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -20,6 +35,13 @@ from whitelist.tables import AuditLog
 
 
 GENESIS_HASH = "GENESIS"
+
+_DEFAULT_AUDIT_HMAC_KEY = "dev-only-audit-hmac-key"
+
+
+def _audit_hmac_key() -> bytes:
+    """감사 체인 HMAC 키. 운영에서는 HUGGINGMASK_AUDIT_HMAC_KEY를 주입한다."""
+    return os.getenv("HUGGINGMASK_AUDIT_HMAC_KEY", _DEFAULT_AUDIT_HMAC_KEY).encode("utf-8")
 
 
 def _canonical_timestamp(ts: datetime) -> str:
@@ -43,7 +65,9 @@ def compute_entry_hash(
         prev_hash, action, api_path, actor,
         _canonical_timestamp(timestamp), detail or "",
     ])
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return hmac.new(
+        _audit_hmac_key(), payload.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 def append_audit(
@@ -72,6 +96,10 @@ def append_audit(
         entry_hash=entry_hash,
     )
     db.add(log)
+    # 같은 트랜잭션에서 append_audit가 연달아 호출돼도 다음 호출이 방금 추가한
+    # 행을 tail로 보도록 flush한다(autoflush=False 환경에서 두 행이 같은
+    # prev_hash를 공유해 체인이 깨지는 잠복 버그 방지).
+    db.flush()
     return log
 
 

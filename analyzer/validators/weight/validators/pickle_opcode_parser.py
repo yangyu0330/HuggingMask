@@ -126,6 +126,19 @@ def _reconstruct_safe_object(path: str) -> dict:
                         "reason": "empty stack at STOP",
                     }
 
+                # STOP 이후 남은 바이트가 있으면 두 번째(악성) 피클이 append된
+                # 형태일 수 있다. 첫 STOP에서 PASS로 끝내면 뒤에 숨긴 REDUCE/GLOBAL
+                # 페이로드를 놓친다 → trailing data는 BLOCK.
+                trailing = f.read()
+                if trailing.strip(b"\n\r\t ") != b"":
+                    return {
+                        "status": "BLOCK",
+                        "reason_code": "PICKLE_TRAILING_DATA",
+                        "reason": "unexpected data after pickle STOP (possible appended pickle)",
+                        "position": pos,
+                        "trailing_bytes": len(trailing),
+                    }
+
                 return {
                     "status": "PASS",
                     "object": stack[-1],
