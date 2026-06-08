@@ -543,6 +543,223 @@ tbody tr:hover {
   line-height: 1.45;
 }
 
+.operations-panel {
+  width: min(1320px, 100%);
+}
+
+.operations-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.ops-wide {
+  grid-column: 1 / -1;
+}
+
+.ops-form {
+  display: grid;
+  gap: 12px;
+}
+
+.field-stack {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.field-stack span {
+  color: #6a7f87;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.field-stack input,
+.field-stack textarea,
+.filter-row input,
+.filter-row select {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #cbd8de;
+  border-radius: 8px;
+  color: #17262d;
+  background: #ffffff;
+}
+
+.field-stack input,
+.filter-row input,
+.filter-row select {
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.field-stack textarea {
+  min-height: 116px;
+  padding: 10px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.inline-form,
+.filter-row,
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.inline-form .field-stack {
+  flex: 1 1 280px;
+}
+
+.filter-row {
+  margin-bottom: 12px;
+}
+
+.filter-row input,
+.filter-row select {
+  flex: 1 1 180px;
+}
+
+.result-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.result-summary div,
+.verify-panel,
+.inline-result,
+.floating-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #dbe4e8;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.result-summary div {
+  display: grid;
+  gap: 4px;
+}
+
+.result-summary span {
+  color: #6a7f87;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.result-summary strong {
+  color: #17262d;
+  font-size: 20px;
+}
+
+td small {
+  display: block;
+  margin-top: 5px;
+  color: #6a7f87;
+  line-height: 1.35;
+}
+
+.compact-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.compact-list div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 0.45fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #dbe4e8;
+  border-radius: 8px;
+  background: #f7fafb;
+}
+
+.compact-list strong,
+.compact-list span {
+  overflow-wrap: anywhere;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(20, 34, 43, 0.42);
+}
+
+.review-modal {
+  display: grid;
+  gap: 13px;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 40px);
+  overflow-y: auto;
+  padding: 20px;
+  border: 1px solid #d7e0e4;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(15, 32, 40, 0.2);
+}
+
+.review-modal h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.3;
+}
+
+.segmented-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.segmented-row button {
+  min-height: 38px;
+  border: 1px solid #cbd8de;
+  border-radius: 8px;
+  color: #30414a;
+  background: #f7fafb;
+  cursor: pointer;
+  text-transform: capitalize;
+}
+
+.segmented-row button.active {
+  color: #ffffff;
+  border-color: #2d5661;
+  background: #2d5661;
+}
+
+.secondary-action {
+  background: #f7fafb;
+}
+
+.verify-panel {
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.floating-result {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 15;
+  max-width: min(520px, calc(100vw - 40px));
+  box-shadow: 0 12px 32px rgba(15, 32, 40, 0.16);
+}
+
 .pipeline-list {
   display: grid;
   grid-template-columns: repeat(7, minmax(92px, 1fr));
@@ -716,7 +933,11 @@ tbody tr:hover {
   .detail-split,
   .metadata-grid,
   .decision-grid,
-  .route-grid {
+  .route-grid,
+  .operations-grid,
+  .result-summary,
+  .compact-list div,
+  .segmented-row {
     grid-template-columns: 1fr;
   }
 
@@ -728,6 +949,15 @@ tbody tr:hover {
 
   .run-actions {
     display: grid;
+  }
+
+  .modal-backdrop {
+    align-items: stretch;
+  }
+
+  .floating-result {
+    left: 18px;
+    right: 18px;
   }
 }
 
@@ -763,5 +993,9 @@ tbody tr:hover {
   .decision-grid,
   .route-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operations-grid {
+    grid-template-columns: 1fr;
   }
 }

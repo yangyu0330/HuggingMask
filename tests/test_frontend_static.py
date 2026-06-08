@@ -224,3 +224,52 @@ def test_demo_console_binds_scenarios_and_validation_detail():
     assert "coverage_summary" in validation_source
     assert "innerHTML" not in demo_source
     assert "innerHTML" not in validation_source
+
+
+def test_operations_binds_required_endpoints_and_safe_rendering():
+    api_source = (REPO_ROOT / "frontend" / "src" / "api" / "ops.ts").read_text(
+        encoding="utf-8"
+    )
+    routes_source = (REPO_ROOT / "frontend" / "src" / "app" / "routes.tsx").read_text(
+        encoding="utf-8"
+    )
+    ops_source = (
+        REPO_ROOT
+        / "frontend"
+        / "src"
+        / "features"
+        / "operations"
+        / "OperationsPage.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "apiPost<WhitelistCheckResult[], WhitelistCheckRequest>(" in api_source
+    assert "'/whitelist/check'" in api_source
+    assert "apiGet<PendingListResponse>(appendParams('/pending'" in api_source
+    assert "apiPost<ReviewDecisionResult, ReviewDecisionRequest>('/review'" in api_source
+    assert "apiGet<ApprovedListResponse>(appendParams('/approved'" in api_source
+    assert "include_blocked: params.include_blocked ?? true" in api_source
+    assert "apiPost<FeedbackReportResponse, FeedbackReportRequest>('/feedback'" in api_source
+    assert "apiGet<FeedbackListResponse>(appendParams('/feedback'" in api_source
+    assert "apiGet<AuditListResponse>(appendParams('/audit'" in api_source
+    assert "apiGet<AuditVerifyResponse>('/audit/verify')" in api_source
+
+    assert 'path="/operations"' in routes_source
+    assert "OperationsPage" in routes_source
+    assert "Whitelist Check" in ops_source
+    assert "Pending Review Queue" in ops_source
+    assert "AUTO_APPROVE is a recommendation" in ops_source
+    assert "Approved and Blocked Policies" in ops_source
+    assert "Submit feedback" in ops_source
+    assert "Verify chain" in ops_source
+    assert "reviewDecisions" in ops_source
+    assert 'ErrorPanel title="Review decision failed"' in ops_source
+    assert "error={reviewMutation.error}" in ops_source
+    assert "reviewMutation.reset()" in ops_source
+    assert "'approve'" in ops_source
+    assert "'reject'" in ops_source
+    assert "'defer'" in ops_source
+    assert "risk_keywords" in ops_source
+    assert "ALLOWED" in ops_source
+    assert "BLOCKED" in ops_source
+    assert "PENDING" in ops_source
+    assert "innerHTML" not in ops_source

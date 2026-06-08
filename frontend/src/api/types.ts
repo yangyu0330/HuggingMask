@@ -2,6 +2,7 @@ export type ValidationStatus = 'PASS' | 'BLOCK' | 'PENDING_REVIEW' | 'ERROR' | '
 export type OverallDecision = 'APPROVE' | 'APPROVE_WITH_TRANSFORM' | 'DENY' | 'REVIEW_REQUIRED' | 'ERROR';
 export type WhitelistStatus = 'ALLOWED' | 'BLOCKED' | 'UNKNOWN' | 'PENDING';
 export type ReviewDecision = 'approve' | 'conditional' | 'reject' | 'defer';
+export type ReviewStatus = 'PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'DEFERRED';
 export type PendingClassification = 'AUTO_APPROVE' | 'CONDITIONAL' | 'MANUAL' | 'BLOCKED';
 
 export interface ReasonEntry {
@@ -132,6 +133,24 @@ export interface WhitelistCheckResult {
   reason: string;
 }
 
+export interface ModelRef {
+  repo_id: string;
+  revision: string;
+  source_host: string;
+  source_url: string;
+  requested_by: string;
+  requested_at: string;
+  endpoint_mode: 'HF_ENDPOINT_PROXY' | 'DIRECT';
+}
+
+export interface WhitelistCheckRequest {
+  schema_version: string;
+  request_id: string;
+  job_id: string;
+  model: ModelRef;
+  apis: string[];
+}
+
 export interface PendingApiRecord {
   api_path: string;
   first_seen_at: string;
@@ -141,7 +160,7 @@ export interface PendingApiRecord {
   verified_org_count: number;
   verified_org_list: string[];
   in_official_docs: boolean;
-  review_status: string;
+  review_status: ReviewStatus;
   model_list: string[];
   risk_keywords: string[];
   matched_namespace_rule?: string | null;
@@ -150,15 +169,103 @@ export interface PendingApiRecord {
   created_from_job_id: string;
 }
 
+export interface PendingListResponse {
+  items: PendingApiRecord[];
+  count: number;
+}
+
+export interface ReviewDecisionRequest {
+  api_path: string;
+  decision: ReviewDecision;
+  reviewer_id: string;
+  review_note: string;
+  review_id?: string | null;
+  condition?: string | null;
+  source_evidence?: string[];
+}
+
 export interface ReviewDecisionResult {
   api_path: string;
   decision: ReviewDecision;
   applied: boolean;
   message: string;
   review_id?: string | null;
-  final_review_status?: string | null;
+  final_review_status?: ReviewStatus | null;
   audit_event_id?: number | null;
   audit_event_hash?: string | null;
+}
+
+export interface ApprovedApiRecord {
+  api_path: string;
+  namespace: string;
+  source: string;
+  matched_rule?: string | null;
+  source_version: string;
+  added_date: string;
+  reviewer_id: string;
+  review_note: string;
+  is_blocked: boolean;
+}
+
+export interface ApprovedListResponse {
+  items: ApprovedApiRecord[];
+  total: number;
+  count: number;
+}
+
+export interface FeedbackReportRequest {
+  blocked_api: string;
+  model_id: string;
+  purpose: string;
+  reporter_id: string;
+}
+
+export interface FeedbackReportResponse {
+  report_id: string;
+  blocked_api: string;
+  auto_classification: PendingClassification;
+  in_official_docs: boolean;
+  verified_org_count: number;
+  estimated_response_hours: number;
+  review_status: ReviewStatus;
+  auto_rejected: boolean;
+  message: string;
+}
+
+export interface FeedbackReportRecord extends Omit<FeedbackReportResponse, 'message'> {
+  model_id: string;
+  purpose: string;
+  reporter_id: string;
+  submitted_at: string;
+}
+
+export interface FeedbackListResponse {
+  items: FeedbackReportRecord[];
+  count: number;
+}
+
+export interface AuditLogEntry {
+  id: number;
+  timestamp: string;
+  action: string;
+  api_path: string;
+  actor: string;
+  detail: string;
+  prev_hash: string;
+  entry_hash: string;
+}
+
+export interface AuditListResponse {
+  items: AuditLogEntry[];
+  total: number;
+  count: number;
+}
+
+export interface AuditVerifyResponse {
+  valid: boolean;
+  total_entries: number;
+  violation_count: number;
+  violations: string[];
 }
 
 export interface HealthResponse {
