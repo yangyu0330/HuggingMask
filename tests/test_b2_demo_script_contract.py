@@ -44,9 +44,12 @@ class FakeDockerLifecycleRunner:
         if step_name == "inspect":
             return CommandResult(fixtures={"post_start_inspect": self._inspect_payload()})
         if step_name == "logs":
+            # 신뢰 가능한 runsc strace 소스로 모델링(runsc_logs). generic "logs"/
+            # stdout은 strace 단독 근거가 아니다(양유상 PR #55) — 실제 runsc는
+            # debug-log를 호스트 경로로 내보내며 이를 runsc_logs로 받는다.
             return CommandResult(
                 stdout='1 openat(AT_FDCWD, "/sandbox/input/modeling_b2_demo.py", O_RDONLY|O_CLOEXEC) = 3\n',
-                fixtures={"logs": '1 openat(AT_FDCWD, "/sandbox/input/modeling_b2_demo.py", O_RDONLY|O_CLOEXEC) = 3\n'},
+                fixtures={"runsc_logs": '1 openat(AT_FDCWD, "/sandbox/input/modeling_b2_demo.py", O_RDONLY|O_CLOEXEC) = 3\n'},
             )
         if step_name == "cp":
             runner_result = self._runner_result()

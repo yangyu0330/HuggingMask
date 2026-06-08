@@ -61,6 +61,7 @@ class B2RunnerOutput:
     runtime_setup_errors: list[str] = field(default_factory=list)
     post_start_runtime_errors: list[str] = field(default_factory=list)
     log_complete: bool | None = None
+    strace_observed: bool | None = None
 
 
 class B2Runner(Protocol):
@@ -189,6 +190,10 @@ def run_b2_sandbox_pipeline(
         runtime_setup_errors=runner_output.runtime_setup_errors,
         post_start_runtime_errors=runner_output.post_start_runtime_errors,
         log_complete=runner_output.log_complete if runner_output.log_complete is not None else log_complete,
+        # 러너가 strace_observed를 보고하지 않으면(None) "관측됨"으로 가정하지 않는다.
+        # fail-closed: 미보고 → 관측 안 함(False) → require_runsc_strace 게이트 발화.
+        # 실 B2HostRunner는 명시 set하므로 이 기본은 fake/미배선 러너에만 적용된다.
+        strace_observed=runner_output.strace_observed if runner_output.strace_observed is not None else False,
     )
 
 
@@ -253,6 +258,7 @@ def _coerce_runner_output(
             runtime_setup_errors=list(value.get("runtime_setup_errors") or []),
             post_start_runtime_errors=list(value.get("post_start_runtime_errors") or []),
             log_complete=value.get("log_complete"),
+            strace_observed=value.get("strace_observed"),
         )
     return B2RunnerOutput(runner_result=value)
 
@@ -267,6 +273,7 @@ def _looks_like_runner_output_envelope(value: Mapping[str, Any]) -> bool:
         "runtime_setup_errors",
         "post_start_runtime_errors",
         "log_complete",
+        "strace_observed",
     }
     return any(key in value for key in envelope_keys)
 

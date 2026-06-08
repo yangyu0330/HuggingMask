@@ -81,6 +81,15 @@ def _clean_runner(context: B2RunnerContext) -> dict:
     }
 
 
+def _clean_observed(context: B2RunnerContext) -> dict:
+    """관측된 clean 런 모델링 — strace 관측을 명시(fail-closed 기본).
+
+    pipeline은 strace_observed 미보고(None)를 '관측 안 함'(fail-closed)으로 본다.
+    실 B2HostRunner는 명시 set하므로, fake도 clean 경로를 보려면 명시해야 한다.
+    """
+    return {"runner_result": _clean_runner(context), "strace_observed": True}
+
+
 def test_clean_fake_runner_remains_policy_review_and_not_deployable(tmp_path: Path) -> None:
     root = tmp_path / "snapshot"
     primary = _primary_source()
@@ -92,7 +101,7 @@ def test_clean_fake_runner_remains_policy_review_and_not_deployable(tmp_path: Pa
 
     def runner(context: B2RunnerContext) -> dict:
         contexts.append(context)
-        return _clean_runner(context)
+        return _clean_observed(context)
 
     check = run_b2_sandbox_pipeline(
         request_id="req-b2",
@@ -115,6 +124,36 @@ def test_clean_fake_runner_remains_policy_review_and_not_deployable(tmp_path: Pa
     assert contexts[0].manifest.primary_repo_path == "modeling_demo.py"
     assert (contexts[0].input_dir / B2_INPUT_MANIFEST_FILENAME).is_file()
     assert (contexts[0].input_dir / "config.json").is_file()
+
+
+def test_clean_runner_without_strace_report_is_fail_closed(tmp_path: Path) -> None:
+    # pipeline.py fail-closed: 러너가 clean이어도 strace_observed를 보고하지 않으면
+    # (bare runner_result) 관측 안 함으로 보고 require_runsc_strace 게이트가 발화한다.
+    # (이전 else True 기본은 미보고를 '관측됨'으로 가정해 fail-open이었음.)
+    root = tmp_path / "snapshot"
+    primary = _primary_source()
+    _write(root, "modeling_demo.py", primary)
+    _write(root, "config.json", b'{"model_type":"demo"}\n')
+    resolver = SnapshotSourceResolver(model_snapshot_root=root)
+    primary_result = _validate("modeling_demo.py", primary)
+
+    check = run_b2_sandbox_pipeline(
+        request_id="req-b2",
+        job_id="job-b2",
+        revision="abc123",
+        policy_version=_make_policy().policy_version,
+        source_resolver=resolver,
+        output_dir=tmp_path / "out",
+        primary_result=primary_result,
+        candidate_results=[],
+        runner=_clean_runner,  # strace_observed 미보고(bare runner_result)
+        nonce="nonce-123",
+        created_at="2026-05-20T00:00:00Z",
+    )
+
+    assert check["decision"] == "LOG_INCOMPLETE"
+    assert check["policy_gate"]["reason_code"] == "SANDBOX_STRACE_NOT_OBSERVED"
+    assert check["deployable"] is False
 
 
 def test_runner_output_envelope_forwards_security_events_and_runtime_evidence(tmp_path: Path) -> None:
@@ -313,7 +352,7 @@ def test_direct_b2_and_auto_map_sibling_results_can_use_pipeline(tmp_path: Path)
         output_dir=tmp_path / "linked-out",
         primary_result=linked_result,
         candidate_results=response.artifact_results,
-        runner=lambda context: linked_contexts.append(context) or _clean_runner(context),
+        runner=lambda context: linked_contexts.append(context) or _clean_observed(context),
         nonce="linked-nonce",
     )
     direct_check = run_b2_sandbox_pipeline(
@@ -325,7 +364,7 @@ def test_direct_b2_and_auto_map_sibling_results_can_use_pipeline(tmp_path: Path)
         output_dir=tmp_path / "direct-out",
         primary_result=direct_result,
         candidate_results=response.artifact_results,
-        runner=lambda context: direct_contexts.append(context) or _clean_runner(context),
+        runner=lambda context: direct_contexts.append(context) or _clean_observed(context),
         nonce="direct-nonce",
     )
 

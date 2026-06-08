@@ -70,6 +70,11 @@ def _clean_runner_result(context: B2RunnerContext) -> dict:
     }
 
 
+def _clean_observed_result(context: B2RunnerContext) -> dict:
+    """관측된 clean 런 모델링 — strace 관측 명시(fail-closed 기본). 실 러너는 명시 set."""
+    return {"runner_result": _clean_runner_result(context), "strace_observed": True}
+
+
 def test_direct_b2_uses_fake_pipeline_runner_and_attaches_sandbox_check(tmp_path: Path) -> None:
     snapshot_root = tmp_path / "snapshot"
     source = _b2_source("DirectModel")
@@ -87,7 +92,7 @@ def test_direct_b2_uses_fake_pipeline_runner_and_attaches_sandbox_check(tmp_path
 
     def runner(context: B2RunnerContext) -> dict:
         contexts.append(context)
-        return _clean_runner_result(context)
+        return _clean_observed_result(context)
 
     response = run_validation_job(
         request,
@@ -136,7 +141,7 @@ def test_direct_b2_pipeline_uses_later_dependency_result(tmp_path: Path) -> None
         request,
         source_loader=build_source_loader(resolver),
         source_resolver=resolver,
-        b2_runner=lambda context: contexts.append(context) or _clean_runner_result(context),
+        b2_runner=lambda context: contexts.append(context) or _clean_observed_result(context),
         b2_output_dir=tmp_path / "b2-out",
     )
 
