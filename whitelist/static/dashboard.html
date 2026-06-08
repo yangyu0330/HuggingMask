@@ -7,6 +7,71 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:100vh}.header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:24px 32px}.header h1{font-size:22px;font-weight:600}.header p{font-size:13px;opacity:.7;margin-top:4px}.container{max-width:1200px;margin:0 auto;padding:24px}.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-card .label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.5px}.stat-card .value{font-size:32px;font-weight:700;margin-top:4px}.stat-card.approved .value{color:#0f6e56}.stat-card.pending .value{color:#ba7517}.stat-card.blocked .value{color:#a32d2d}.stat-card.total .value{color:#534ab7}.tabs{display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.tab{padding:10px 20px;border-radius:8px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:#666;transition:all .15s}.tab.active{background:#534ab7;color:#fff}.tab:hover:not(.active){background:#f0f0f0}.tab-content{display:none}.tab-content.active{display:block}.section{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:24px;overflow:hidden}.section-header{padding:16px 20px;border-bottom:1px solid #e8e8e8;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}.section-header h2{font-size:16px;font-weight:600}.search-row{display:flex;gap:8px}.search-row input,.search-row select{border:1px solid #ddd;border-radius:8px;padding:6px 12px;font-size:13px}.search-row input{width:200px}.classify-form{padding:20px}.classify-form textarea{width:100%;height:80px;border:1px solid #ddd;border-radius:8px;padding:12px;font-family:monospace;font-size:13px;resize:vertical}.classify-form .row{display:flex;gap:12px;margin-top:12px;align-items:center}.classify-form input[type=text]{flex:1;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px}.btn{border:none;border-radius:8px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}.btn-primary{background:#534ab7;color:#fff}.btn-primary:hover{background:#3c3489}.btn-approve{background:#0f6e56;color:#fff}.btn-approve:hover{background:#085041}.btn-reject{background:#a32d2d;color:#fff}.btn-reject:hover{background:#791f1f}.btn-defer{background:#ba7517;color:#fff}.btn-defer:hover{background:#854f0b}.btn-sm{padding:5px 12px;font-size:12px}.api-path{font-family:monospace;font-weight:500;word-break:break-all}.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}.badge-auto{background:#e1f5ee;color:#0f6e56}.badge-conditional{background:#faeeda;color:#854f0b}.badge-manual{background:#faeeda;color:#ba7517}.badge-blocked{background:#fcebeb;color:#a32d2d}.badge-pending{background:#eeedfe;color:#534ab7}.badge-approved{background:#e1f5ee;color:#0f6e56}.badge-rejected{background:#fcebeb;color:#a32d2d}.result-row{display:grid;grid-template-columns:1fr 120px 140px 200px;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px}.result-row:hover{background:#fafbfc}.pending-row{display:grid;grid-template-columns:1fr 100px 80px 100px 180px;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px;gap:8px}.pending-row:hover{background:#fafbfc}.danger-kw{font-family:monospace;font-size:11px;color:#a32d2d}.model-info{font-size:11px;color:#666}.approved-row{display:grid;grid-template-columns:1.2fr .8fr 100px 120px 1fr;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px;gap:8px}.approved-row:hover{background:#fafbfc}.audit-row{display:grid;grid-template-columns:60px 140px 100px 1fr 100px 1fr 120px;align-items:center;padding:10px 20px;border-bottom:1px solid #f0f0f0;font-size:12px;gap:8px}.audit-row:hover{background:#fafbfc}.hash-val{font-family:monospace;font-size:10px;color:#999}.action-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.action-approve{background:#e1f5ee;color:#0f6e56}.action-reject{background:#fcebeb;color:#a32d2d}.action-defer{background:#faeeda;color:#ba7517}.action-pending{background:#eeedfe;color:#534ab7}.action-add{background:#e6f1fb;color:#185fa5}.table-header{font-weight:600;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:#fafbfc}.table-header:hover{background:#fafbfc}.empty{padding:40px;text-align:center;color:#999;font-size:14px}.pagination{display:flex;justify-content:center;gap:8px;padding:16px}.pagination button{border:1px solid #ddd;border-radius:6px;padding:6px 14px;background:#fff;cursor:pointer;font-size:12px}.pagination button:hover{background:#f0f0f0}.pagination span{padding:6px 10px;font-size:12px;color:#666}.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center}.modal-overlay.active{display:flex}.modal{background:#fff;border-radius:16px;padding:24px;width:500px;max-width:90vw}.modal h3{font-size:18px;margin-bottom:16px}.modal .field{margin-bottom:12px}.modal .field label{display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px}.modal .field input,.modal .field textarea{width:100%;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px}.modal .field textarea{height:60px;resize:vertical}.modal .actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}.toast{position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:200;opacity:0;transform:translateY(10px);transition:all .3s}.toast.show{opacity:1;transform:translateY(0)}
 </style>
+<style>
+/* ── 모델 검사 탭 (가로 파이프라인 흐름) ───────────────────────────── */
+.inspect-bar{padding:20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.inspect-bar input[type=text]{flex:1;min-width:240px;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:14px;font-family:monospace}
+.inspect-bar .rev{flex:0 0 110px;min-width:90px}
+.inspect-bar label{font-size:12px;color:#555;display:flex;align-items:center;gap:5px;cursor:pointer}
+.quick-row{padding:0 20px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.quick-row .ql{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-right:2px}
+.chip-btn{border:1px solid #d6d3f0;background:#f3f2fc;color:#4a42a8;border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;font-family:monospace;transition:all .15s}
+.chip-btn:hover{background:#e7e4f8}
+.chip-btn .tag{font-family:'Segoe UI',sans-serif;font-weight:600;margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px}
+.chip-btn .tag.deny{background:#fcebeb;color:#a32d2d}.chip-btn .tag.ok{background:#e1f5ee;color:#0f6e56}
+.spinner{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.insp-empty{padding:48px 20px;text-align:center;color:#9a9a9a;font-size:14px;line-height:1.7}
+.insp-empty .big{font-size:34px;display:block;margin-bottom:8px;opacity:.5}
+/* 요약 배너 + 통계 */
+.verdict{margin:0 20px 16px;border-radius:14px;padding:20px 24px;display:flex;align-items:center;gap:18px;color:#fff}
+.verdict .vbig{font-size:30px;font-weight:800;letter-spacing:.5px}
+.verdict .vsub{font-size:13px;opacity:.9}
+.verdict .vmeta{margin-left:auto;text-align:right;font-size:12px;opacity:.92;line-height:1.6}
+.dec-deny{background:linear-gradient(135deg,#a32d2d,#7a1f1f)}
+.dec-review{background:linear-gradient(135deg,#ba7517,#8a560f)}
+.dec-approve{background:linear-gradient(135deg,#0f6e56,#0a5040)}
+.dec-error{background:linear-gradient(135deg,#5a5a6e,#3a3a4a)}
+.insp-counts{display:flex;gap:10px;padding:0 20px 16px;flex-wrap:wrap}
+.cnt{flex:1;min-width:90px;background:#fafbfc;border:1px solid #eee;border-radius:10px;padding:10px 14px;text-align:center}
+.cnt .n{font-size:22px;font-weight:700}.cnt .l{font-size:11px;color:#888}
+.cnt.pass .n{color:#0f6e56}.cnt.block .n{color:#a32d2d}.cnt.pending .n{color:#ba7517}.cnt.skip .n{color:#888}.cnt.error .n{color:#a32d2d}
+/* 3-컬럼 파이프라인 흐름 */
+.flow{display:grid;grid-template-columns:minmax(180px,230px) 28px 1fr 28px minmax(150px,200px);gap:8px;align-items:start;padding:8px 20px 24px}
+.flow-col-title{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;padding-left:2px}
+.flow-arrow{display:flex;align-items:center;justify-content:center;color:#cfcce6;font-size:22px;padding-top:40px}
+.fcard{background:#fff;border:1px solid #eaeaea;border-left:4px solid #ccc;border-radius:9px;padding:10px 12px;margin-bottom:8px;transition:all .15s}
+.fcard:hover{box-shadow:0 2px 8px rgba(0,0,0,.09)}
+.fcard.hl{box-shadow:0 0 0 2px #534ab7;border-left-color:#534ab7}
+.fcard .fn{font-family:monospace;font-size:12px;font-weight:600;word-break:break-all}
+.fcard .fk{font-size:10px;color:#888;margin-top:3px}
+.fcard.b-pass{border-left-color:#0f6e56}.fcard.b-block{border-left-color:#a32d2d}.fcard.b-pending{border-left-color:#ba7517}.fcard.b-skip{border-left-color:#bbb}.fcard.b-error{border-left-color:#a32d2d}
+/* 검증 단계 레인 */
+.lane{border:1px solid #eaeaea;border-radius:11px;margin-bottom:8px;overflow:hidden;transition:all .15s}
+.lane.active{background:#fff}.lane.idle{background:#f7f7f9;opacity:.6}
+.lane.hl{box-shadow:0 0 0 2px #534ab7}
+.lane-head{display:flex;align-items:center;gap:10px;padding:10px 14px}
+.lane-head .lic{font-size:18px}
+.lane-head .lname{font-size:13px;font-weight:600}
+.lane-head .lowner{font-size:10px;color:#999;margin-top:1px}
+.lane-head .lcount{margin-left:auto;font-size:11px;color:#888}
+.lane.idle .lane-head .lcount{font-style:italic}
+.lane-body{padding:0 14px 10px}
+.art-row{border-top:1px solid #f0f0f0;padding:8px 0}
+.art-row .arl{display:flex;align-items:center;gap:8px}
+.art-row .afn{font-family:monospace;font-size:12px;flex:1;word-break:break-all}
+.st-chip{font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;white-space:nowrap}
+.st-pass{background:#e1f5ee;color:#0f6e56}.st-block{background:#fcebeb;color:#a32d2d}.st-pending{background:#faeeda;color:#854f0b}.st-skip{background:#eee;color:#777}.st-error{background:#fcebeb;color:#a32d2d}
+.reasons{margin-top:7px;padding-left:2px}
+.reason{display:flex;gap:7px;align-items:flex-start;font-size:11px;margin-top:5px;line-height:1.45}
+.sev{font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;white-space:nowrap;margin-top:1px}
+.sev-HIGH{background:#fcebeb;color:#a32d2d}.sev-MEDIUM{background:#faeeda;color:#854f0b}.sev-LOW{background:#eef;color:#4a42a8}
+.reason .rc{font-family:monospace;font-weight:600;color:#444}
+.reason .rm{color:#666}
+.reason .rev{font-family:monospace;color:#a32d2d;font-size:10px}
+.grade-tag{font-size:10px;font-family:monospace;color:#999;margin-left:6px}
+.insp-skipped{margin:0 20px 20px;font-size:11px;color:#999;line-height:1.6}
+</style>
 </head>
 <body>
 <div class="header"><h1>🛡️ 적응형 화이트리스트 엔진 — 보안 관리 대시보드</h1><p>AI 모델 공급망 보안 파이프라인 | Adaptive Whitelist Engine v0.1.0</p></div>
@@ -18,14 +83,33 @@
 <div class="stat-card total"><div class="label">영구 차단 목록</div><div class="value">16</div></div>
 </div>
 <div class="tabs">
-<button class="tab active" onclick="switchTab('classify',this)">🔍 분류 테스트</button>
+<button class="tab active" onclick="switchTab('inspect',this)">🔬 모델 검사</button>
+<button class="tab" onclick="switchTab('classify',this)">🔍 분류 테스트</button>
 <button class="tab" onclick="switchTab('pending',this)">📋 리뷰 대기</button>
 <button class="tab" onclick="switchTab('approved',this)">✅ 승인 목록</button>
 <button class="tab" onclick="switchTab('feedback',this)">📨 오탐 피드백</button>
 <button class="tab" onclick="switchTab('audit',this)">📜 감사 로그</button>
 </div>
 
-<div class="tab-content active" id="tab-classify">
+<div class="tab-content active" id="tab-inspect">
+<div class="section">
+<div class="section-header"><h2>🔬 모델 검사 — 전체 검증 파이프라인 가시화</h2></div>
+<div class="inspect-bar">
+<input type="text" id="insp-repo" placeholder="HuggingFace repo_id (예: THUDM/chatglm3-6b)" value="THUDM/chatglm3-6b">
+<input type="text" id="insp-rev" class="rev" placeholder="revision" value="main">
+<label><input type="checkbox" id="insp-skipw" checked> 가중치 제외(빠름)</label>
+<button class="btn btn-primary" id="insp-run" onclick="inspectModel()">검사 실행</button>
+</div>
+<div class="quick-row"><span class="ql">데모 모델</span>
+<button class="chip-btn" onclick="quickPick('THUDM/chatglm3-6b')">THUDM/chatglm3-6b<span class="tag deny">DENY 예상</span></button>
+<button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3')">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
+<button class="chip-btn" onclick="quickPick('tiiuae/falcon-7b-instruct')">tiiuae/falcon-7b-instruct</button>
+</div>
+</div>
+<div id="insp-result"><div class="insp-empty"><span class="big">🔬</span>모델 repo_id를 입력하고 <b>검사 실행</b>을 누르면<br>각 파일이 어떤 검증 단계를 거쳐 최종 판정에 이르는지 전 과정이 표시됩니다.</div></div>
+</div>
+
+<div class="tab-content" id="tab-classify">
 <div class="section"><div class="section-header"><h2>🔍 API 분류 테스트</h2></div>
 <div class="classify-form"><textarea id="api-input">torch.nn.Linear
 torch.nn.functional.gelu
@@ -253,6 +337,117 @@ function rvBadge(s){const m={PENDING:['대기','badge-pending'],UNDER_REVIEW:['�
 function statusBadge(s){const m={ALLOWED:['허용','badge-approved'],BLOCKED:['차단','badge-blocked'],PENDING:['대기','badge-pending'],UNKNOWN:['미등록','badge-conditional']};const[l,c]=m[s]||[s,''];return'<span class="badge '+c+'">'+l+'</span>'}
 
 function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000)}
+
+// ── 모델 검사 (가로 파이프라인 흐름) ─────────────────────────────────
+// route_kind → 검증 단계 메타 (파이프라인 순서)
+const STAGES=[
+  {k:'SAFETENSORS_FAST_PATH',icon:'🔐',name:'안전텐서 해시 검증',owner:'정은미'},
+  {k:'PICKLE_PATH_A',icon:'🥒',name:'피클 opcode 스캔',owner:'정은미'},
+  {k:'PICKLE_PATH_B',icon:'🥒',name:'피클 샌드박스 (Path B)',owner:'정은미'},
+  {k:'CODE_AST_SCAN',icon:'🔬',name:'코드 AST 정적분석',owner:'양유상·김민우'},
+  {k:'CODE_RESTRICTED_RUNTIME',icon:'🛡️',name:'제한 런타임 실행',owner:'김민우'},
+  {k:'CODE_SANDBOX_RUNTIME',icon:'🏖️',name:'gVisor 샌드박스',owner:'양유상'},
+  {k:'CONFIG_SCHEMA_VALIDATION',icon:'⚙️',name:'Config 스키마 검증',owner:'박용담'},
+  {k:'PREPROCESSING_SEMANTIC_SCAN',icon:'📝',name:'전처리 의미 스캔',owner:'박용담·김민우'},
+];
+const ST={PASS:{l:'통과',c:'pass'},BLOCK:{l:'차단',c:'block'},PENDING_REVIEW:{l:'검토대기',c:'pending'},SKIPPED:{l:'건너뜀',c:'skip'},ERROR:{l:'오류',c:'error'}};
+const DEC={
+  DENY:{l:'DENY',s:'배포 차단 — 위험 행위 탐지',c:'dec-deny'},
+  REVIEW_REQUIRED:{l:'REVIEW REQUIRED',s:'사람 검토 필요 — 자동 판정 보류',c:'dec-review'},
+  APPROVE:{l:'APPROVE',s:'배포 허용 — 위험 요소 없음',c:'dec-approve'},
+  ERROR:{l:'ERROR',s:'검증 오류',c:'dec-error'}
+};
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function cntCard(c,l,n){return '<div class="cnt '+c+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
+function hlStage(k,on){document.querySelectorAll(".lane[data-st='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on));document.querySelectorAll(".fcard[data-rk='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on))}
+function quickPick(id){document.getElementById('insp-repo').value=id;inspectModel()}
+
+async function inspectModel(){
+  const repo=document.getElementById('insp-repo').value.trim();
+  if(!repo){showToast('repo_id를 입력하세요');return}
+  const rev=document.getElementById('insp-rev').value.trim()||'main';
+  const skipw=document.getElementById('insp-skipw').checked;
+  const btn=document.getElementById('insp-run');
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>검사 중...';
+  document.getElementById('insp-result').innerHTML='<div class="insp-empty"><span class="big">⏳</span><b>'+esc(repo)+'</b> 다운로드 + 검증 중...<br>큰 모델은 시간이 걸릴 수 있습니다.</div>';
+  const data=await fetchJson(API+'/validation/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_id:repo,revision:rev,skip_weights:skipw})});
+  btn.disabled=false;btn.textContent='검사 실행';
+  const box=document.getElementById('insp-result');
+  if(!data){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>서버 연결 실패</div>';return}
+  if(!data.ok){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>'+esc(data.error||'검사 실패')+'</div>';return}
+  renderInspect(data);loadStats()
+}
+
+function renderInspect(data){
+  const resp=data.response||{};
+  // config auto_map이 참조 코드를 재검증해 동일 (파일|단계|상태) 항목이 중복될 수 있어
+  // 정확히 같은 발견은 한 번만 표시(검사 대상 수와 일치하게).
+  const seen={},results=[];
+  for(const r of (resp.artifact_results||[])){
+    const key=r.artifact.repo_path+'|'+r.route_kind+'|'+r.status;
+    if(seen[key])continue;seen[key]=1;results.push(r);
+  }
+  const byStage={};
+  for(const r of results){(byStage[r.route_kind]=byStage[r.route_kind]||[]).push(r)}
+  const c={PASS:0,BLOCK:0,PENDING_REVIEW:0,SKIPPED:0,ERROR:0};
+  for(const r of results){c[r.status]=(c[r.status]||0)+1}
+  const dec=DEC[resp.overall_decision]||{l:resp.overall_decision,s:'',c:'dec-error'};
+  let h='';
+  h+='<div class="verdict '+dec.c+'"><div><div class="vbig">'+esc(dec.l)+'</div><div class="vsub">'+esc(dec.s)+'</div></div>'
+    +'<div class="vmeta"><b>'+esc(data.repo_id)+'</b>@'+esc(data.revision)+'<br>검사 '+data.validated_count+'개 · release='+esc(resp.release_action)+'</div></div>';
+  h+='<div class="insp-counts">'+cntCard('pass','통과',c.PASS)+cntCard('block','차단',c.BLOCK)
+    +cntCard('pending','검토대기',c.PENDING_REVIEW)+cntCard('skip','건너뜀',c.SKIPPED)
+    +(c.ERROR?cntCard('error','오류',c.ERROR):'')+'</div>';
+  // 3-컬럼 흐름: 입력 → 단계 → 판정
+  h+='<div class="flow"><div><div class="flow-col-title">입력 아티팩트</div>';
+  for(const r of results){
+    const cc=(ST[r.status]||{c:'skip'}).c;
+    h+='<div class="fcard b-'+cc+'" data-rk="'+esc(r.route_kind)+'" onmouseenter="hlStage(\''+esc(r.route_kind)+'\',1)" onmouseleave="hlStage(\''+esc(r.route_kind)+'\',0)">'
+      +'<div class="fn">'+esc(r.artifact.file_name)+'</div><div class="fk">'+esc(r.artifact.file_kind)+'</div></div>';
+  }
+  h+='</div><div class="flow-arrow">→</div><div><div class="flow-col-title">검증 단계 (행위 기반)</div>';
+  for(const s of STAGES){
+    const arts=byStage[s.k]||[];const active=arts.length>0;
+    h+='<div class="lane '+(active?'active':'idle')+'" data-st="'+s.k+'"><div class="lane-head">'
+      +'<span class="lic">'+s.icon+'</span><div><div class="lname">'+s.name+'</div><div class="lowner">'+s.owner+'</div></div>'
+      +'<span class="lcount">'+(active?arts.length+'개':'미사용')+'</span></div>';
+    if(active){
+      h+='<div class="lane-body">';
+      for(const r of arts){
+        const st=ST[r.status]||{l:r.status,c:'skip'};
+        h+='<div class="art-row"><div class="arl"><span class="afn">'+esc(r.artifact.file_name)+'</span>'
+          +(r.grade&&r.grade!=='NA'?'<span class="grade-tag">등급 '+esc(r.grade)+'</span>':'')
+          +'<span class="st-chip st-'+st.c+'">'+esc(st.l)+'</span></div>';
+        const reasons=r.reason_entries||[];
+        if(reasons.length){
+          h+='<div class="reasons">';
+          for(const re of reasons.slice(0,4)){
+            const ev=(re.evidence||[]).join(', ');
+            h+='<div class="reason"><span class="sev sev-'+esc(re.severity||'LOW')+'">'+esc(re.severity||'')+'</span>'
+              +'<div><span class="rc">'+esc(re.code)+'</span> <span class="rm">'+esc(re.message||'')+'</span>'
+              +(ev?'<br><span class="rev">'+esc(ev)+'</span>':'')+'</div></div>';
+          }
+          h+='</div>';
+        }
+        h+='</div>';
+      }
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+  h+='</div><div class="flow-arrow">→</div><div><div class="flow-col-title">최종 판정</div>'
+    +'<div class="verdict '+dec.c+'" style="margin:0;flex-direction:column;align-items:flex-start;gap:6px">'
+    +'<div class="vbig" style="font-size:24px">'+esc(dec.l)+'</div>'
+    +'<div class="vsub">'+(c.BLOCK?c.BLOCK+'건 차단':c.PENDING_REVIEW?c.PENDING_REVIEW+'건 검토대기':'위험 없음')+'</div></div></div></div>';
+  const so=data.skipped_other||[],sw=data.skipped_weights||[];
+  if(so.length||sw.length){
+    h+='<div class="insp-skipped">';
+    if(sw.length)h+='⏭ 가중치 제외('+sw.length+'): '+esc(sw.slice(0,6).join(', '))+(sw.length>6?' …':'')+'<br>';
+    if(so.length)h+='⏭ 검사 대상 아님(OTHER '+so.length+'): '+esc(so.slice(0,6).join(', '))+(so.length>6?' …':'');
+    h+='</div>';
+  }
+  document.getElementById('insp-result').innerHTML=h;
+}
 
 loadStats();loadPending()
 </script>

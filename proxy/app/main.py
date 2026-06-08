@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
@@ -21,6 +22,7 @@ from analyzer.service import validate_job
 from proxy.auth import require_internal_token
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
+from whitelist.model_inspector import inspect_model_repo
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
@@ -83,6 +85,32 @@ def validation_full(payload: ValidationJobRequest, db: Session = Depends(get_db)
     실제 검증 경로(양유상 orchestrator + 본인 화이트리스트/제한 런타임)로 보낸다.
     """
     return run_full_validation(_apply_operator_path_b(payload), db=db)
+
+
+class InspectModelRequest(BaseModel):
+    """대시보드 '모델 검사' 입력 — repo_id만 받아 서버측에서 다운로드/검증."""
+
+    repo_id: str
+    revision: str = "main"
+    skip_weights: bool = True
+    enable_path_b: bool = False
+
+
+@app.post("/internal/v1/validation/inspect")
+def validation_inspect(payload: InspectModelRequest, db: Session = Depends(get_db)):
+    """repo_id를 받아 서버에서 텍스트 아티팩트를 내려받아 통합 검증 실행.
+
+    대시보드 '모델 검사' 탭의 가시화용. 브라우저가 HF 모델을 직접 받을 수
+    없으므로 서버가 다운로드까지 대행한다. ``/validation/full``과 동일한
+    응답 + 다운로드/분류 메타를 묶어 반환(실패도 200 + ``ok:false``).
+    """
+    return inspect_model_repo(
+        payload.repo_id,
+        db=db,
+        revision=payload.revision,
+        skip_weights=payload.skip_weights,
+        enable_path_b=payload.enable_path_b,
+    )
 
 
 # ─────────────────────────────────────────────
