@@ -9,10 +9,8 @@ analyzer/sandbox 라우터는 각 모듈 구현 완료 후 추가 예정.
 """
 
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
@@ -20,6 +18,11 @@ from analyzer.service import validate_job
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
 from proxy.app.demo import router as demo_router
+from proxy.app.static_frontend import (
+    frontend_dashboard,
+    legacy_dashboard,
+    mount_frontend,
+)
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
@@ -33,6 +36,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap", lifespan=lifespan)
+mount_frontend(app)
 
 
 @app.get("/")
@@ -65,26 +69,25 @@ def validation_full(payload: ValidationJobRequest, db: Session = Depends(get_db)
 # 운영 대시보드 (보안 담당자 UI)
 # ─────────────────────────────────────────────
 
-_DASHBOARD_HTML = (
-    Path(__file__).resolve().parent.parent.parent
-    / "whitelist" / "static" / "dashboard.html"
-)
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-def dashboard() -> HTMLResponse:
+@app.get("/dashboard")
+def dashboard():
     """승인된 API / Pending / Audit / Feedback 4탭 운영 UI.
 
     백엔드는 ``/internal/v1/*``에 그대로 살아있고, 이 엔드포인트는 정적
     HTML을 서빙. JS 안에서 ``window.location.origin + '/internal/v1'``을
     호출.
     """
-    if not _DASHBOARD_HTML.exists():
-        return HTMLResponse(
-            content="<h1>dashboard.html not found</h1>",
-            status_code=404,
-        )
-    return HTMLResponse(content=_DASHBOARD_HTML.read_text(encoding="utf-8"))
+    return frontend_dashboard()
+
+
+@app.get("/dashboard/{path:path}")
+def dashboard_deep_link(path: str):
+    return frontend_dashboard()
+
+
+@app.get("/legacy-dashboard")
+def legacy_dashboard_route():
+    return legacy_dashboard()
 
 
 app.include_router(whitelist_router)
