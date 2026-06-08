@@ -27,3 +27,8 @@ data/crawl_output.json
 data/api_inspection.json
 data/api_pytorch.json
 data/org_analysis_output.json
+
+# Office / HWP 임시 잠금 파일 + 로컬 작업 문서 (설계서·보고서 등 코드 외 산출물)
+~$*
+*.docx
+*.hwp
