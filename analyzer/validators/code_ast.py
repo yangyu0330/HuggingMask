@@ -83,6 +83,7 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
         return AstScanResult(repo_path=repo_path, parse_error=str(exc))
 
     alias_map, imports = _build_alias_map_and_imports(tree)
+    var_alias = _build_var_alias(tree, alias_map)
 
     result = AstScanResult(repo_path=repo_path)
     result.imports = sorted(imports)
@@ -140,6 +141,8 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
 
         raw_api_calls.add(raw_name)
         resolved_name = _resolve_alias(raw_name, alias_map)
+        # 변수 별칭 역추적: ``s = os.system; s(cmd)`` → resolved_name "s" → "os.system"
+        resolved_name = var_alias.get(resolved_name, resolved_name)
         leaf = resolved_name.split(".")[-1]
 
         if leaf in _DANGEROUS_CALL_LEAVES:
@@ -148,6 +151,22 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
             dangerous_calls.add(resolved_name)
         if resolved_name.startswith(_DANGEROUS_PREFIX_CALLS):
             dangerous_calls.add(resolved_name)
+
+        # getattr(obj, "name") / getattr(obj, "sys"+"tem") → obj.name 으로 해소해
+        # 위험 호출 탐지(표적 우회를 dynamic/PENDING이 아니라 BLOCK으로 끌어올림).
+        getattr_target, string_built = _resolve_getattr_target(node, alias_map, var_alias)
+        if getattr_target is not None:
+            raw_api_calls.add(getattr_target)
+            g_leaf = getattr_target.split(".")[-1]
+            if (
+                g_leaf in _DANGEROUS_CALL_LEAVES
+                or getattr_target in _DANGEROUS_EXACT_CALLS
+                or getattr_target.startswith(_DANGEROUS_PREFIX_CALLS)
+            ):
+                dangerous_calls.add(getattr_target)
+        if string_built:
+            # 함수/속성명을 문자열로 조립하는 것 자체가 난독화 신호
+            obfuscation_patterns.add("getattr_string_concat")
 
         if leaf in _DYNAMIC_CALL_LEAVES:
             dynamic_patterns.add(resolved_name)
@@ -232,6 +251,65 @@ def _resolve_alias(path: str, alias_map: dict[str, str]) -> str:
     if root in alias_map:
         return f"{alias_map[root]}.{rest}"
     return path
+
+
+# ─────────────────────────────────────────────
+# 데이터플로우 보강 — 표적 우회(별칭/getattr/문자열조립)를 정적 정확매칭으로 해소
+# ─────────────────────────────────────────────
+
+def _fold_str(node: ast.AST) -> str | None:
+    """문자열 상수 또는 상수들의 ``+`` 연결을 접어 값으로 반환. 아니면 None.
+
+    ``"sys" + "tem"`` → ``"system"`` 처럼 함수명을 문자열로 조립해 탐지를
+    우회하는 패턴을 풀어낸다.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _fold_str(node.left)
+        right = _fold_str(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+def _build_var_alias(tree: ast.AST, alias_map: dict[str, str]) -> dict[str, str]:
+    """단순 변수 별칭 추적: ``s = os.system`` / ``e = eval`` → {s: os.system, e: eval}.
+
+    flow-insensitive(마지막 대입 기준)지만, 위험 함수를 변수에 담아 호출하는
+    표적 우회(``s = os.system; s(cmd)``)를 정적 정확매칭으로 끌어올린다.
+    """
+    var_alias: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+            continue
+        target = node.targets[0]
+        if not isinstance(target, ast.Name) or not isinstance(node.value, (ast.Name, ast.Attribute)):
+            continue
+        dotted = _resolve_alias(_dotted_name(node.value), alias_map)
+        if dotted and dotted != target.id:
+            var_alias[target.id] = dotted
+    return var_alias
+
+
+def _resolve_getattr_target(
+    node: ast.Call, alias_map: dict[str, str], var_alias: dict[str, str]
+) -> tuple[str | None, bool]:
+    """``getattr(obj, "name")`` → ``obj.name`` 으로 해소.
+
+    Returns ``(resolved_dotted_or_None, string_built)``. string_built=True면 attr가
+    문자열 상수 연결로 조립된 경우(난독화 신호). attr가 비상수(동적)면 해소 불가.
+    """
+    func = node.func
+    if not (isinstance(func, ast.Name) and func.id == "getattr") or len(node.args) < 2:
+        return None, False
+    obj_name = _resolve_alias(_dotted_name(node.args[0]), alias_map)
+    obj_name = var_alias.get(obj_name, obj_name)
+    attr = _fold_str(node.args[1])
+    string_built = isinstance(node.args[1], ast.BinOp)
+    if not obj_name or attr is None:
+        return None, string_built
+    return f"{obj_name}.{attr}", string_built
 
 
 def _is_three_arg_type_call(node: ast.Call) -> bool:
