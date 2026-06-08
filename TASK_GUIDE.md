@@ -1,13 +1,14 @@
 # TASK GUIDE
 
-HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.  
-현재는 데모코드 검토를 끝내고 실제 검증 엔진 코드 제작에 들어가는 단계입니다.
+HuggingMask 팀의 작업 수행 기준 문서입니다.
+2026-06-08 기준 프로젝트는 최종 발표용 MVP freeze 단계이며, 새 기능 추가보다 데모 안정화, 문서 최신화, 증빙 정리를 우선한다.
 
 ## 1. 운영 리듬
 - 시작 전: 담당 범위와 입력/출력 확인
 - 진행 중: 개인 개발 + 짧은 진행 보고
 - 종료 전: 테스트 확인, PR 생성, 증빙 자료 정리
 - 블로커 발생 시: 같은 날 팀에 공유하고 범위 조정
+- 발표 주간: 기능 추가보다 회귀 방지, 데모 리허설, 캡처/로그 증빙을 우선
 
 일일 보고 예시:
 ```text
@@ -31,6 +32,7 @@ HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.
 - [ ] `feature/*` 브랜치 생성 완료
 - [ ] 작업 범위(모듈/파일) 명확화
 - [ ] 완료 기준(테스트/동작) 정의
+- [ ] 발표 데모에 영향이 있는 변경인지 확인
 
 ## 5. 작업 수행 체크리스트
 - [ ] 코드 직접 읽기 및 흐름 이해
@@ -38,6 +40,7 @@ HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.
 - [ ] 기존 기능 영향 확인
 - [ ] 테스트 수행 (`python -m pytest -q`)
 - [ ] 불필요 파일/코드 정리
+- [ ] Docker 실행 기준이 깨지지 않는지 확인 (`docker compose build proxy` 또는 `docker compose up --build`)
 
 ## 6. 작업 종료 체크리스트
 - [ ] 커밋 메시지 규칙 준수
@@ -50,8 +53,8 @@ HuggingMask 팀의 구현 착수 및 작업 수행 기준 문서입니다.
 - `analyzer`: 박용담/정은미/양유상 담당 검증 흐름의 중심 모듈
 - `analyzer/validators`: 정은미/양유상 담당 파일 유형별 검증 경로
 - `whitelist`: 김민우 담당 적응형 화이트리스트와 pending API 관리
-- `proxy`: 후순위 FastAPI 진입점, 향후 `orchestrator` 호출 담당
-- `sandbox`: 정은미/양유상 검증에서 제한 실행이 필요할 때 연결
+- `proxy`: FastAPI 실행 진입점. health, Swagger, dashboard, validation API, whitelist 운영 API 제공
+- `sandbox`: B-2 제한 실행 증빙 경로. 기본 검증에서는 opt-in이며, release 판단은 analyzer/orchestrator가 수행
 
 ## 8. 증빙 자료 운영 규칙
 다음 폴더를 작업 단위로 업데이트합니다.
@@ -77,8 +80,9 @@ evidence/budget
 - 통합 실패 시 개인 작업보다 통합 안정화 우선
 
 ## 10. 최종 목표
-각 담당자가 만든 코드를 공통 JSON 계약으로 붙일 수 있는 상태를 만든다.
-- 박용담/정은미/양유상/김민우 입출력 계약 일치
-- mock fixture 기반 검증 가능
-- `python -m pytest -q` 통과
-- 구현 근거와 테스트 결과 증빙
+최종 발표에서는 다음을 흔들림 없이 보여준다.
+- 모델 파일, 코드, 설정, 전처리 메타데이터가 공통 JSON 계약으로 검증되는 흐름
+- 정상 safetensors fast path와 pickle release 정책
+- malicious pickle/config/Python code 차단
+- whitelist pending/review/audit 운영 흐름
+- `python -m pytest -q` 전체 통과와 Docker health check 증빙

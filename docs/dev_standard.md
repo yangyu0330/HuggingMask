@@ -5,17 +5,19 @@
 - Branch rules: `main`, `dev`, `feature/*`
 - Module structure: `proxy`, `analyzer`, `whitelist`, `sandbox`
 - Shared service port: `8000`
-- Python version (single team standard): `3.13`
+- Python version (single team standard): `3.12`
 - Package install method: `venv + pip`
 - Run baseline: `docker compose up --build`
 - Minimum success criteria:
   - `GET /health` returns `200`
-  - `python -m pytest` has at least 1 passing test
+  - `python -m pytest -q` full regression suite passes
+
+Python 3.12 is required because `modelscan` does not support Python 3.13. The Dockerfile uses `python:3.12-slim` for the same reason.
 
 ## 2) Team Local Environment Prerequisites
 Install:
 - Git
-- Python 3.13
+- Python 3.12
 - Docker Desktop (with Compose)
 
 Each member must submit screenshots of these checks:
@@ -47,6 +49,12 @@ Run app:
 Validation endpoints:
 - `http://127.0.0.1:8000/health`
 - `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/dashboard`
 
 Run test:
 - `python -m pytest -q`
+
+Presentation baseline checked on 2026-06-08:
+- pytest: `700 passed, 1 skipped`
+- Docker image build: passed
+- container `/health` and `/docs`: passed

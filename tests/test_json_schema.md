@@ -22,4 +22,5 @@
 - 실명 담당자 표기와 `CodeGrade` 값은 별도 의미로 검증한다.
 
 ## 관련 테스트
-- 향후 `tests/test_json_schema.py`
+- `tests/test_json_schema.py`
+- `tests/test_b2_schema_round_trip.py`

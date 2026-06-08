@@ -229,7 +229,7 @@ rm: 15초
 초기 Dockerfile 기준:
 
 ```Dockerfile
-FROM python:3.13-slim
+FROM python:3.12-slim
 
 RUN useradd -u 1000 -m sandboxuser
 
@@ -372,7 +372,7 @@ Windows 11
 Docker Desktop desktop-linux Linux daemon
 Docker context: desktop-linux
 gVisor runsc
-Python 3.13
+Python 3.12
 ```
 
 선택 환경:
@@ -381,7 +381,7 @@ Python 3.13
 WSL2 Ubuntu
 Docker Engine 또는 Docker Desktop WSL integration
 gVisor runsc
-Python 3.13
+Python 3.12
 ```
 
 공식 기준:

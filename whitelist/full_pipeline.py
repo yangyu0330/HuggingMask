@@ -496,6 +496,11 @@ def run_full_validation(
             )
             # WhitelistEngineLookup용 pydantic ModelRef (model= 인자는 별도 타입)
             wl_model = model if model is not None else _whitelist_model(analyzer_model)
+            source_resolver = None
+            if request.model_snapshot_root or request.model_snapshot_inventory:
+                from analyzer.snapshot_resolver import SnapshotSourceResolver
+
+                source_resolver = SnapshotSourceResolver.from_request(request)
 
             cresp = run_validation_job_with_whitelist_engine(
                 cc_request,
@@ -504,6 +509,7 @@ def run_full_validation(
                 model=wl_model,
                 source_loader=sources,
                 runtime_check_loader=runtime_loader,
+                source_resolver=source_resolver,
             )
             results.extend(cresp.artifact_results)
             _extend_unique(approved_artifact_ids, cresp.approved_artifact_ids)

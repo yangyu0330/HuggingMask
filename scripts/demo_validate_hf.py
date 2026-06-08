@@ -14,11 +14,13 @@ HF Hub에서 모델 repo를 다운로드 → 파일별로 sha256 + FileKind 분�
     python scripts/demo_validate_hf.py vmaca123/korean-pii-ner-v3
     python scripts/demo_validate_hf.py <repo_id> --api http://127.0.0.1:8000 --enable-path-b
     python scripts/demo_validate_hf.py <repo_id> --skip-weights   # 큰 safetensors 빼고 빠르게
+    python scripts/demo_validate_hf.py <repo_id> --include model.safetensors
 """
 
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import sys
 import uuid
@@ -44,15 +46,37 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def build_artifacts(local_dir: Path, repo_id: str, skip_weights: bool) -> list[dict]:
+def _matches_any(value: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
+
+
+def build_artifacts(
+    local_dir: Path,
+    repo_id: str,
+    skip_weights: bool,
+    *,
+    include_patterns: list[str] | None = None,
+    exclude_patterns: list[str] | None = None,
+) -> list[dict]:
     artifacts = []
     skipped_other = []
     skipped_weights = []
+    skipped_include = []
+    skipped_exclude = []
+    include_patterns = include_patterns or []
+    exclude_patterns = exclude_patterns or []
 
     for path in sorted(local_dir.rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(local_dir).as_posix()
+        if include_patterns and not _matches_any(rel, include_patterns):
+            skipped_include.append(rel)
+            continue
+        if exclude_patterns and _matches_any(rel, exclude_patterns):
+            skipped_exclude.append(rel)
+            continue
+
         kind = classify_core_file_kind(rel)
         if kind is FileKind.OTHER:
             skipped_other.append(rel)
@@ -82,6 +106,16 @@ def build_artifacts(local_dir: Path, repo_id: str, skip_weights: bool) -> list[d
     if skipped_weights:
         print(f"\n[사용자 옵션 제외 - --skip-weights] {len(skipped_weights)}개")
         for r in skipped_weights:
+            print(f"    · {r}")
+
+    if skipped_include:
+        print(f"\n[사용자 옵션 제외 - --include 불일치] {len(skipped_include)}개")
+        for r in skipped_include:
+            print(f"    · {r}")
+
+    if skipped_exclude:
+        print(f"\n[사용자 옵션 제외 - --exclude 일치] {len(skipped_exclude)}개")
+        for r in skipped_exclude:
             print(f"    · {r}")
 
     return artifacts
@@ -133,6 +167,10 @@ def main() -> int:
                    help="pickle Path B(Docker 샌드박스) 활성화 — runsc + 이미지 필요")
     p.add_argument("--skip-weights", action="store_true",
                    help="safetensors/pickle 가중치 제외(큰 파일 다운로드 생략)")
+    p.add_argument("--include", action="append", default=[],
+                   help="검증할 repo path glob. 반복 가능. 예: --include model.safetensors")
+    p.add_argument("--exclude", action="append", default=[],
+                   help="제외할 repo path glob. 반복 가능. 예: --exclude pytorch_model.bin")
     p.add_argument("--weight-only", action="store_true",
                    help="/validation/jobs(가중치 전용) 사용. 기본은 /validation/full "
                         "(가중치+코드+config+화이트리스트+제한런타임 통합)")
@@ -147,7 +185,9 @@ def main() -> int:
 
     print(f"[1/3] '{args.repo_id}' 다운로드 중... (큰 모델은 시간이 걸립니다)")
     allow = None
-    if args.skip_weights:
+    if args.include:
+        allow = args.include
+    elif args.skip_weights:
         # 가중치 제외 — 빠른 데모용. 작은 메타 파일만.
         allow = ["*.json", "*.txt", "*.py", "*.md"]
     local_dir = snapshot_download(
@@ -160,7 +200,13 @@ def main() -> int:
     print(f"      → {local_path}")
 
     print("[2/3] 파일 분류 + sha256 계산 중...")
-    artifacts = build_artifacts(local_path, args.repo_id, args.skip_weights)
+    artifacts = build_artifacts(
+        local_path,
+        args.repo_id,
+        args.skip_weights,
+        include_patterns=args.include,
+        exclude_patterns=args.exclude,
+    )
     if not artifacts:
         print("검증 대상 artifact가 없습니다 (FileKind 매핑되는 파일 없음).", file=sys.stderr)
         return 1

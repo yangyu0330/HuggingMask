@@ -2,9 +2,27 @@
 
 문서 버전: v1.0  
 작성일: 2026-05-19  
+최신화: 2026-06-08
 기준 브랜치: `origin/dev`  
 기준 커밋: `14b3eb5`  
 대상 저장소: `C:/Users/andyw/Desktop/HuggingMask`
+
+## 0. 2026-06-08 구현 상태 메모
+
+이 문서의 본문은 2026-05-19 기준 상세 설계 이력이다. 2026-06-08 발표 전 기준으로는 다음 항목이 구현/테스트에 반영됐다.
+
+- B-2 sandbox 대상 경계와 optional runner 계약
+- SnapshotSourceResolver 기반 source loading/staging
+- config `auto_map` sibling Python promotion
+- B-2 input manifest, manifest hash, trusted entrypoint 계약
+- Docker/runsc command planning, inspect fixture validator, runsc log parser
+- fake runner 기반 fixture e2e와 로컬 Docker demo script 계약
+
+아직 남은 범위:
+
+- production validation job에서 실제 Docker/runsc를 기본 실행하는 운영 자동화
+- Linux runsc 실환경 e2e CI
+- production queue/DB/review UI와 B-2 evidence의 완전한 통합
 
 ## 1. 목적
 

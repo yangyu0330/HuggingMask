@@ -23,6 +23,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
 @pytest.fixture
 def client(monkeypatch):
     """매 테스트마다 격리 SQLite + reload (test_router_e2e.py 패턴 동일)."""
@@ -76,48 +79,65 @@ class TestDashboardEndpoint:
         assert r.status_code == 200
         assert "text/html" in r.headers.get("content-type", "")
 
-    def test_dashboard_contains_internal_v1_api_base(self, client):
-        """JS가 우리 인터페이스 prefix를 사용하는지 회귀.
-        ``/api/v1`` (원본 lowercase)로 회귀하면 fail.
-        """
+    def test_dashboard_contains_react_app_and_legacy_api_base(self, client):
         r = client.get("/dashboard")
         body = r.text
-        assert "/internal/v1" in body
-        assert "'/api/v1'" not in body  # 원본 prefix 회귀 방지
+        assert '<div id="root">' in body
+        assert "/assets/" in body
 
-    def test_dashboard_uses_uppercase_enum(self, client):
-        """JS의 enum 매핑이 대문자(우리 schema)로 되어있는지 회귀."""
-        r = client.get("/dashboard")
-        body = r.text
-        # 핵심 enum이 대문자로 등장
-        assert "AUTO_APPROVE" in body
-        assert "PENDING" in body
-        assert "ALLOWED" in body or "BLOCKED" in body
-        # statusBadge / clsBadge / rvBadge 함수 정의 존재
-        assert "statusBadge" in body
-        assert "clsBadge" in body
-        assert "rvBadge" in body
+        legacy = client.get("/legacy-dashboard")
+        assert legacy.status_code == 200
+        assert "/internal/v1" in legacy.text
+        assert "'/api/v1'" not in legacy.text
 
-    def test_dashboard_has_four_tabs(self, client):
-        r = client.get("/dashboard")
-        body = r.text
-        assert "분류 테스트" in body
-        assert "리뷰 대기" in body
-        assert "승인 목록" in body
-        assert "오탐 피드백" in body
-        assert "감사 로그" in body
+    def test_dashboard_operations_source_uses_uppercase_enums(self, client):
+        source = (
+            REPO_ROOT
+            / "frontend"
+            / "src"
+            / "features"
+            / "operations"
+            / "OperationsPage.tsx"
+        ).read_text(encoding="utf-8")
+
+        assert "AUTO_APPROVE" in source
+        assert "PENDING" in source
+        assert "ALLOWED" in source
+        assert "BLOCKED" in source
+        assert "추천 분류" in source
+        assert "검토 상태" in source
+
+    def test_dashboard_nav_links_react_routes(self, client):
+        app_source = (REPO_ROOT / "frontend" / "src" / "app" / "App.tsx").read_text(
+            encoding="utf-8"
+        )
+        routes_source = (
+            REPO_ROOT / "frontend" / "src" / "app" / "routes.tsx"
+        ).read_text(encoding="utf-8")
+
+        assert "개요" in app_source
+        assert "데모 콘솔" in app_source
+        assert "실제 모델" in app_source
+        assert "검증 상세" in app_source
+        assert "운영 관리" in app_source
+        assert "근거 자료" in app_source
+        assert 'path="/live"' in routes_source
+        assert 'path="/operations"' in routes_source
+        assert "OperationsPage" in routes_source
 
     def test_dashboard_uses_risk_keywords_not_old_key(self, client):
-        """원본 ``danger_keywords_found`` 키를 우리 ``risk_keywords``로 교체한 회귀."""
-        r = client.get("/dashboard")
-        body = r.text
-        # 우리 키 사용
-        assert "risk_keywords" in body
-        # 원본 키는 더 이상 안 씀
-        assert "danger_keywords_found" not in body
+        source = (
+            REPO_ROOT
+            / "frontend"
+            / "src"
+            / "features"
+            / "operations"
+            / "OperationsPage.tsx"
+        ).read_text(encoding="utf-8")
+        assert "risk_keywords" in source
+        assert "danger_keywords_found" not in source
 
 
-# ─────────────────────────────────────────────
 # /internal/v1/approved 엔드포인트
 # ─────────────────────────────────────────────
 
