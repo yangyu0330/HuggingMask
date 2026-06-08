@@ -179,6 +179,12 @@ def test_overview_binds_required_readiness_endpoints():
     assert "readiness.evidence.missing" in overview_source
     assert "readiness.warnings" in overview_source
     assert "pipelineStages" in overview_source
+    assert "모델 수신 후 검증 흐름" in overview_source
+    assert "가중치 파일" in overview_source
+    assert "Python 파일" in overview_source
+    assert "config 파일" in overview_source
+    assert "A/B-1/B-2/C" in overview_source
+    assert "파일별 독립 검사" in overview_source
     assert "ErrorPanel" in overview_source
     assert "aria-busy" in overview_source
 
@@ -212,18 +218,54 @@ def test_demo_console_binds_scenarios_and_validation_detail():
     assert 'path="/validation"' in routes_source
     assert "scenario-list" in demo_source
     assert "matched_expectation" in demo_source
-    assert "Expectation Match" in demo_source
-    assert "Job Decision" in demo_source
-    assert "Artifact Status" in demo_source
+    assert "기대값 일치" in demo_source
+    assert "작업 판정" in demo_source
+    assert "산출물 상태" in demo_source
     assert "generated_artifacts" in demo_source
     assert "safetensors" in demo_source
     assert "validation_response" in demo_source
-    assert "Raw JSON" in demo_source
-    assert "Decision Hierarchy" in validation_source
-    assert "Route Explanation" in validation_source
+    assert "원본 JSON" in demo_source
+    assert "선택한 파일 해설" in demo_source
+    assert "기술 상세 JSON" in demo_source
+    assert "검증 응답 JSON" in demo_source
+    assert "validationDecisionSummary" in demo_source
+    assert "판정 계층" in validation_source
+    assert "한눈에 보는 판정 해설" in validation_source
+    assert "파일별 해설" in validation_source
+    assert "검증 경로 설명" in validation_source
     assert "coverage_summary" in validation_source
+    assert "전체 검증 응답 JSON" in validation_source
     assert "innerHTML" not in demo_source
     assert "innerHTML" not in validation_source
+
+
+def test_live_model_page_binds_real_model_run_flow():
+    api_source = (REPO_ROOT / "frontend" / "src" / "api" / "demo.ts").read_text(
+        encoding="utf-8"
+    )
+    routes_source = (REPO_ROOT / "frontend" / "src" / "app" / "routes.tsx").read_text(
+        encoding="utf-8"
+    )
+    live_source = (
+        REPO_ROOT / "frontend" / "src" / "features" / "live" / "LiveModelPage.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "apiPost<LiveModelRunResponse, LiveModelRunRequest>('/demo/live-model/run'" in api_source
+    assert 'path="/live"' in routes_source
+    assert "LiveModelPage" in routes_source
+    assert "실제 Hugging Face 모델 실행" in live_source
+    assert "Hugging Face 모델 ID" in live_source
+    assert "진행 과정" in live_source
+    assert "가중치 검사" in live_source
+    assert "Python 코드 검사" in live_source
+    assert "config 검사" in live_source
+    assert "샌드박스 실행 근거" in live_source
+    assert "sandbox_summary" in live_source
+    assert "B-2 샌드박스 대상" in live_source
+    assert "gVisor/runsc 실행 근거" in live_source
+    assert "koreanReasonCodeTitle" in live_source
+    assert "최종 판정 읽는 법" in live_source
+    assert "innerHTML" not in live_source
 
 
 def test_operations_binds_required_endpoints_and_safe_rendering():
@@ -255,14 +297,14 @@ def test_operations_binds_required_endpoints_and_safe_rendering():
 
     assert 'path="/operations"' in routes_source
     assert "OperationsPage" in routes_source
-    assert "Whitelist Check" in ops_source
-    assert "Pending Review Queue" in ops_source
-    assert "AUTO_APPROVE is a recommendation" in ops_source
-    assert "Approved and Blocked Policies" in ops_source
-    assert "Submit feedback" in ops_source
-    assert "Verify chain" in ops_source
+    assert "화이트리스트 확인" in ops_source
+    assert "검토 대기열" in ops_source
+    assert "AUTO_APPROVE는 추천" in ops_source
+    assert "승인/차단 정책" in ops_source
+    assert "피드백 제출" in ops_source
+    assert "체인 검증" in ops_source
     assert "reviewDecisions" in ops_source
-    assert 'ErrorPanel title="Review decision failed"' in ops_source
+    assert 'ErrorPanel title="검토 결정 실패"' in ops_source
     assert "error={reviewMutation.error}" in ops_source
     assert "reviewMutation.reset()" in ops_source
     assert "'approve'" in ops_source
@@ -294,15 +336,15 @@ def test_evidence_route_binds_evidence_api_and_limitations():
     assert "apiGet<DemoEvidenceResponse>('/demo/evidence')" in api_source
     assert 'path="/evidence"' in routes_source
     assert "EvidencePage" in routes_source
-    assert "Evidence Matrix" in evidence_source
-    assert "Missing Evidence" in evidence_source
-    assert "Demo Documents" in evidence_source
-    assert "Known Limitations" in evidence_source
+    assert "근거 자료 매트릭스" in evidence_source
+    assert "누락된 근거 자료" in evidence_source
+    assert "데모 문서" in evidence_source
+    assert "알려진 한계" in evidence_source
     assert "B-2/gVisor" in evidence_source
-    assert "opt-in evidence" in evidence_source
-    assert "Live Hugging Face" in evidence_source
-    assert "not a production crawler claim" in evidence_source
-    assert "focused build and pytest checks" in evidence_source
+    assert "선택적으로 켜는 근거" in evidence_source
+    assert "실제 Hugging Face" in evidence_source
+    assert "운영용 크롤러를 주장하지 않습니다" in evidence_source
+    assert "집중 빌드와 pytest 확인" in evidence_source
     assert "README.md" in evidence_source
     assert "SETUP_GUIDE.md" in evidence_source
     assert "docs/final_demo_script.md" in evidence_source

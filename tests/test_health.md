@@ -14,7 +14,7 @@
 - JSON body: `{"status": "ok"}`
 
 ## 구현 시 주의사항
-- 이 테스트는 프록시가 후순위인 동안에도 깨지면 안 된다.
+- 이 테스트는 validation API, dashboard, whitelist router 변경 중에도 깨지면 안 된다.
 - 검증 엔진 문서 추가나 모듈 구조 변경이 health endpoint에 영향을 주지 않아야 한다.
 
 ## 관련 테스트

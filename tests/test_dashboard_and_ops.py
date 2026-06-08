@@ -104,8 +104,8 @@ class TestDashboardEndpoint:
         assert "PENDING" in source
         assert "ALLOWED" in source
         assert "BLOCKED" in source
-        assert "Recommendation" in source
-        assert "Review Status" in source
+        assert "추천 분류" in source
+        assert "검토 상태" in source
 
     def test_dashboard_nav_links_react_routes(self, client):
         app_source = (REPO_ROOT / "frontend" / "src" / "app" / "App.tsx").read_text(
@@ -115,11 +115,13 @@ class TestDashboardEndpoint:
             REPO_ROOT / "frontend" / "src" / "app" / "routes.tsx"
         ).read_text(encoding="utf-8")
 
-        assert "Overview" in app_source
-        assert "Demo Console" in app_source
-        assert "Validation Detail" in app_source
-        assert "Operations" in app_source
-        assert "Evidence" in app_source
+        assert "개요" in app_source
+        assert "데모 콘솔" in app_source
+        assert "실제 모델" in app_source
+        assert "검증 상세" in app_source
+        assert "운영 관리" in app_source
+        assert "근거 자료" in app_source
+        assert 'path="/live"' in routes_source
         assert 'path="/operations"' in routes_source
         assert "OperationsPage" in routes_source
 

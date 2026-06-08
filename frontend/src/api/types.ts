@@ -123,6 +123,83 @@ export interface DemoRunResponse {
   cache_check_response: ValidationJobResponse | null;
 }
 
+export interface LiveModelRunRequest {
+  repo_id: string;
+  revision: string;
+  skip_weights: boolean;
+  enable_path_b: boolean;
+  include_patterns: string[];
+  exclude_patterns: string[];
+  requested_by: string;
+}
+
+export interface LiveModelStep {
+  id: string;
+  title: string;
+  status: ValidationStatus | 'SKIPPED' | 'PASS' | 'BLOCK' | 'PENDING_REVIEW' | 'ERROR';
+  detail: string;
+  duration_ms: number | null;
+  items: string[];
+}
+
+export interface LiveModelLaneResult {
+  lane: 'weights' | 'python' | 'config';
+  title: string;
+  description: string;
+  status: ValidationStatus | 'SKIPPED';
+  count: number;
+  results: ArtifactValidationResult[];
+}
+
+export interface LiveModelSandboxCheck {
+  repo_path: string;
+  artifact_id: string;
+  status: ValidationStatus;
+  grade: string;
+  route_kind: string;
+  decision: string;
+  deployable: boolean;
+  sandbox_runtime: string | null;
+  reason_code: string | null;
+  reason: string | null;
+  execution: Record<string, unknown>;
+  runtime_evidence: Record<string, unknown>;
+  security_events: Record<string, unknown>;
+  manifest_evidence: Record<string, unknown>;
+  policy_gate: Record<string, unknown>;
+  artifacts: Record<string, unknown>;
+}
+
+export interface LiveModelSandboxSummary {
+  requested: boolean;
+  eligible_count: number;
+  check_count: number;
+  ran_count: number;
+  skipped_count: number;
+  blocked_event_count: number;
+  status: ValidationStatus | 'SKIPPED';
+  message: string;
+  checks: LiveModelSandboxCheck[];
+}
+
+export interface LiveModelRunResponse {
+  run_id: string;
+  repo_id: string;
+  revision: string;
+  started_at: string;
+  finished_at: string;
+  snapshot_root: string;
+  fast_mode: boolean;
+  enable_path_b: boolean;
+  file_summary: Record<string, number>;
+  skipped: Record<string, string[]>;
+  steps: LiveModelStep[];
+  artifacts: ArtifactRef[];
+  lane_results: LiveModelLaneResult[];
+  sandbox_summary: LiveModelSandboxSummary;
+  validation_response: ValidationJobResponse;
+}
+
 export interface WhitelistCheckResult {
   api_path: string;
   status: WhitelistStatus;

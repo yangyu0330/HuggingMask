@@ -10,7 +10,7 @@ export interface OverviewData {
 async function fetchHealth(): Promise<HealthResponse> {
   const response = await fetch('/health', { headers: { Accept: 'application/json' } });
   if (!response.ok) {
-    throw new Error(`GET /health failed with ${response.status}`);
+    throw new Error(`GET /health 실패: HTTP ${response.status}`);
   }
   return response.json() as Promise<HealthResponse>;
 }

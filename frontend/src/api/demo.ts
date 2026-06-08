@@ -5,6 +5,8 @@ import type {
   DemoRunResponse,
   DemoScenarioDetail,
   DemoScenarioListResponse,
+  LiveModelRunRequest,
+  LiveModelRunResponse,
 } from './types';
 
 export const LAST_DEMO_RUN_KEY = 'huggingmask:last-demo-run';
@@ -32,6 +34,10 @@ export function runDemoScenario(
 
 export function getDemoEvidence(): Promise<DemoEvidenceResponse> {
   return apiGet<DemoEvidenceResponse>('/demo/evidence');
+}
+
+export function runLiveModel(request: LiveModelRunRequest): Promise<LiveModelRunResponse> {
+  return apiPost<LiveModelRunResponse, LiveModelRunRequest>('/demo/live-model/run', request);
 }
 
 export function saveLastDemoRun(run: DemoRunResponse) {

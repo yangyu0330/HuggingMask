@@ -59,3 +59,32 @@ def test_demo_skip_weights_reports_explicitly_and_keeps_metadata(tmp_path, capsy
     assert "--skip-weights" in output
     assert "model.safetensors" in output
     assert "weights.pkl" in output
+
+
+def test_demo_include_exclude_filters_supported_files(tmp_path, capsys) -> None:
+    for repo_path in [
+        "model.safetensors",
+        "pytorch_model.bin",
+        "tokenizer_config.json",
+        "nested/model.safetensors",
+    ]:
+        _write_fixture(tmp_path, repo_path)
+
+    artifacts = build_artifacts(
+        tmp_path,
+        "org/model",
+        skip_weights=False,
+        include_patterns=["*.safetensors", "tokenizer_config.json"],
+        exclude_patterns=["nested/*"],
+    )
+
+    assert [artifact["repo_path"] for artifact in artifacts] == [
+        "model.safetensors",
+        "tokenizer_config.json",
+    ]
+
+    output = capsys.readouterr().out
+    assert "--include 불일치" in output
+    assert "pytorch_model.bin" in output
+    assert "--exclude 일치" in output
+    assert "nested/model.safetensors" in output

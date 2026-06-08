@@ -169,6 +169,69 @@ def test_demo_evidence_and_readiness(client):
     assert "missing" in body["evidence"]
 
 
+def test_live_model_run_reports_download_classify_lanes_and_final(client, monkeypatch, tmp_path):
+    snapshot = tmp_path / "hf_snapshot"
+    snapshot.mkdir()
+    (snapshot / "config.json").write_text(
+        '{"model_type":"demo","architectures":["DemoModel"]}',
+        encoding="utf-8",
+    )
+    (snapshot / "modeling_demo.py").write_text(
+        "import torch\\nclass DemoModel:\\n    def forward(self, x):\\n        return torch.special.expit(x)\\n",
+        encoding="utf-8",
+    )
+    (snapshot / "model.safetensors").write_bytes(b"not-used-in-fast-mode")
+
+    from proxy.app import demo as d_mod
+
+    monkeypatch.setattr(d_mod, "_download_hf_snapshot", lambda request: snapshot)
+
+    response = client.post(
+        "/internal/v1/demo/live-model/run",
+        json={"repo_id": "org/demo-model", "skip_weights": True, "enable_path_b": True},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["repo_id"] == "org/demo-model"
+    assert body["fast_mode"] is True
+    assert body["file_summary"]["python"] >= 1
+    assert body["file_summary"]["config"] >= 1
+    assert "model.safetensors" in body["skipped"]["weights_fast_mode"]
+    step_titles = [step["title"] for step in body["steps"]]
+    assert "Hugging Face 모델 다운로드" in step_titles
+    assert "파일 분류" in step_titles
+    assert "파일별 검증 실행" in step_titles
+    assert "샌드박스 실행 근거" in step_titles
+    assert "최종 릴리스 판정" in step_titles
+    lanes = {lane["lane"]: lane for lane in body["lane_results"]}
+    assert "python" in lanes
+    assert "config" in lanes
+    sandbox_summary = body["sandbox_summary"]
+    python_results = [
+        {
+            "repo_path": item["artifact"]["repo_path"],
+            "status": item["status"],
+            "grade": item["grade"],
+            "route_kind": item["route_kind"],
+            "review_action": item["review_action"],
+            "has_sandbox_check": "sandbox_check" in item["details"],
+            "detail_keys": sorted(item["details"].keys()),
+        }
+        for item in body["validation_response"]["artifact_results"]
+        if item["artifact"]["file_kind"] == "PYTHON"
+    ]
+    assert sandbox_summary["requested"] is True
+    assert sandbox_summary["eligible_count"] >= 1
+    assert sandbox_summary["check_count"] >= 1, python_results
+    assert sandbox_summary["checks"][0]["decision"] == "NOT_RUN"
+    assert sandbox_summary["checks"][0]["reason_code"] in {
+        "SANDBOX_NOT_CONFIGURED",
+        "SANDBOX_CHECK_NOT_ATTACHED",
+    }
+    assert "validation_response" in body
+
+
 def test_strict_default_config_trigger_response_is_consistent(client):
     response = client.post(
         "/internal/v1/demo/scenarios/hm-05-bad-config-automap/run",

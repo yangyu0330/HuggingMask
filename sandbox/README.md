@@ -30,7 +30,7 @@ Not implemented yet:
 정은미, 양유상, 공통
 
 ## 목적
-`sandbox`는 현재 직접 구현 대상이 아니다. 가중치 검증 Path B 또는 코드 runtime 검증이 필요해질 때 제한 실행 환경을 제공한다.
+`sandbox`는 가중치 검증 Path B 또는 코드 runtime 검증이 필요할 때 제한 실행 증빙을 제공하는 opt-in 모듈이다. 기본 pytest와 일반 validation job은 실제 Docker/runsc 실행에 의존하지 않는다.
 
 ## 입력
 - sandbox 실행이 필요한 artifact
@@ -46,11 +46,14 @@ Not implemented yet:
 - sandbox 결과가 있어도 최종 release 판단은 orchestrator에서 한다.
 - 네트워크 차단, read-only filesystem, timeout 정책을 기본 전제로 둔다.
 - 구현 전까지 정은미/양유상 담당 모듈은 sandbox가 없을 수 있음을 명시적으로 처리해야 한다.
+- Docker/runsc 실환경 실행은 로컬 데모 스크립트와 별도 이미지 기준으로 검증한다.
 
 ## 관련 테스트
 - `tests/test_weight_validator.md`
 - `tests/test_code_validator.md`
 - `tests/test_validation_flow.md`
+- `tests/test_b2_full_fixture_flow.py`
+- `tests/test_b2_demo_script_contract.py`
 
 ## 상세 설계
 - gVisor 공통 운영 원칙: `docs/gVisor_공통_운영_원칙.md`

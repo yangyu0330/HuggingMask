@@ -12,6 +12,7 @@ generated/
 *.sqlite
 *.sqlite3
 .claude/
+.codex/
 demo_snapshots/
 hf_cache/
 .huggingface/

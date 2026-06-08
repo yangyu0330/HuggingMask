@@ -6,8 +6,8 @@ _Notion 업로드용 / 구현 기준 문서_
 - 문서명: HuggingMask 인터페이스 정의서
 - 버전: v1.0
 - 상태: Freeze Candidate
-- 적용 범위: 박용담 파일분류/JSON/config/tokenizer, 정은미 가중치검증경로, 양유상 코드검증경로, 김민우 적응형 화이트리스트 엔진, Proxy 후순위 진입점
-- 인터페이스 기준: 코드 제작 착수 전 고정
+- 적용 범위: 박용담 파일분류/JSON/config/tokenizer, 정은미 가중치검증경로, 양유상 코드검증경로, 김민우 적응형 화이트리스트 엔진, Proxy FastAPI 진입점
+- 인터페이스 기준: 2026-06-08 발표용 MVP 기준으로 최신화
 - 변경 정책: 공통 JSON 계약 변경은 팀장 승인 + 영향 모듈 담당자 동의 후 진행
 - 비고: 이 문서는 구현 편의를 위해 기존 계획서/상세설계 문서의 요구사항을 **실행 가능한 JSON 계약 형태**로 재구성한 통합 문서다.
 
@@ -39,18 +39,18 @@ _Notion 업로드용 / 구현 기준 문서_
 6. 양유상의 코드 검증 중 API 판정이 필요하면 김민우의 Whitelist Engine에 질의한다.
 7. 김민우가 미등록 API를 Pending List에 등록하거나 갱신한다.
 8. 박용담이 정은미/양유상/김민우 결과를 종합해 `ValidationJobResponse`를 만든다.
-9. Proxy는 후순위로 두며, 나중에 박용담 기준의 orchestrator를 호출하는 진입점으로 연결한다.
+9. Proxy는 FastAPI 진입점으로 `/health`, `/docs`, `/dashboard`, validation API, whitelist 운영 API를 제공한다.
 
 ### 2.2 모듈 경계
 
 | 모듈 | 책임 | 입력 | 출력 | 담당 |
 |---|---|---|---|---|
 | Analyzer Core | 파일 분류, JSON 계약 검증, `ArtifactRef` 생성, 최종 응답 조립 | 파일 목록, 정책 정보, 정은미/양유상/김민우 결과 | ValidationJobRequest, ValidationJobResponse | 박용담 |
-| Config / Tokenizer Validator | `config.json`, `tokenizer_config.json` 1차 검증, 참조 `.py` 코드 검증 재라우팅 | config/tokenizer artifact | ConfigValidationResult, 추가 code job | 박용담 + 양유상 |
-| Weight Validator | safetensors / pickle Path A / pickle Path B 검증 | 가중치 artifact | ArtifactValidationResult | 정은미 |
-| Code Validator | 검증1(AST 후보 추출), 검증2(`API_POLICY_SCAN` + contextual safe/review/block), 검증3(`GRADE_DECISION`) | Python artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
+| Config / Tokenizer Validator | `config.json`, `tokenizer_config.json` 1차 검증, 참조 `.py` 코드 검증 재라우팅, tokenizer semantic inventory | config/tokenizer artifact | ConfigValidationResult, 추가 code job, semantic summary | 박용담 + 양유상 |
+| Weight Validator | safetensors / pickle Path A / pickle Path B 검증, pickle role/release 정책 | 가중치 artifact | ArtifactValidationResult | 정은미 |
+| Code Validator | 검증1(AST 후보 추출), 검증2(`API_POLICY_SCAN` + contextual safe/review/block), 검증3(`GRADE_DECISION`), preprocessing metadata semantic scan | Python/config/preprocessing artifact, whitelist 결과 | ArtifactValidationResult | 양유상 |
 | Whitelist Engine | API 허용 여부 확인, Pending List 등록/갱신, 리뷰 반영 | API 목록, 미등록 API, 리뷰 결정 | WhitelistCheckResponse, PendingApiRecord, ReviewDecisionResult | 김민우 |
-| Proxy | 후순위 FastAPI 진입점, analyzer orchestrator 호출. proxy 내부에는 검증 로직을 두지 않음 | 외부 요청 | ValidationJobResponse | 공통 |
+| Proxy | FastAPI 진입점, analyzer/whitelist 호출, dashboard 서빙. proxy 내부에는 검증 로직을 두지 않음 | 외부 요청 | ValidationJobResponse, 운영 API 응답 | 공통 |
 
 ### 2.3 내부 API 엔드포인트 계약 (v1.0)
 
@@ -58,14 +58,19 @@ _Notion 업로드용 / 구현 기준 문서_
 
 | 제공 모듈 | Method | Path | Request | Response | 비고 |
 |---|---|---|---|---|---|
-| Analyzer Core | `POST` | `/internal/v1/validation/jobs` | `ValidationJobRequest` | `ValidationJobResponse` | 후순위 Proxy가 호출 |
+| Proxy / Analyzer Core | `GET` | `/health` | - | `{"status":"ok"}` | health check |
+| Proxy / Analyzer Core | `POST` | `/internal/v1/validation/jobs` | `ValidationJobRequest` | `ValidationJobResponse` | 가중치 중심 검증 |
+| Proxy / Analyzer Core | `POST` | `/internal/v1/validation/full` | `ValidationJobRequest` | `ValidationJobResponse` | 가중치+코드+config+전처리+whitelist 통합 |
+| Proxy | `GET` | `/dashboard` | - | HTML | 운영 dashboard |
 | Code Validator | `POST` | `/internal/v1/whitelist/check` | `WhitelistCheckRequest` | `WhitelistCheckResponse[]` | AST 결과 API 목록 조회 |
 | Whitelist Engine | `POST` | `/internal/v1/pending/upsert` | `PendingApiUpsertRequest` | `PendingApiRecord` | 미등록 API 등록/갱신 |
+| Whitelist Engine | `GET` | `/internal/v1/pending` | query | `PendingApiRecord[]` | pending 목록 조회 |
 | Review Gate | `POST` | `/internal/v1/reviews/decide` | `ReviewDecisionRequest` | `ReviewDecisionResult` | 보안 담당자 판단 반영 |
-| Analyzer Core | `POST` | `/internal/v1/reports` | `ValidationReport` | `{report_id, report_path}` | 검증 리포트 저장 |
-| Governance | `POST` | `/internal/v1/mlbom` | `MLBOM` | `{mlbom_id}` | ML-BOM 저장 |
-| Governance | `POST` | `/internal/v1/audit/events` | `AuditEvent` | `{event_id, event_hash}` | append-only 감사 로그 |
-| Proxy | `POST` | `/internal/v1/approvals` | `ApprovalPackage` | `{release_ids, cache_keys}` | 후순위 승인 결과물 배포/캐시 반영 |
+| Review Gate | `POST` | `/internal/v1/review` | `ReviewDecisionRequest` | `ReviewDecisionResult` | dashboard 호환 alias |
+| Governance | `GET` | `/internal/v1/audit` | query | audit events | 감사 로그 조회 |
+| Governance | `GET` | `/internal/v1/audit/verify` | query | verify result | 감사 체인 검증 |
+| Operations | `GET` | `/internal/v1/approved` | query | approved APIs | 승인 API 조회 |
+| Operations | `GET` | `/internal/v1/stats` | - | stats | 운영 통계 |
 
 ### 2.4 전송/재시도 규칙
 
@@ -159,6 +164,14 @@ cache_key = sha256 + ":" + file_kind + ":" + policy_fingerprint
 | `PYTHON` | `.py` |
 | `CONFIG_JSON` | `config.json` |
 | `TOKENIZER_CONFIG_JSON` | `tokenizer_config.json` |
+| `TOKENIZER_JSON` | `tokenizer.json` |
+| `SPECIAL_TOKENS_MAP_JSON` | `special_tokens_map.json` |
+| `ADDED_TOKENS_JSON` | `added_tokens.json` |
+| `VOCAB_JSON` | `vocab.json` |
+| `MERGES_TXT` | `merges.txt` |
+| `PREPROCESSOR_CONFIG_JSON` | `preprocessor_config.json` |
+| `PROCESSOR_CONFIG_JSON` | `processor_config.json` |
+| `CHAT_TEMPLATE_JINJA` | `chat_template.jinja` |
 | `OTHER` | 지원 범위 외 |
 
 ### 5.2 ValidationStatus
@@ -223,6 +236,7 @@ cache_key = sha256 + ":" + file_kind + ":" + policy_fingerprint
 | `CODE_RESTRICTED_RUNTIME` | B-1 제한 런타임 |
 | `CODE_SANDBOX_RUNTIME` | B-2/C 샌드박스 |
 | `CONFIG_SCHEMA_VALIDATION` | config 스키마 검증 |
+| `PREPROCESSING_SEMANTIC_SCAN` | tokenizer/processor/chat template semantic inventory |
 
 ### 5.8 OverallDecision
 
@@ -1401,8 +1415,10 @@ _Validation Engine → Whitelist Engine_
 - [ ] `ArtifactValidationResult`가 safetensors/pickle/code/config 전부를 표현한다.
 - [ ] `review_action`이 A/B-1/B-2/C에 대해 고정된다.
 - [ ] 미등록 API가 `PendingApiRecord`로 저장된다.
-- [ ] `ValidationReport`가 파일로 저장된다.
-- [ ] `MLBOM`과 `AuditEvent` 최소 스키마가 구현된다.
+- [ ] 전처리 메타데이터가 `/full`에서 결과 없이 누락되지 않는다.
+- [ ] raw pickle과 auxiliary pickle의 release 정책이 분리된다.
+- [ ] 감사 로그 조회와 체인 검증이 운영 API로 제공된다.
+- [ ] `ValidationReport`와 `MLBOM`은 후속 운영 산출물로 확장한다.
 - [ ] 정책 fingerprint 변경 시 캐시가 무효화된다.
 - [ ] Path A 실패 시 Path B 성공 여부와 무관하게 release가 막힌다.
 
@@ -1410,14 +1426,14 @@ _Validation Engine → Whitelist Engine_
 
 ## 26. 바로 구현해야 할 우선순위
 
-1. `ArtifactRef`, `PolicyInfo`, `ValidationJobRequest`, `ValidationJobResponse`
-2. `ArtifactValidationResult` + safetensors/pickle/code/config detail
-3. `WhitelistCheckResponse`, `PendingApiRecord`
-4. `ValidationReport`
-5. `ApprovalPackage`
-6. `MLBOM`
-7. `AuditEvent`
-8. `ErrorResponse`
+1. 완료: `ArtifactRef`, `PolicyInfo`, `ValidationJobRequest`, `ValidationJobResponse`
+2. 완료: `ArtifactValidationResult` + safetensors/pickle/code/config/preprocessing detail
+3. 완료: `WhitelistCheckResponse`, `PendingApiRecord`, review/audit 운영 API
+4. 완료: pickle role/release policy
+5. 완료: dashboard smoke와 router e2e
+6. 후속: production `ValidationReport`, `ApprovalPackage`, `MLBOM`
+7. 후속: 실제 Hub snapshot inventory/source resolver 운영화
+8. 후속: scanner/runtime availability health report
 
 ---
 

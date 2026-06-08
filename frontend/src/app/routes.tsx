@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import { OverviewPage } from '../features/overview/OverviewPage';
 import { DemoConsolePage } from '../features/demo/DemoConsolePage';
 import { EvidencePage } from '../features/evidence/EvidencePage';
+import { LiveModelPage } from '../features/live/LiveModelPage';
 import { OperationsPage } from '../features/operations/OperationsPage';
 import { ValidationDetailPage } from '../features/validation/ValidationDetailPage';
 import { PlaceholderPage } from './PlaceholderPage';
@@ -12,6 +13,7 @@ export function AppRoutes() {
       <Route index element={<Navigate to="/overview" replace />} />
       <Route path="/overview" element={<OverviewPage />} />
       <Route path="/demo" element={<DemoConsolePage />} />
+      <Route path="/live" element={<LiveModelPage />} />
       <Route path="/validation" element={<ValidationDetailPage />} />
       <Route path="/operations" element={<OperationsPage />} />
       <Route path="/evidence" element={<EvidencePage />} />

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import fnmatch
 import json
 import pickle
 import shutil
+import time
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -18,14 +20,17 @@ from pydantic import BaseModel
 from safetensors.torch import save_file
 from sqlalchemy.orm import Session
 
+from analyzer.classifier import classify_file_kind as classify_core_file_kind
 from analyzer.schemas import (
     ArtifactRef,
+    FileKind,
     ModelRef,
     OverallDecision,
     PolicyInfo,
     ReasonEntry,
     ReviewAction,
     RuntimeContext,
+    SnapshotFileRef,
     ValidationJobResponse,
     ValidationStatus,
     ValidationJobRequest,
@@ -52,13 +57,41 @@ SCENARIO_ORDER = [
     "hm-05-bad-config-automap",
 ]
 
+SCENARIO_DISPLAY_TITLES = {
+    "hm-01-safe-st": "정상 safetensors",
+    "hm-02-safe-pkl": "정상 pickle 변환",
+    "hm-03-bad-pkl-reduce": "위험 pickle opcode 차단",
+    "hm-04-bad-py-import": "위험 Python 코드 차단",
+    "hm-05-bad-config-automap": "위험 config 트리거 차단",
+}
+
 PREVIEW_LIMIT = 2400
+
+FAST_LIVE_MODEL_ALLOW_PATTERNS = [
+    "*.json",
+    "*.py",
+    "*.txt",
+    "*.model",
+    "*.jinja",
+]
+
+WEIGHT_FILE_KINDS = {FileKind.SAFETENSORS, FileKind.PICKLE}
 
 
 class DemoRunRequest(BaseModel):
     repeat_cache_check: bool = False
     reset_demo_state: bool = False
     enable_path_b: bool = False
+    requested_by: str = "demo_presenter"
+
+
+class LiveModelRunRequest(BaseModel):
+    repo_id: str
+    revision: str = "main"
+    skip_weights: bool = True
+    enable_path_b: bool = False
+    include_patterns: list[str] = []
+    exclude_patterns: list[str] = []
     requested_by: str = "demo_presenter"
 
 
@@ -131,7 +164,9 @@ def _summary_for(scenario_id: str) -> dict[str, Any]:
     policy_profile = _policy_profile(manifest, expected)
     return {
         "scenario_id": scenario_id,
-        "title": expected.get("demo_title") or scenario_id,
+        "title": SCENARIO_DISPLAY_TITLES.get(scenario_id)
+        or expected.get("demo_title")
+        or scenario_id,
         "category": _category_for(expected),
         "policy_profile": policy_profile,
         "expected_overall_decision": expected.get("expected_overall_decision"),
@@ -180,9 +215,9 @@ def _detail_for(scenario_id: str) -> dict[str, Any]:
         "source_files": source_files,
         "presentation_notes": expected.get("notes", []),
         "limitations": [
-            "Fixture scenarios are the default demo path.",
-            "Live Hugging Face downloads remain optional evidence.",
-            "Path B/gVisor evidence is opt-in via enable_path_b.",
+            "fixture 시나리오가 기본 데모 경로입니다.",
+            "실제 Hugging Face 다운로드는 선택 근거로만 남깁니다.",
+            "Path B/gVisor 근거는 enable_path_b로 선택했을 때만 사용합니다.",
         ],
     }
 
@@ -314,6 +349,445 @@ def _file_kind(repo_path: str) -> str | None:
     if suffix == ".json":
         return "OTHER"
     return None
+
+
+def _matches_any(value: str, patterns: list[str]) -> bool:
+    return any(fnmatch.fnmatchcase(value, pattern) for pattern in patterns)
+
+
+def _download_allow_patterns(request: LiveModelRunRequest) -> list[str] | None:
+    if request.include_patterns:
+        return request.include_patterns
+    if request.skip_weights:
+        return FAST_LIVE_MODEL_ALLOW_PATTERNS
+    return None
+
+
+def _download_hf_snapshot(request: LiveModelRunRequest) -> Path:
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="huggingface_hub 패키지가 없어 실제 모델 다운로드를 실행할 수 없습니다.",
+        ) from exc
+
+    try:
+        return Path(snapshot_download(
+            repo_id=request.repo_id,
+            revision=request.revision,
+            allow_patterns=_download_allow_patterns(request),
+            ignore_patterns=request.exclude_patterns or None,
+        ))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Hugging Face 모델 다운로드 실패: {exc}",
+        ) from exc
+
+
+def _live_artifact_for_file(path: Path, repo_path: str, request: LiveModelRunRequest) -> ArtifactRef:
+    kind = classify_core_file_kind(repo_path)
+    digest = sha256_file(str(path))
+    suffix = PurePosixPath(repo_path).suffix.lower()
+    return ArtifactRef(
+        artifact_id=f"sha256:{digest}",
+        repo_path=repo_path,
+        file_name=PurePosixPath(repo_path).name,
+        file_kind=kind,
+        detected_extension=suffix,
+        size_bytes=path.stat().st_size,
+        sha256=digest,
+        source_url=f"https://huggingface.co/{request.repo_id}/blob/{request.revision}/{repo_path}",
+        temp_local_path=str(path),
+        media_type="application/json" if suffix == ".json" else None,
+        referenced_by=[],
+        is_generated=False,
+    )
+
+
+def _scan_live_model_snapshot(
+    snapshot_root: Path,
+    request: LiveModelRunRequest,
+) -> tuple[list[ArtifactRef], list[SnapshotFileRef], dict[str, list[str]]]:
+    artifacts: list[ArtifactRef] = []
+    inventory: list[SnapshotFileRef] = []
+    skipped = {
+        "unsupported": [],
+        "weights_fast_mode": [],
+        "include_filter": [],
+        "exclude_filter": [],
+    }
+
+    for path in sorted(snapshot_root.rglob("*")):
+        if not path.is_file():
+            continue
+        repo_path = path.relative_to(snapshot_root).as_posix()
+        if request.include_patterns and not _matches_any(repo_path, request.include_patterns):
+            skipped["include_filter"].append(repo_path)
+            continue
+        if request.exclude_patterns and _matches_any(repo_path, request.exclude_patterns):
+            skipped["exclude_filter"].append(repo_path)
+            continue
+
+        kind = classify_core_file_kind(repo_path)
+        digest = sha256_file(str(path))
+        inventory.append(SnapshotFileRef(
+            repo_path=repo_path,
+            temp_local_path=str(path),
+            sha256=digest,
+            size_bytes=path.stat().st_size,
+            file_kind=kind,
+        ))
+
+        if kind is FileKind.OTHER:
+            skipped["unsupported"].append(repo_path)
+            continue
+        if request.skip_weights and kind in WEIGHT_FILE_KINDS:
+            skipped["weights_fast_mode"].append(repo_path)
+            continue
+        artifacts.append(_live_artifact_for_file(path, repo_path, request))
+
+    return artifacts, inventory, skipped
+
+
+def _live_policy() -> PolicyInfo:
+    return PolicyInfo(
+        policy_version="live-demo-policy",
+        whitelist_version="live-demo-whitelist",
+        opcode_policy_version="live-demo-opcode",
+        config_schema_version="live-demo-config",
+        runtime_profile_version="live-demo-runtime",
+    )
+
+
+def _live_validation_request(
+    request: LiveModelRunRequest,
+    run_id: str,
+    snapshot_root: Path,
+    artifacts: list[ArtifactRef],
+    inventory: list[SnapshotFileRef],
+) -> ValidationJobRequest:
+    timestamp = _now()
+    policy = _live_policy()
+    return ValidationJobRequest(
+        request_id=f"live-{uuid.uuid4()}",
+        job_id=run_id,
+        model=ModelRef(
+            repo_id=request.repo_id,
+            revision=request.revision,
+            source_host="huggingface.co",
+            source_url=f"https://huggingface.co/{request.repo_id}",
+            requested_at=timestamp,
+            endpoint_mode="HF_ENDPOINT_PROXY",
+            requested_by=request.requested_by,
+        ),
+        policy=policy,
+        runtime_context=RuntimeContext(
+            sandbox_runtime="gVisor" if request.enable_path_b else "none",
+            network_disabled=True,
+            read_only_fs=True,
+            compare_mode="path_b" if request.enable_path_b else "path_a",
+            allow_cache_lookup=True,
+            generate_mlbom=False,
+            write_audit_log=True,
+        ),
+        artifacts=artifacts,
+        stop_on_first_block=False,
+        enable_path_b=request.enable_path_b,
+        policy_fingerprint=policy.policy_fingerprint,
+        notes=f"live model dashboard demo for {request.repo_id}",
+        model_snapshot_root=str(snapshot_root),
+        model_snapshot_inventory=inventory,
+    )
+
+
+def _lane_for_kind(kind: str) -> str:
+    if kind in {"SAFETENSORS", "PICKLE"}:
+        return "weights"
+    if kind == "PYTHON":
+        return "python"
+    if kind in {
+        "CONFIG_JSON",
+        "TOKENIZER_CONFIG_JSON",
+        "TOKENIZER_JSON",
+        "SPECIAL_TOKENS_MAP_JSON",
+        "ADDED_TOKENS_JSON",
+        "VOCAB_JSON",
+        "MERGES_TXT",
+        "PREPROCESSOR_CONFIG_JSON",
+        "PROCESSOR_CONFIG_JSON",
+        "CHAT_TEMPLATE_JINJA",
+    }:
+        return "config"
+    return "other"
+
+
+def _lane_status(results: list[ArtifactValidationResult]) -> str:
+    if not results:
+        return "SKIPPED"
+    statuses = {result.status.value for result in results}
+    if "BLOCK" in statuses or "ERROR" in statuses:
+        return "BLOCK"
+    if "PENDING_REVIEW" in statuses or "SKIPPED" in statuses:
+        return "PENDING_REVIEW"
+    return "PASS"
+
+
+def _live_lane_results(response: ValidationJobResponse) -> list[dict[str, Any]]:
+    lane_meta = {
+        "weights": {
+            "title": "가중치 검사",
+            "description": "safetensors와 pickle/bin 파일을 해시, 메타데이터, opcode 기준으로 확인합니다.",
+        },
+        "python": {
+            "title": "Python 코드 검사",
+            "description": "역할 분류, AST/API/context 검사 후 A/B-1/B-2/C 등급을 결정합니다.",
+        },
+        "config": {
+            "title": "config 검사",
+            "description": "schema, trigger 필드, auto_map 연결 Python 파일을 함께 확인합니다.",
+        },
+    }
+    grouped: dict[str, list[ArtifactValidationResult]] = {key: [] for key in lane_meta}
+    for result in response.artifact_results:
+        lane = _lane_for_kind(result.artifact.file_kind.value)
+        if lane in grouped:
+            grouped[lane].append(result)
+
+    return [
+        {
+            "lane": lane,
+            "title": meta["title"],
+            "description": meta["description"],
+            "status": _lane_status(grouped[lane]),
+            "count": len(grouped[lane]),
+            "results": [to_jsonable(result) for result in grouped[lane]],
+        }
+        for lane, meta in lane_meta.items()
+    ]
+
+
+def _value_text(value: Any) -> str:
+    return str(getattr(value, "value", value))
+
+
+def _dict_value(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _sandbox_security_event_count(check: dict[str, Any]) -> int:
+    events = _dict_value(check.get("security_events"))
+    total = 0
+    for value in events.values():
+        if isinstance(value, list):
+            total += len(value)
+    return total
+
+
+def _sandbox_execution_ran(check: dict[str, Any]) -> bool:
+    execution = _dict_value(check.get("execution"))
+    statuses = [
+        str(execution.get("import_status") or "").lower(),
+        str(execution.get("instantiate_status") or "").lower(),
+        str(execution.get("forward_status") or "").lower(),
+    ]
+    return any(status not in {"", "not_run", "skipped"} for status in statuses)
+
+
+def _live_sandbox_status(
+    *,
+    requested: bool,
+    checks: list[dict[str, Any]],
+    blocked_event_count: int,
+) -> str:
+    if not requested:
+        return "SKIPPED"
+    if not checks:
+        return "SKIPPED"
+
+    decisions = {str(check.get("decision") or "") for check in checks}
+    if blocked_event_count > 0 or any(decision.startswith("BLOCKED") for decision in decisions):
+        return "BLOCK"
+    if "SANDBOX_INFRA_ERROR" in decisions or "ERROR" in decisions:
+        return "ERROR"
+    return "PENDING_REVIEW"
+
+
+def _live_sandbox_message(
+    *,
+    requested: bool,
+    eligible_count: int,
+    check_count: int,
+    ran_count: int,
+    decisions: set[str],
+) -> str:
+    if not requested:
+        return "Path B/gVisor 근거 요청이 꺼져 있어 샌드박스 실행 단계는 건너뛰었습니다."
+    if eligible_count == 0:
+        return "이번 모델에는 B-2 샌드박스 대상 Python 코드가 없어 실행하지 않았습니다."
+    if check_count == 0:
+        return "B-2 대상은 있었지만 sandbox_check 근거가 응답에 붙지 않았습니다. 보안 담당자 검토가 필요합니다."
+    if ran_count > 0:
+        return "gVisor/runsc 샌드박스 실행 근거를 수집했습니다. 이 근거는 자동 승인 대신 보안 검토 자료로 남습니다."
+    if "NOT_RUN" in decisions:
+        return "B-2 대상은 있었지만 현재 데모 API에는 runner/resolver가 연결되지 않아 실제 컨테이너 실행은 NOT_RUN으로 남았습니다."
+    return "샌드박스 근거가 생성되었지만 최종 승인은 보안 담당자 검토 뒤에만 가능합니다."
+
+
+def _live_sandbox_summary(
+    request: LiveModelRunRequest,
+    response: ValidationJobResponse,
+) -> dict[str, Any]:
+    checks: list[dict[str, Any]] = []
+    eligible_count = 0
+    blocked_event_count = 0
+    ran_count = 0
+
+    for result in response.artifact_results:
+        grade = _value_text(result.grade)
+        file_kind = _value_text(result.artifact.file_kind)
+        if file_kind == "PYTHON" and grade == "B-2":
+            eligible_count += 1
+
+        sandbox_check = _dict_value((result.details or {}).get("sandbox_check"))
+        if not sandbox_check and request.enable_path_b and file_kind == "PYTHON" and grade == "B-2":
+            sandbox_check = {
+                "schema_version": "1.0",
+                "request_id": response.request_id,
+                "job_id": response.job_id,
+                "artifact_id": result.artifact.artifact_id,
+                "repo_path": result.artifact.repo_path,
+                "grade": "B-2",
+                "sandbox_runtime": None,
+                "profile": "B2_STANDARD",
+                "decision": "NOT_RUN",
+                "deployable": False,
+                "runtime_evidence": {},
+                "execution": {
+                    "import_status": "not_run",
+                    "instantiate_status": "not_run",
+                    "forward_status": "not_run",
+                },
+                "security_events": {
+                    "network_events": [],
+                    "unexpected_execve": [],
+                    "blocked_writes": [],
+                    "secret_path_access": [],
+                    "blocked_reads": [],
+                    "review_events": [],
+                },
+                "manifest_evidence": {
+                    "host_manifest_sha256": None,
+                    "manifest_errors": [],
+                    "input_hash_errors": [],
+                },
+                "artifacts": {},
+                "policy_gate": {"reason_code": "SANDBOX_CHECK_NOT_ATTACHED"},
+                "created_at": _now(),
+                "reason": "B-2 sandbox check was not attached by the validation pipeline",
+            }
+        if not sandbox_check:
+            continue
+
+        event_count = _sandbox_security_event_count(sandbox_check)
+        did_run = _sandbox_execution_ran(sandbox_check)
+        blocked_event_count += event_count
+        ran_count += 1 if did_run else 0
+        policy_gate = _dict_value(sandbox_check.get("policy_gate"))
+
+        checks.append({
+            "repo_path": result.artifact.repo_path,
+            "artifact_id": result.artifact.artifact_id,
+            "status": _value_text(result.status),
+            "grade": grade,
+            "route_kind": _value_text(result.route_kind),
+            "decision": str(sandbox_check.get("decision") or "UNKNOWN"),
+            "deployable": bool(sandbox_check.get("deployable")),
+            "sandbox_runtime": sandbox_check.get("sandbox_runtime"),
+            "reason_code": policy_gate.get("reason_code"),
+            "reason": sandbox_check.get("reason"),
+            "execution": to_jsonable(_dict_value(sandbox_check.get("execution"))),
+            "runtime_evidence": to_jsonable(_dict_value(sandbox_check.get("runtime_evidence"))),
+            "security_events": to_jsonable(_dict_value(sandbox_check.get("security_events"))),
+            "manifest_evidence": to_jsonable(_dict_value(sandbox_check.get("manifest_evidence"))),
+            "policy_gate": to_jsonable(policy_gate),
+            "artifacts": to_jsonable(_dict_value(sandbox_check.get("artifacts"))),
+        })
+
+    decisions = {str(check.get("decision") or "") for check in checks}
+    status = _live_sandbox_status(
+        requested=request.enable_path_b,
+        checks=checks,
+        blocked_event_count=blocked_event_count,
+    )
+    message = _live_sandbox_message(
+        requested=request.enable_path_b,
+        eligible_count=eligible_count,
+        check_count=len(checks),
+        ran_count=ran_count,
+        decisions=decisions,
+    )
+    return {
+        "requested": request.enable_path_b,
+        "eligible_count": eligible_count,
+        "check_count": len(checks),
+        "ran_count": ran_count,
+        "skipped_count": max(0, eligible_count - ran_count),
+        "blocked_event_count": blocked_event_count,
+        "status": status,
+        "message": message,
+        "checks": checks,
+    }
+
+
+def _live_sandbox_step_items(summary: dict[str, Any]) -> list[str]:
+    checks = summary.get("checks")
+    if not isinstance(checks, list) or not checks:
+        return [str(summary.get("message") or "샌드박스 실행 근거 없음")]
+    items = []
+    for check in checks[:12]:
+        if not isinstance(check, dict):
+            continue
+        repo_path = check.get("repo_path") or "unknown"
+        decision = check.get("decision") or "UNKNOWN"
+        reason_code = check.get("reason_code") or "사유 없음"
+        items.append(f"{repo_path} → {decision} / {reason_code}")
+    return items
+
+
+def _live_file_summary(artifacts: list[ArtifactRef], skipped: dict[str, list[str]]) -> dict[str, Any]:
+    counts = {"weights": 0, "python": 0, "config": 0, "other": 0}
+    for artifact in artifacts:
+        counts[_lane_for_kind(artifact.file_kind.value)] += 1
+    return {
+        **counts,
+        "total_supported": len(artifacts),
+        "skipped_unsupported": len(skipped["unsupported"]),
+        "skipped_weights_fast_mode": len(skipped["weights_fast_mode"]),
+        "skipped_include_filter": len(skipped["include_filter"]),
+        "skipped_exclude_filter": len(skipped["exclude_filter"]),
+    }
+
+
+def _live_step(
+    step_id: str,
+    title: str,
+    status: str,
+    detail: str,
+    *,
+    started: float | None = None,
+    items: list[str] | None = None,
+) -> dict[str, Any]:
+    duration_ms = int((time.perf_counter() - started) * 1000) if started else None
+    return {
+        "id": step_id,
+        "title": title,
+        "status": status,
+        "detail": detail,
+        "duration_ms": duration_ms,
+        "items": items or [],
+    }
 
 
 def _generate_artifact_file(
@@ -632,57 +1106,57 @@ def _evidence_specs() -> list[dict[str, str]]:
     return [
         {
             "kind": "demo",
-            "title": "Final demo script",
+            "title": "최종 데모 스크립트",
             "path": "docs/final_demo_script.md",
-            "summary": "Presenter-facing scenario order and talking points.",
+            "summary": "발표용 시나리오 순서와 설명 포인트입니다.",
         },
         {
             "kind": "design",
-            "title": "Frontend console blueprint",
+            "title": "프론트엔드 콘솔 설계안",
             "path": "docs/frontend_demo_console_blueprint.md",
-            "summary": "Source plan for this console implementation.",
+            "summary": "이 콘솔 구현의 원본 설계 계획입니다.",
         },
         {
             "kind": "demo",
-            "title": "Smoke validation summary",
+            "title": "스모크 검증 요약",
             "path": "evidence/demo/20260401_smoke_validate_summary_CX_v1.md",
-            "summary": "Archived smoke validation evidence.",
+            "summary": "보관된 스모크 검증 근거입니다.",
         },
         {
             "kind": "demo",
-            "title": "HF real download summary",
+            "title": "HF 실제 다운로드 요약",
             "path": "evidence/demo/20260401_hf_real_download_test_summary_CX_v1.md",
-            "summary": "Archived live Hugging Face download evidence.",
+            "summary": "보관된 실제 Hugging Face 다운로드 근거입니다.",
         },
         {
             "kind": "demo",
-            "title": "Live endpoints summary",
+            "title": "실제 엔드포인트 검증 요약",
             "path": "evidence/demo/20260506_live_endpoints_summary_KMW_v1.md",
-            "summary": "Archived live endpoint verification.",
+            "summary": "보관된 실제 엔드포인트 검증 근거입니다.",
         },
         {
             "kind": "worklog",
-            "title": "Integration adapter worklog",
+            "title": "통합 어댑터 작업 기록",
             "path": "evidence/worklog/20260506_yangyu_integration_adapter_KMW_v1.md",
-            "summary": "Integration worklog evidence.",
+            "summary": "통합 작업 기록 근거입니다.",
         },
         {
             "kind": "worklog",
-            "title": "Dashboard and ops worklog",
+            "title": "대시보드/운영 작업 기록",
             "path": "evidence/worklog/20260508_dashboard_and_ops_KMW_v1.md",
-            "summary": "Operations dashboard worklog evidence.",
+            "summary": "운영 대시보드 작업 기록 근거입니다.",
         },
         {
             "kind": "worklog",
-            "title": "Restricted runtime worklog",
+            "title": "제한 런타임 작업 기록",
             "path": "evidence/worklog/20260508_restricted_runtime_KMW_v1.md",
-            "summary": "Restricted runtime evidence and limits.",
+            "summary": "제한 런타임 근거와 한계입니다.",
         },
         {
             "kind": "tests",
-            "title": "Latest full pytest raw log",
+            "title": "최신 전체 pytest 원본 로그",
             "path": "evidence/tests/20260520_pr17_full_pytest_raw_KMW_v1.txt",
-            "summary": "Archived full pytest raw output.",
+            "summary": "보관된 전체 pytest 원본 출력입니다.",
         },
     ]
 
@@ -722,8 +1196,8 @@ def demo_readiness(db: Session = Depends(get_db)) -> dict[str, Any]:
     stats = whitelist_stats(db=db)
     warnings = []
     if missing:
-        warnings.append("Some archived evidence files are missing.")
-    warnings.append("Path B/gVisor is opt-in evidence and is not the default validation route.")
+        warnings.append("일부 보관 근거 파일이 누락되었습니다.")
+    warnings.append("Path B/gVisor는 선택 근거이며 기본 검증 경로가 아닙니다.")
     return {
         "health": {"ok": True},
         "openapi": {"ok": True},
@@ -736,6 +1210,123 @@ def demo_readiness(db: Session = Depends(get_db)) -> dict[str, Any]:
         "stats": stats,
         "evidence": {"missing": missing, "items": evidence},
         "warnings": warnings,
+    }
+
+
+@router.post("/live-model/run")
+def run_live_model(
+    request: LiveModelRunRequest,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    repo_id = request.repo_id.strip()
+    if not repo_id or "/" not in repo_id or ".." in repo_id:
+        raise HTTPException(status_code=400, detail="Hugging Face repo_id는 owner/model 형식이어야 합니다.")
+    request.repo_id = repo_id
+    run_id = f"live-{uuid.uuid4()}"
+    started_at = _now()
+    steps: list[dict[str, Any]] = []
+
+    started = time.perf_counter()
+    snapshot_root = _download_hf_snapshot(request)
+    steps.append(_live_step(
+        "download",
+        "Hugging Face 모델 다운로드",
+        "PASS",
+        f"{request.repo_id}@{request.revision} snapshot을 로컬 캐시에 받았습니다.",
+        started=started,
+        items=[str(snapshot_root)],
+    ))
+
+    started = time.perf_counter()
+    artifacts, inventory, skipped = _scan_live_model_snapshot(snapshot_root, request)
+    if not artifacts:
+        steps.append(_live_step(
+            "classify",
+            "파일 분류",
+            "ERROR",
+            "검증 가능한 가중치, Python, config 파일을 찾지 못했습니다.",
+            started=started,
+        ))
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "검증 가능한 파일이 없습니다. include/exclude 또는 빠른 시연 옵션을 확인하세요.",
+                "steps": steps,
+                "skipped": skipped,
+            },
+        )
+    summary = _live_file_summary(artifacts, skipped)
+    steps.append(_live_step(
+        "classify",
+        "파일 분류",
+        "PASS",
+        (
+            f"검증 대상 {summary['total_supported']}개를 찾았습니다. "
+            f"가중치 {summary['weights']}개, Python {summary['python']}개, config {summary['config']}개입니다."
+        ),
+        started=started,
+        items=[artifact.repo_path for artifact in artifacts[:20]],
+    ))
+
+    started = time.perf_counter()
+    validation_request = _live_validation_request(request, run_id, snapshot_root, artifacts, inventory)
+    validation_response = run_full_validation(validation_request, db=db)
+    lane_results = _live_lane_results(validation_response)
+    steps.append(_live_step(
+        "validate",
+        "파일별 검증 실행",
+        validation_response.overall_status.value,
+        "가중치, Python, config 검증기를 실행하고 artifact별 결과를 수집했습니다.",
+        started=started,
+    ))
+
+    for lane in lane_results:
+        steps.append(_live_step(
+            f"lane-{lane['lane']}",
+            lane["title"],
+            lane["status"],
+            lane["description"],
+            items=[
+                f"{result['artifact']['repo_path']} → {result['status']} / {result['grade']}"
+                for result in lane["results"][:12]
+            ],
+        ))
+
+    sandbox_summary = _live_sandbox_summary(request, validation_response)
+    steps.append(_live_step(
+        "sandbox",
+        "샌드박스 실행 근거",
+        sandbox_summary["status"],
+        sandbox_summary["message"],
+        items=_live_sandbox_step_items(sandbox_summary),
+    ))
+
+    steps.append(_live_step(
+        "final",
+        "최종 릴리스 판정",
+        validation_response.overall_status.value,
+        (
+            f"Job decision={validation_response.overall_decision.value}, "
+            f"release_action={validation_response.release_action}"
+        ),
+    ))
+
+    return {
+        "run_id": run_id,
+        "repo_id": request.repo_id,
+        "revision": request.revision,
+        "started_at": started_at,
+        "finished_at": _now(),
+        "snapshot_root": str(snapshot_root),
+        "fast_mode": request.skip_weights,
+        "enable_path_b": request.enable_path_b,
+        "file_summary": summary,
+        "skipped": {key: value[:100] for key, value in skipped.items()},
+        "steps": steps,
+        "artifacts": [to_jsonable(artifact) for artifact in artifacts],
+        "lane_results": lane_results,
+        "sandbox_summary": sandbox_summary,
+        "validation_response": to_jsonable(validation_response),
     }
 
 

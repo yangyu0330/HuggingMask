@@ -48,7 +48,7 @@ export async function fetchJson<T>(
     : await response.text();
 
   if (!response.ok) {
-    throw new ApiError(`Request failed with ${response.status}`, response.status, payload);
+    throw new ApiError(`요청 실패: HTTP ${response.status}`, response.status, payload);
   }
 
   if (
@@ -57,7 +57,7 @@ export async function fetchJson<T>(
     'applied' in payload &&
     (payload as { applied?: unknown }).applied === false
   ) {
-    throw new ApiError('Request completed but was not applied', response.status, payload);
+    throw new ApiError('요청은 완료됐지만 적용되지 않았습니다', response.status, payload);
   }
 
   return payload as T;
