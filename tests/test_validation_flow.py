@@ -690,7 +690,11 @@ def test_tokenizer_config_semantic_linked_error_wins_over_baseline_missing() -> 
     assert result.review_action is ReviewAction.MANUAL_REVIEW_REQUIRED
     assert result.details["linked_code_statuses"] == ["ERROR"]
     assert result.details["preprocessing_semantic_result"]["status"] == "PENDING_REVIEW"
-    assert result.details["semantic_check"]["status"] == "BASELINE_MISSING"
+    # dotted tokenizer_class("tokenization_demo.DemoTokenizer")는 커스텀 코드
+    # (trust_remote_code) 참조이므로 semantic check가 FAILED로 명시 격상한다
+    # (BASELINE_MISSING 노이즈에 묻지 않음 — 적대검증 2026-06-08 HIGH 대응).
+    # 그래도 linked code ERROR가 더 강해 overall은 ERROR로 유지된다.
+    assert result.details["semantic_check"]["status"] == "FAILED"
     assert result.details["semantic_inventory"]["model_max_length"] == 4096
 
 
