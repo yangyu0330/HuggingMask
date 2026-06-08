@@ -48,11 +48,26 @@ _SECRET_PATH_PATTERNS = (
 
 @dataclass(frozen=True)
 class RealDockerCommandRunner:
-    """Execute planned Docker lifecycle argv lists and collect evidence fixtures."""
+    """Execute planned Docker lifecycle argv lists and collect evidence fixtures.
+
+    runsc strace 캡처(#55 companion):
+        ``runsc_strace_log_dir``가 설정되면 ``logs`` 스텝에서 그 디렉토리의 runsc
+        debug/strace 로그를 읽어 **신뢰 가능한 ``runsc_logs`` 소스**로 포장한다.
+        설정되지 않거나 파일이 없으면 ``docker logs`` stdout(``logs`` 키)만 남고
+        이는 strace 관측 근거가 아니므로(#55) decision은 fail-closed된다.
+
+        ⚠️ 전제(gVisor 호스트 운영 설정): runsc 런타임이 ``--strace --debug
+        --debug-log=<dir>`` 로 구성돼 있어야 한다(``/etc/docker/daemon.json``의
+        ``runtimes.runsc.runtimeArgs``). ``runsc_strace_log_dir``는 그 ``<dir>``과
+        일치해야 한다. 본 캡처 배선의 호스트측 로직(파일 수집/포장)은 단위테스트로
+        검증되지만, **runsc가 실제 strace를 그 경로에 쓰는지는 Linux+gVisor 호스트가
+        있어야 e2e 검증 가능**(이 PR 미검증).
+    """
 
     step_timeouts: Mapping[str, float] = field(default_factory=lambda: dict(DEFAULT_STEP_TIMEOUTS))
     default_timeout: float = 30.0
     evidence_dir: Path | None = None
+    runsc_strace_log_dir: Path | None = None
 
     def __call__(self, step_name: str, argv: list[str]) -> CommandResult:
         command = list(argv)
@@ -112,7 +127,9 @@ class RealDockerCommandRunner:
         stdout = redact_text(_to_text(completed.stdout))
         stderr = redact_text(_to_text(completed.stderr))
         exit_code = int(completed.returncode)
-        fixtures, fixture_error, fixture_exit_code = _fixtures_for_step(step_name, command, completed)
+        fixtures, fixture_error, fixture_exit_code = _fixtures_for_step(
+            step_name, command, completed, runsc_strace_log_dir=self.runsc_strace_log_dir
+        )
         if fixture_error:
             stderr = _append_stderr(stderr, fixture_error)
         if fixture_exit_code is not None and exit_code == 0:
@@ -180,11 +197,11 @@ def _fixtures_for_step(
     step_name: str,
     argv: list[str],
     completed: subprocess.CompletedProcess[str],
+    runsc_strace_log_dir: Path | None = None,
 ) -> tuple[dict[str, Any], str, int | None]:
     if int(completed.returncode) != 0:
         if step_name == "logs":
-            logs = redact_text(_to_text(completed.stdout))
-            return ({"logs": logs} if logs else {}, "", None)
+            return _logs_fixtures(argv, completed, runsc_strace_log_dir)
         return {}, "", None
 
     if step_name == "inspect":
@@ -192,11 +209,65 @@ def _fixtures_for_step(
     if step_name == "wait":
         return _wait_fixture(_to_text(completed.stdout))
     if step_name == "logs":
-        logs = redact_text(_to_text(completed.stdout))
-        return ({"logs": logs} if logs else {}, "", None)
+        return _logs_fixtures(argv, completed, runsc_strace_log_dir)
     if step_name == "cp":
         return _cp_fixture(argv)
     return {}, "", None
+
+
+def _logs_fixtures(
+    argv: list[str],
+    completed: subprocess.CompletedProcess[str],
+    runsc_strace_log_dir: Path | None,
+) -> tuple[dict[str, Any], str, int | None]:
+    """``logs`` 스텝 fixtures. runsc strace가 캡처되면 신뢰 ``runsc_logs``로 포장.
+
+    docker logs stdout(``logs``)은 strace 단독 근거가 아니므로(#55), runsc_logs가
+    잡혀야만 decision이 clean review 경로로 갈 수 있다. runsc_strace_log_dir 미설정
+    또는 파일 부재면 runsc_logs는 비고 → strace 미관측(fail-closed) 유지.
+    """
+    fixtures: dict[str, Any] = {}
+    if runsc_strace_log_dir is not None:
+        strace = _read_runsc_strace(runsc_strace_log_dir, _container_from_logs_argv(argv))
+        if strace:
+            fixtures["runsc_logs"] = redact_text(strace)
+    logs = redact_text(_to_text(completed.stdout))
+    if logs:
+        fixtures["logs"] = logs
+    return fixtures, "", None
+
+
+def _container_from_logs_argv(argv: list[str]) -> str:
+    """``docker logs <container>`` 에서 컨테이너 이름(마지막 비-플래그 토큰).
+
+    서브커맨드 토큰(``docker``/``logs``)은 컨테이너로 오인하지 않는다.
+    """
+    for token in reversed(argv):
+        if token and not token.startswith("-") and token not in {"docker", "logs"}:
+            return token
+    return ""
+
+
+def _read_runsc_strace(log_dir: Path | str, container: str) -> str | None:
+    """runsc ``--debug-log`` 디렉토리에서 이 컨테이너의 strace/debug 로그 수집.
+
+    파일명 또는 상위 디렉토리명에 컨테이너 식별자가 포함된 파일을 모아 합친다.
+    파일이 없으면 None → 호출측에서 runsc_logs 미포장(strace 미관측).
+    """
+    directory = Path(log_dir)
+    if not directory.is_dir():
+        return None
+    parts: list[str] = []
+    for path in sorted(directory.rglob("*")):
+        if not path.is_file():
+            continue
+        if container and (container in path.name or container in str(path.parent)):
+            try:
+                parts.append(path.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+    text = "\n".join(p for p in parts if p)
+    return text or None
 
 
 def _inspect_fixture(stdout: str) -> tuple[dict[str, Any], str, int | None]:
