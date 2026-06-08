@@ -18,6 +18,11 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
 
+from proxy.auth import (
+    InternalReviewerPrincipal,
+    get_internal_reviewer_principal,
+    resolve_reviewer_id_for_review,
+)
 from whitelist.audit import verify_audit_chain
 from whitelist.database import get_db
 from whitelist.engine import apply_review_decision, get_engine
@@ -112,11 +117,14 @@ def get_pending_api(api_path: str, db: Session = Depends(get_db)):
 # ─────────────────────────────────────────────
 
 def _apply_review_request(
-    req: ReviewDecisionRequest, db: Session = Depends(get_db),
+    req: ReviewDecisionRequest,
+    db: Session,
+    principal: InternalReviewerPrincipal | None,
 ) -> ReviewDecisionResult:
+    reviewer_id = resolve_reviewer_id_for_review(req.reviewer_id, principal)
     result = apply_review_decision(
         db, api_path=req.api_path, decision=req.decision.value,
-        reviewer_id=req.reviewer_id, review_note=req.review_note,
+        reviewer_id=reviewer_id, review_note=req.review_note,
         condition=req.condition, review_id=req.review_id,
         source_evidence=req.source_evidence,
     )
@@ -126,17 +134,21 @@ def _apply_review_request(
 
 @router.post("/reviews/decide", response_model=ReviewDecisionResult)
 def decide_review(
-    req: ReviewDecisionRequest, db: Session = Depends(get_db),
+    req: ReviewDecisionRequest,
+    db: Session = Depends(get_db),
+    principal: InternalReviewerPrincipal | None = Depends(get_internal_reviewer_principal),
 ) -> ReviewDecisionResult:
-    return _apply_review_request(req, db)
+    return _apply_review_request(req, db, principal)
 
 
 @router.post("/review", response_model=ReviewDecisionResult)
 def review_pending(
-    req: ReviewDecisionRequest, db: Session = Depends(get_db),
+    req: ReviewDecisionRequest,
+    db: Session = Depends(get_db),
+    principal: InternalReviewerPrincipal | None = Depends(get_internal_reviewer_principal),
 ) -> ReviewDecisionResult:
     """Compatibility alias for older dashboard and bulk scripts."""
-    return _apply_review_request(req, db)
+    return _apply_review_request(req, db, principal)
 
 
 # ─────────────────────────────────────────────

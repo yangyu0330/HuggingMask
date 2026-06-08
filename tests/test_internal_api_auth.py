@@ -17,6 +17,12 @@ _EMPTY_JOB = {
     "policy_fingerprint": "policy-2026.04.22",
     "artifacts": [],
 }
+_REVIEW_PAYLOAD = {
+    "api_path": "torch.nn.SpoofedLayer",
+    "decision": "approve",
+    "reviewer_id": "security_admin",
+    "review_note": "principal check happens before review application",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -87,6 +93,31 @@ def test_whitelist_router_protected(monkeypatch):
     monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", _TOKEN)
     assert client.get("/internal/v1/pending").status_code == 401
     assert client.post("/internal/v1/review", json={}).status_code == 401
+
+
+def test_review_requires_reviewer_principal_when_token_auth_enabled(monkeypatch):
+    monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", _TOKEN)
+    r = client.post(
+        "/internal/v1/review",
+        headers={"X-Internal-Token": _TOKEN},
+        json=_REVIEW_PAYLOAD,
+    )
+    assert r.status_code == 401
+    assert "X-Reviewer-Id" in r.json()["detail"]
+
+
+def test_spoofed_body_reviewer_id_rejected_by_principal(monkeypatch):
+    monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", _TOKEN)
+    r = client.post(
+        "/internal/v1/reviews/decide",
+        headers={
+            "X-Internal-Token": _TOKEN,
+            "X-Reviewer-Id": "security_admin",
+        },
+        json={**_REVIEW_PAYLOAD, "reviewer_id": "attacker"},
+    )
+    assert r.status_code == 403
+    assert "authenticated reviewer principal" in r.json()["detail"]
 
 
 def test_health_and_dashboard_open_even_with_token(monkeypatch):

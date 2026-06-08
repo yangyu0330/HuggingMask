@@ -186,6 +186,44 @@ class TestReviewFlow:
         assert body["audit_event_id"] is not None
         assert body["audit_event_hash"]
 
+    def test_authenticated_reviewer_principal_is_persisted(self, client, monkeypatch):
+        monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", "secret-token-123")
+        auth_headers = {"X-Internal-Token": "secret-token-123"}
+        reviewer_headers = {**auth_headers, "X-Reviewer-Id": "principal-admin"}
+        new_api = "torch.nn.functional.principal_review_layer"
+        payload = {
+            "schema_version": "1.0",
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "model": _model_payload(),
+            "apis": [new_api],
+        }
+        client.post("/internal/v1/whitelist/check", headers=auth_headers, json=payload)
+
+        r = client.post("/internal/v1/reviews/decide", headers=reviewer_headers, json={
+            "api_path": new_api,
+            "decision": "approve",
+            "reviewer_id": "principal-admin",
+            "review_note": "authenticated principal approval",
+            "review_id": "rev-router-principal-001",
+        })
+        assert r.status_code == 200
+        assert r.json()["applied"] is True
+
+        approved = client.get(
+            "/internal/v1/approved",
+            headers=auth_headers,
+            params={"search": new_api},
+        ).json()["items"]
+        assert approved[0]["reviewer_id"] == "principal-admin"
+
+        audit = client.get(
+            "/internal/v1/audit",
+            headers=auth_headers,
+            params={"api_path": new_api, "action": "review_approve"},
+        ).json()["items"]
+        assert audit[0]["actor"] == "principal-admin"
+
 
 class TestFeedbackFlow:
 
