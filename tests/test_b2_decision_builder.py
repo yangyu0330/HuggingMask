@@ -236,3 +236,54 @@ def test_b2_non_target_does_not_call_decision_builder() -> None:
     assert _requires_b2_sandbox(result) is False
     assert result.status is ValidationStatus.PENDING_REVIEW
     assert "sandbox_check" not in result.details
+
+
+# ─────────────────────────────────────────────
+# D3 — require_runsc_strace 강제 (죽어있던 정책 필드 활성화)
+# ─────────────────────────────────────────────
+
+def test_require_runsc_strace_not_observed_is_not_clean() -> None:
+    # 정책이 strace를 요구하는데 관측 못 함(strace_observed=False) → clean이 아니라
+    # LOG_INCOMPLETE(review) 또는 BLOCKED(block). 이전엔 이 필드가 안 읽혀
+    # container stdout만 있고 syscall trace가 없어도 clean으로 빠졌다.
+    review = _sandbox_check(
+        strace_observed=False,
+        runtime_policy=B2RuntimePolicy(require_runsc_strace=True, log_incomplete_action="review"),
+    )
+    assert review["decision"] == "LOG_INCOMPLETE"
+    assert review["policy_gate"]["reason_code"] == "SANDBOX_STRACE_NOT_OBSERVED"
+    assert review["deployable"] is False
+
+    block = _sandbox_check(
+        strace_observed=False,
+        runtime_policy=B2RuntimePolicy(require_runsc_strace=True, log_incomplete_action="block"),
+    )
+    assert block["decision"] == "BLOCKED_SECURITY_EVENT"
+    assert block["policy_gate"]["reason_code"] == "SANDBOX_STRACE_NOT_OBSERVED"
+
+
+def test_strace_observed_true_keeps_clean_path() -> None:
+    # 기본(strace_observed=True) — 기존 clean 동작 유지(회귀 0).
+    check = _sandbox_check(
+        strace_observed=True,
+        runtime_policy=B2RuntimePolicy(require_runsc_strace=True),
+    )
+    assert check["decision"] == "B2_POLICY_REVIEW_REQUIRED"
+
+
+def test_require_runsc_strace_false_does_not_force_review() -> None:
+    # 정책이 strace를 요구하지 않으면 관측 없어도 clean 경로 유지.
+    check = _sandbox_check(
+        strace_observed=False,
+        runtime_policy=B2RuntimePolicy(require_runsc_strace=False),
+    )
+    assert check["decision"] == "B2_POLICY_REVIEW_REQUIRED"
+
+
+def test_parser_reports_strace_not_observed_when_log_missing() -> None:
+    from sandbox.b2.runsc_log_parser import parse_runsc_logs
+
+    assert parse_runsc_logs(None).strace_observed is False
+    assert parse_runsc_logs("").strace_observed is False
+    # 실제 strace 라인이 있으면 observed True
+    assert parse_runsc_logs('12345 execve("/usr/bin/python")').strace_observed is True

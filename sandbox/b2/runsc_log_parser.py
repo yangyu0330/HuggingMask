@@ -64,12 +64,17 @@ class RunscLogParseResult:
     events: list[dict[str, Any]] = field(default_factory=list)
     security_events: SecurityEvents = field(default_factory=SecurityEvents)
     log_complete: bool = True
+    # runsc strace 증거가 실제로 존재했는지. 로그 소스 자체가 없으면(LOG_MISSING)
+    # False — "syscall을 관측하지 못했다"는 뜻이고, require_runsc_strace 정책이
+    # 켜져 있으면 결정 빌더가 이를 clean으로 인증하지 않는다.
+    strace_observed: bool = True
     errors: list[str] = field(default_factory=list)
 
     def decision_builder_kwargs(self) -> dict[str, Any]:
         return {
             "security_events": self.security_events,
             "log_complete": self.log_complete,
+            "strace_observed": self.strace_observed,
         }
 
 
@@ -77,13 +82,13 @@ def parse_runsc_logs(log_texts: str | Iterable[str | None] | None) -> RunscLogPa
     """Parse one or more runsc log fixture strings into SecurityEvents."""
 
     if log_texts is None:
-        return RunscLogParseResult(log_complete=False, errors=["LOG_MISSING"])
+        return RunscLogParseResult(log_complete=False, strace_observed=False, errors=["LOG_MISSING"])
     if isinstance(log_texts, str):
         chunks: list[str | None] = [log_texts]
     else:
         chunks = list(log_texts)
     if not chunks or all(not chunk for chunk in chunks):
-        return RunscLogParseResult(log_complete=False, errors=["LOG_MISSING"])
+        return RunscLogParseResult(log_complete=False, strace_observed=False, errors=["LOG_MISSING"])
 
     events: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -110,7 +115,7 @@ def parse_runsc_logs(log_texts: str | Iterable[str | None] | None) -> RunscLogPa
 
 def parse_runsc_log_text(log_text: str | None, *, source: str = "runsc") -> RunscLogParseResult:
     if not log_text:
-        return RunscLogParseResult(log_complete=False, errors=["LOG_MISSING"])
+        return RunscLogParseResult(log_complete=False, strace_observed=False, errors=["LOG_MISSING"])
 
     events: list[dict[str, Any]] = []
     errors: list[str] = []

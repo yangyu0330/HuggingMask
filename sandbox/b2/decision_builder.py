@@ -49,6 +49,7 @@ def build_sandbox_check_from_runner_result(
     runtime_setup_errors: list[str] | None = None,
     post_start_runtime_errors: list[str] | None = None,
     log_complete: bool = True,
+    strace_observed: bool = True,
 ) -> dict[str, Any]:
     """Return a standard ``sandbox_check`` dict for orchestrator details."""
 
@@ -78,6 +79,7 @@ def build_sandbox_check_from_runner_result(
         post_start_runtime_errors=post_start_runtime_errors or [],
         runner_diagnostics_status=diagnostics_status,
         log_complete=log_complete,
+        strace_observed=strace_observed,
     )
     return check.to_dict()
 
@@ -155,6 +157,7 @@ def build_b2_decision(
     post_start_runtime_errors: list[str],
     runner_diagnostics_status: RunnerDiagnosticsStatus,
     log_complete: bool,
+    strace_observed: bool = True,
 ) -> B2SandboxCheck:
     runner_diagnostics_status = RunnerDiagnosticsStatus(runner_diagnostics_status)
     decision, reason_code, reason = _select_decision(
@@ -167,6 +170,7 @@ def build_b2_decision(
         post_start_runtime_errors=post_start_runtime_errors,
         runner_diagnostics_status=runner_diagnostics_status,
         log_complete=log_complete,
+        strace_observed=strace_observed,
     )
 
     policy_gate: dict[str, Any] = {
@@ -214,6 +218,7 @@ def _select_decision(
     post_start_runtime_errors: list[str],
     runner_diagnostics_status: RunnerDiagnosticsStatus,
     log_complete: bool,
+    strace_observed: bool = True,
 ) -> tuple[B2Decision, str, str]:
     if runtime_setup_errors:
         return (
@@ -292,6 +297,24 @@ def _select_decision(
             B2Decision.HIGH_RISK_REVIEW,
             "SANDBOX_HIGH_RISK_REVIEW",
             "B-2 sandbox observed a high-risk review event",
+        )
+
+    # require_runsc_strace 강제: 정책이 strace를 요구하는데 실제 strace 관측이
+    # 없었다면(strace_observed=False) "관측된 적 없음"을 clean으로 인증하지
+    # 않는다. (이전엔 이 정책 필드가 어디서도 안 읽혀, container stdout만 있고
+    # syscall trace가 없어도 아래 clean 분기로 빠졌다.) syscall trace 없이는
+    # network/exec/write 이벤트 부재가 "안전"이 아니라 "관측 불가"이기 때문.
+    if runtime_policy.require_runsc_strace and not strace_observed:
+        if runtime_policy.log_incomplete_action == "block":
+            return (
+                B2Decision.BLOCKED_SECURITY_EVENT,
+                "SANDBOX_STRACE_NOT_OBSERVED",
+                "required runsc strace evidence was not observed; cannot certify clean",
+            )
+        return (
+            B2Decision.LOG_INCOMPLETE,
+            "SANDBOX_STRACE_NOT_OBSERVED",
+            "required runsc strace evidence was not observed; cannot certify clean",
         )
 
     return (

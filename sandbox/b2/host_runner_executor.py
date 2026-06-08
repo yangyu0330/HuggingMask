@@ -126,6 +126,7 @@ class B2HostRunner:
             runtime_setup_errors=_dedupe(runtime_setup_errors),
             post_start_runtime_errors=_dedupe(post_start_runtime_errors),
             log_complete=log_parse.log_complete,
+            strace_observed=log_parse.strace_observed,
         )
 
 
