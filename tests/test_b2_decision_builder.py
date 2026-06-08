@@ -287,3 +287,32 @@ def test_parser_reports_strace_not_observed_when_log_missing() -> None:
     assert parse_runsc_logs("").strace_observed is False
     # 실제 strace 라인이 있으면 observed True
     assert parse_runsc_logs('12345 execve("/usr/bin/python")').strace_observed is True
+
+
+def test_non_syscall_stdout_is_not_observed_and_gates() -> None:
+    # 양유상 PR #55 재현: syscall이 없는 비어있지 않은 stdout은 strace 관측이 아니다.
+    from sandbox.b2.runsc_log_parser import parse_runsc_logs
+
+    r = parse_runsc_logs("runner started\nno syscall trace here\n")
+    assert r.strace_observed is False
+    # require_runsc_strace=True와 만나면 clean이 아니라 게이트(SANDBOX_STRACE_NOT_OBSERVED)
+    check = _sandbox_check(
+        strace_observed=r.strace_observed,
+        runtime_policy=B2RuntimePolicy(require_runsc_strace=True),
+    )
+    assert check["decision"] == "LOG_INCOMPLETE"
+    assert check["policy_gate"]["reason_code"] == "SANDBOX_STRACE_NOT_OBSERVED"
+
+
+def test_untrusted_stdout_source_is_not_trusted() -> None:
+    # docker logs stdout fallback은 syscall-shaped 라인이 있어도 신뢰 strace 소스가 아니다.
+    from sandbox.b2.host_runner_executor import CommandResult, _has_trusted_runsc_source
+
+    trusted = {"logs": CommandResult(fixtures={"runsc_logs": '1 openat(AT_FDCWD, "/x") = 3'})}
+    assert _has_trusted_runsc_source(trusted) is True
+
+    stdout_only = {"logs": CommandResult(stdout="42 connect(AF_INET) = -1", fixtures={})}
+    assert _has_trusted_runsc_source(stdout_only) is False
+
+    generic_logs = {"logs": CommandResult(fixtures={"logs": "42 connect(AF_INET) = -1"})}
+    assert _has_trusted_runsc_source(generic_logs) is False

@@ -109,6 +109,9 @@ def parse_runsc_logs(log_texts: str | Iterable[str | None] | None) -> RunscLogPa
         events=events,
         security_events=security_events,
         log_complete=log_complete,
+        # 실제 syscall line을 하나 이상 파싱했을 때만 strace 관측으로 본다.
+        # (비어 있지 않은 임의 stdout이 strace로 오인되는 것 방지 — 양유상 PR #55)
+        strace_observed=len(events) > 0,
         errors=_dedupe(errors),
     )
 
@@ -136,6 +139,7 @@ def parse_runsc_log_text(log_text: str | None, *, source: str = "runsc") -> Runs
         events=events,
         security_events=classify_security_events(events),
         log_complete=log_complete,
+        strace_observed=len(events) > 0,
         errors=_dedupe(errors),
     )
 

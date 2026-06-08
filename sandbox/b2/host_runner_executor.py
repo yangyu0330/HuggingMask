@@ -126,7 +126,10 @@ class B2HostRunner:
             runtime_setup_errors=_dedupe(runtime_setup_errors),
             post_start_runtime_errors=_dedupe(post_start_runtime_errors),
             log_complete=log_parse.log_complete,
-            strace_observed=log_parse.strace_observed,
+            # strace 관측 = 신뢰 가능한 runsc strace 소스 AND 실제 syscall line 존재.
+            # docker logs stdout fallback(비신뢰)은 내용과 무관하게 False
+            # (log injection으로 syscall-shaped 라인을 찍어도 통과 못 함 — 양유상 PR #55)
+            strace_observed=log_parse.strace_observed and _has_trusted_runsc_source(results),
         )
 
 
@@ -200,6 +203,19 @@ def _runsc_log_inputs(results: dict[str, CommandResult]) -> str | list[str | Non
     if fixture_logs is not None:
         return fixture_logs
     return logs.stdout or None
+
+
+def _has_trusted_runsc_source(results: dict[str, CommandResult]) -> bool:
+    """명시적 runsc strace/debug-log 소스를 받았는지.
+
+    설계 문서(gVisor 공통 운영 원칙)상 단독 보안 근거가 될 수 있는 건 runsc
+    strace 뿐이다. ``docker logs`` stdout(키 ``logs``/``stdout``)이나 runner JSON은
+    untrusted라 strace 관측 근거로 쓰지 않는다 (양유상 PR #55 리뷰).
+    """
+    logs = results.get("logs")
+    if logs is None:
+        return False
+    return _fixture_value(logs, "runsc_logs", "runsc_log") is not None
 
 
 def _runner_result_from_results(results: dict[str, CommandResult], job: B2SandboxJob) -> Mapping[str, Any] | None:
