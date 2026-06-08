@@ -96,6 +96,7 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
         return AstScanResult(repo_path=repo_path, parse_error=str(exc))
 
     alias_map, imports = _build_alias_map_and_imports(tree)
+    call_alias_envs = _build_call_alias_envs(tree, alias_map)
 
     result = AstScanResult(repo_path=repo_path)
     result.imports = sorted(imports)
@@ -153,6 +154,11 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
 
         raw_api_calls.add(raw_name)
         resolved_name = _resolve_alias(raw_name, alias_map)
+        # 변수 별칭 역추적: ``s = os.system; s(cmd)`` → resolved_name "s" → "os.system".
+        # 스코프·문장순서 인식 env(이 호출 지점에서 유효한 별칭만) — 다른 함수의
+        # 동명 지역 alias나 콜백 파라미터가 오염하지 않도록 호출별로 분리.
+        node_env = call_alias_envs.get(id(node), _EMPTY_ALIAS_ENV)
+        resolved_name = node_env.get(resolved_name, resolved_name)
         leaf = resolved_name.split(".")[-1]
 
         if leaf in _DANGEROUS_CALL_LEAVES:
@@ -161,6 +167,22 @@ def extract_ast_candidates(repo_path: str, source: str | bytes) -> AstScanResult
             dangerous_calls.add(resolved_name)
         if resolved_name.startswith(_DANGEROUS_PREFIX_CALLS):
             dangerous_calls.add(resolved_name)
+
+        # getattr(obj, "name") / getattr(obj, "sys"+"tem") → obj.name 으로 해소해
+        # 위험 호출 탐지(표적 우회를 dynamic/PENDING이 아니라 BLOCK으로 끌어올림).
+        getattr_target, string_built = _resolve_getattr_target(node, alias_map, node_env)
+        if getattr_target is not None:
+            raw_api_calls.add(getattr_target)
+            g_leaf = getattr_target.split(".")[-1]
+            if (
+                g_leaf in _DANGEROUS_CALL_LEAVES
+                or getattr_target in _DANGEROUS_EXACT_CALLS
+                or getattr_target.startswith(_DANGEROUS_PREFIX_CALLS)
+            ):
+                dangerous_calls.add(getattr_target)
+        if string_built:
+            # 함수/속성명을 문자열로 조립하는 것 자체가 난독화 신호
+            obfuscation_patterns.add("getattr_string_concat")
 
         if leaf in _DYNAMIC_CALL_LEAVES:
             dynamic_patterns.add(resolved_name)
@@ -245,6 +267,231 @@ def _resolve_alias(path: str, alias_map: dict[str, str]) -> str:
     if root in alias_map:
         return f"{alias_map[root]}.{rest}"
     return path
+
+
+# ─────────────────────────────────────────────
+# 데이터플로우 보강 — 표적 우회(별칭/getattr/문자열조립)를 정적 정확매칭으로 해소
+# ─────────────────────────────────────────────
+
+def _fold_str(node: ast.AST) -> str | None:
+    """문자열 상수 또는 상수들의 ``+`` 연결을 접어 값으로 반환. 아니면 None.
+
+    ``"sys" + "tem"`` → ``"system"`` 처럼 함수명을 문자열로 조립해 탐지를
+    우회하는 패턴을 풀어낸다.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left = _fold_str(node.left)
+        right = _fold_str(node.right)
+        if left is not None and right is not None:
+            return left + right
+    return None
+
+
+_EMPTY_ALIAS_ENV: dict[str, str] = {}
+
+_SCOPE_EXPR_NODES = (
+    ast.Lambda,
+    ast.ListComp,
+    ast.SetComp,
+    ast.DictComp,
+    ast.GeneratorExp,
+)
+
+
+def _param_names(args: ast.arguments) -> set[str]:
+    """함수/람다가 바인딩하는 모든 파라미터 이름(상위 별칭을 shadow)."""
+    names = {a.arg for a in (*args.posonlyargs, *args.args, *args.kwonlyargs)}
+    if args.vararg:
+        names.add(args.vararg.arg)
+    if args.kwarg:
+        names.add(args.kwarg.arg)
+    return names
+
+
+def _target_names(target: ast.AST) -> list[str]:
+    """대입/for 타깃이 바인딩하는 모든 ``Name`` (튜플/리스트/star 언패킹 포함)."""
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for elt in target.elts:
+            names.extend(_target_names(elt))
+        return names
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    return []
+
+
+def _build_call_alias_envs(tree: ast.AST, alias_map: dict[str, str]) -> dict[int, dict[str, str]]:
+    """각 ``Call`` 노드에서 유효한 변수 별칭 환경을 ``id(node)`` 키로 매핑.
+
+    전역 flow-insensitive 별칭(``ast.walk`` 단일 map)은 함수 스코프·파라미터
+    shadowing·대입 순서를 모두 잃어 ``os.system`` 같은 위험 호출에 BLOCK 오탐을
+    낸다. 대신 스코프별 환경을 만들고 문장 순서대로 갱신해, **그 호출 지점에서
+    확정적으로 위험 함수로 해소되는 별칭만** 승격한다(불확실하면 미해소).
+
+    승격 규칙(보수적, 오탐 방지 우선):
+    - 직선 실행(모듈·함수 본문 최상위)의 단순 단일 ``Name`` 대입만 별칭 승격.
+    - 조건부(if/for/while/with/try)·복합 타깃·증분/주석 대입은 미승격(invalidate).
+    - 함수/람다/컴프리헨션은 새 스코프 — 파라미터·타깃이 상위 별칭을 가린다.
+    """
+    call_envs: dict[int, dict[str, str]] = {}
+
+    def resolve_value(value: ast.AST, env: dict[str, str]) -> str | None:
+        if not isinstance(value, (ast.Name, ast.Attribute)):
+            return None
+        dotted = _dotted_name(value)
+        if not dotted:
+            return None
+        root, sep, _rest = dotted.partition(".")
+        if root in env and not sep:
+            return env[root]  # ``t = s`` 처럼 이미 위험 별칭인 지역 변수 체이닝
+        return _resolve_alias(dotted, alias_map) or None
+
+    def visit_expr(node: ast.AST | None, env: dict[str, str]) -> None:
+        """표현식 subtree의 ``Call`` 마다 env 스냅샷 기록 + 중첩 스코프 재귀."""
+        if node is None:
+            return
+        if isinstance(node, ast.Call):
+            call_envs[id(node)] = dict(env)
+        if isinstance(node, _SCOPE_EXPR_NODES):
+            enter_scope(node, env)
+            return
+        for child in ast.iter_child_nodes(node):
+            visit_expr(child, env)
+
+    def enter_scope(node: ast.AST, parent_env: dict[str, str]) -> None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for dec in node.decorator_list:
+                visit_expr(dec, parent_env)
+            for default in (*node.args.defaults, *(d for d in node.args.kw_defaults if d)):
+                visit_expr(default, parent_env)
+            child = {k: v for k, v in parent_env.items() if k not in _param_names(node.args)}
+            process_body(node.body, child, straight_line=True)
+            return
+        if isinstance(node, ast.Lambda):
+            for default in (*node.args.defaults, *(d for d in node.args.kw_defaults if d)):
+                visit_expr(default, parent_env)
+            child = {k: v for k, v in parent_env.items() if k not in _param_names(node.args)}
+            visit_expr(node.body, child)
+            return
+        # 컴프리헨션/제너레이터: for 타깃이 상위 별칭을 가림. 첫 iter만 상위 스코프.
+        targets: set[str] = set()
+        for gen in node.generators:
+            targets.update(_target_names(gen.target))
+        child = {k: v for k, v in parent_env.items() if k not in targets}
+        for i, gen in enumerate(node.generators):
+            visit_expr(gen.iter, parent_env if i == 0 else child)
+            for cond in gen.ifs:
+                visit_expr(cond, child)
+        if isinstance(node, ast.DictComp):
+            visit_expr(node.key, child)
+            visit_expr(node.value, child)
+        else:
+            visit_expr(node.elt, child)
+
+    def process_body(body: list[ast.stmt], env: dict[str, str], straight_line: bool) -> None:
+        for stmt in body:
+            process_stmt(stmt, env, straight_line)
+
+    def invalidate(targets: list[ast.AST], env: dict[str, str]) -> None:
+        for target in targets:
+            for name in _target_names(target):
+                env.pop(name, None)
+
+    def process_stmt(stmt: ast.stmt, env: dict[str, str], straight_line: bool) -> None:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            enter_scope(stmt, env)
+            env.pop(stmt.name, None)  # 함수 이름 바인딩은 위험 별칭 아님
+            return
+        if isinstance(stmt, ast.ClassDef):
+            for dec in stmt.decorator_list:
+                visit_expr(dec, env)
+            for base in stmt.bases:
+                visit_expr(base, env)
+            for kw in stmt.keywords:
+                visit_expr(kw.value, env)
+            process_body(stmt.body, dict(env), straight_line=False)  # 격리된 클래스 스코프
+            env.pop(stmt.name, None)
+            return
+        if isinstance(stmt, ast.Assign):
+            visit_expr(stmt.value, env)  # RHS 호출은 바인딩 전 env로 해소
+            if straight_line and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
+                name = stmt.targets[0].id
+                dotted = resolve_value(stmt.value, env)
+                if dotted and dotted != name:
+                    env[name] = dotted
+                else:
+                    env.pop(name, None)
+            else:
+                invalidate(stmt.targets, env)
+            return
+        if isinstance(stmt, (ast.AugAssign, ast.AnnAssign)):
+            if stmt.value is not None:
+                visit_expr(stmt.value, env)
+            invalidate([stmt.target], env)
+            return
+        if isinstance(stmt, ast.If):
+            visit_expr(stmt.test, env)
+            process_body(stmt.body, env, straight_line=False)
+            process_body(stmt.orelse, env, straight_line=False)
+            return
+        if isinstance(stmt, (ast.For, ast.AsyncFor)):
+            visit_expr(stmt.iter, env)
+            invalidate([stmt.target], env)
+            process_body(stmt.body, env, straight_line=False)
+            process_body(stmt.orelse, env, straight_line=False)
+            return
+        if isinstance(stmt, ast.While):
+            visit_expr(stmt.test, env)
+            process_body(stmt.body, env, straight_line=False)
+            process_body(stmt.orelse, env, straight_line=False)
+            return
+        if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            for item in stmt.items:
+                visit_expr(item.context_expr, env)
+                if item.optional_vars is not None:
+                    invalidate([item.optional_vars], env)
+            process_body(stmt.body, env, straight_line=False)
+            return
+        if isinstance(stmt, ast.Try):
+            process_body(stmt.body, env, straight_line=False)
+            for handler in stmt.handlers:
+                if handler.type is not None:
+                    visit_expr(handler.type, env)
+                process_body(handler.body, env, straight_line=False)
+            process_body(stmt.orelse, env, straight_line=False)
+            process_body(stmt.finalbody, env, straight_line=False)
+            return
+        # Expr / Return / Assert / Raise / Delete 등: 표현식의 호출만 기록
+        for child in ast.iter_child_nodes(stmt):
+            visit_expr(child, env)
+
+    if isinstance(tree, ast.Module):
+        process_body(tree.body, {}, straight_line=True)
+    return call_envs
+
+
+def _resolve_getattr_target(
+    node: ast.Call, alias_map: dict[str, str], var_alias: dict[str, str]
+) -> tuple[str | None, bool]:
+    """``getattr(obj, "name")`` → ``obj.name`` 으로 해소.
+
+    Returns ``(resolved_dotted_or_None, string_built)``. string_built=True면 attr가
+    문자열 상수 연결로 조립된 경우(난독화 신호). attr가 비상수(동적)면 해소 불가.
+    """
+    func = node.func
+    if not (isinstance(func, ast.Name) and func.id == "getattr") or len(node.args) < 2:
+        return None, False
+    obj_name = _resolve_alias(_dotted_name(node.args[0]), alias_map)
+    obj_name = var_alias.get(obj_name, obj_name)
+    attr = _fold_str(node.args[1])
+    string_built = isinstance(node.args[1], ast.BinOp)
+    if not obj_name or attr is None:
+        return None, string_built
+    return f"{obj_name}.{attr}", string_built
 
 
 def _is_three_arg_type_call(node: ast.Call) -> bool:
