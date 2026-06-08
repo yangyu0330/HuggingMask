@@ -106,3 +106,51 @@ def test_audit_chain_intact_after_auto_promote(db_session, org_count):
     )
     valid, errors = verify_audit_chain(db_session)
     assert valid, errors
+
+
+def test_db_blocked_api_not_reallowed_by_autolearn(db_session, org_count):
+    # 양유상 PR #56: 수동 거부(is_blocked=True)된 API는 verified org가 아무리
+    # 많아도 auto-learn으로 재허용(is_blocked=False)되면 안 된다.
+    org_count(99)
+    api = "torch.nn.functional.gelu"
+    db_session.add(ApprovedApi(
+        api_path=api, namespace="torch",
+        source=WhitelistSource.MANUAL_REVIEW, matched_rule="torch.*",
+        is_blocked=True,  # 보안 담당자가 수동 거부
+    ))
+    db_session.commit()
+
+    resp = submit_feedback(
+        db_session, blocked_api=api, model_id="m1",
+        purpose="재허용 시도", reporter_id="attacker",
+    )
+    assert resp.auto_rejected is True
+    assert resp.review_status is ReviewStatus.REJECTED
+    # 차단 유지 + auto-learn이 덮어쓰지 않음
+    row = db_session.query(ApprovedApi).filter_by(api_path=api).one()
+    assert row.is_blocked is True
+    assert row.source == WhitelistSource.MANUAL_REVIEW
+
+
+def test_autolearn_resolves_existing_pending(db_session, org_count):
+    # 양유상 PR #56: 자동승인 시 기존 PENDING row가 stale로 남지 않게 APPROVED로 해소.
+    from whitelist.models import PendingClassification
+    from whitelist.pending_store import get_pending, upsert_pending
+
+    org_count(5)
+    api = "torch.nn.functional.gelu"
+    upsert_pending(
+        db_session, api_path=api,
+        auto_classification=PendingClassification.AUTO_APPROVE, job_id="prior",
+    )
+    db_session.commit()
+    assert get_pending(db_session, api).review_status is ReviewStatus.PENDING
+
+    resp = submit_feedback(
+        db_session, blocked_api=api, model_id="m1",
+        purpose="정상 사용", reporter_id="dev1",
+    )
+    assert resp.review_status is ReviewStatus.APPROVED
+    pend = get_pending(db_session, api)
+    assert pend is not None
+    assert pend.review_status is ReviewStatus.APPROVED  # stale 아님

@@ -21,7 +21,7 @@ from whitelist.engine import _Classifier
 from whitelist.models import (
     FeedbackReportResponse, PendingClassification, ReviewStatus, WhitelistSource,
 )
-from whitelist.pending_store import upsert_pending
+from whitelist.pending_store import get_pending, upsert_pending
 from whitelist.rules import (
     PERMANENTLY_BLOCKED_APIS, SLA_HOURS, WHITELIST_VERSION, documentation_url_for,
 )
@@ -112,7 +112,12 @@ def submit_feedback(
 
     in_official = is_in_official_docs(db, api_path)
     org_count = get_org_cache().lookup_verified_org_count(api_path)
-    auto_rejected = api_path in PERMANENTLY_BLOCKED_APIS
+    permanently_blocked = api_path in PERMANENTLY_BLOCKED_APIS
+    # 수동 거부로 DB에 is_blocked=True인 API는 auto-learn으로 재허용되면 안 된다.
+    # (양유상 PR #56: reject된 차단을 verified-org 근거로 is_blocked=False로
+    #  덮어쓰는 우회를 막는다.)
+    db_blocked = approved is not None and approved.is_blocked
+    auto_rejected = permanently_blocked or db_blocked
     auto_learned = (not auto_rejected) and _auto_learn_eligible(
         api_path, classification, org_count, danger
     )
@@ -160,6 +165,12 @@ def submit_feedback(
             ),
             is_blocked=False,
         ))
+        # 같은 API가 이전 whitelist check로 이미 PENDING이면 stale로 남지 않도록
+        # APPROVED로 해소한다(양유상 PR #56: 자동승인 후 pending 큐에서 reject되어
+        # is_blocked=True로 되돌아가는 상태 충돌 방지).
+        existing_pending = get_pending(db, api_path)
+        if existing_pending is not None:
+            existing_pending.review_status = ReviewStatus.APPROVED
         append_audit(
             db,
             action="feedback_auto_approved",
@@ -200,10 +211,16 @@ def submit_feedback(
     db.commit()
 
     if auto_rejected:
-        message = (
-            f"'{api_path}'는 영구 차단 목록에 등록된 API로, "
-            f"자동 거부되었습니다. 다른 접근 방식을 사용하세요."
-        )
+        if permanently_blocked:
+            message = (
+                f"'{api_path}'는 영구 차단 목록에 등록된 API로, "
+                f"자동 거부되었습니다. 다른 접근 방식을 사용하세요."
+            )
+        else:
+            message = (
+                f"'{api_path}'는 보안 담당자가 이미 차단(거부)한 API로, "
+                f"자동 거부되었습니다. 재허용은 정식 리뷰가 필요합니다."
+            )
     elif auto_learned:
         message = (
             f"'{api_path}'는 verified org {org_count}개 실사용 + 안전 네임스페이스 "
