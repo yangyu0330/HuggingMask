@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import uuid
 from pathlib import Path
 
@@ -85,10 +86,15 @@ def inspect_artifacts(
     repo_id: str = "",
     enable_path_b: bool = False,
     notes: str = "",
+    snapshot_root: str | None = None,
+    revision: str = "main",
 ) -> "object":
     """이미 빌드된 아티팩트 목록을 통합 검증에 태우고 응답 객체를 반환.
 
     네트워크 없이 동작 — 단위 테스트는 이 함수를 fixture 경로로 직접 호출한다.
+
+    ``HUGGINGMASK_ENABLE_REAL_SANDBOX`` opt-in + Docker/runsc 가용 시 B-2 커스텀
+    코드를 실제 runsc 샌드박스에서 실행한다(미설정/실패 시 기존 PENDING 경로).
     """
     job = {
         "request_id": str(uuid.uuid4()),
@@ -98,6 +104,18 @@ def inspect_artifacts(
         "policy_fingerprint": "dashboard-inspect-policy",
         "notes": notes or f"dashboard inspect for {repo_id}",
     }
+    if snapshot_root:
+        job["model_snapshot_root"] = snapshot_root
+
+    # opt-in 실제 B-2 runsc 샌드박스 실행 컨텍스트(미설정/실패 시 None → 기존 경로)
+    from whitelist.realsandbox import build_real_b2_context
+
+    b2_ctx = build_real_b2_context(
+        snapshot_root=snapshot_root,
+        evidence_dir=os.path.join("evidence", "sandbox", "dashboard"),
+    )
+    if b2_ctx is not None:
+        return run_full_validation(job, db=db, revision=revision, **b2_ctx)
     return run_full_validation(job, db=db)
 
 
@@ -163,6 +181,8 @@ def inspect_model_repo(
         repo_id=repo_id,
         enable_path_b=enable_path_b,
         notes=f"dashboard inspect for {repo_id}@{revision}",
+        snapshot_root=str(local_dir),
+        revision=revision,
     )
 
     return {
