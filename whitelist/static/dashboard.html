@@ -18,7 +18,7 @@
 .chip-btn{border:1px solid #d6d3f0;background:#f3f2fc;color:#4a42a8;border-radius:20px;padding:5px 14px;font-size:12px;cursor:pointer;font-family:monospace;transition:all .15s}
 .chip-btn:hover{background:#e7e4f8}
 .chip-btn .tag{font-family:'Segoe UI',sans-serif;font-weight:600;margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px}
-.chip-btn .tag.deny{background:#fcebeb;color:#a32d2d}.chip-btn .tag.ok{background:#e1f5ee;color:#0f6e56}
+.chip-btn .tag.deny{background:#fcebeb;color:#a32d2d}.chip-btn .tag.ok{background:#e1f5ee;color:#0f6e56}.chip-btn .tag.wt{background:#e6f1fb;color:#185fa5}
 .spinner{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .insp-empty{padding:48px 20px;text-align:center;color:#9a9a9a;font-size:14px;line-height:1.7}
@@ -121,9 +121,10 @@
 <button class="btn btn-primary" id="insp-run" onclick="inspectModel()">검사 실행</button>
 </div>
 <div class="quick-row"><span class="ql">데모 모델</span>
-<button class="chip-btn" onclick="quickPick('THUDM/chatglm3-6b')">THUDM/chatglm3-6b<span class="tag deny">DENY 예상</span></button>
-<button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3')">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
-<button class="chip-btn" onclick="quickPick('tiiuae/falcon-7b-instruct')">tiiuae/falcon-7b-instruct</button>
+<button class="chip-btn" onclick="quickPick('THUDM/chatglm3-6b',true)">THUDM/chatglm3-6b<span class="tag deny">코드 DENY</span></button>
+<button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-bert',false)">tiny-random-bert<span class="tag wt">가중치 단계</span></button>
+<button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3',true)">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
+<button class="chip-btn" onclick="quickPick('tiiuae/falcon-7b-instruct',true)">tiiuae/falcon-7b-instruct</button>
 </div>
 </div>
 <div id="insp-result"><div class="insp-empty"><span class="big">🔬</span>모델 repo_id를 입력하고 <b>검사 실행</b>을 누르면<br>각 파일이 어떤 검증 단계를 거쳐 최종 판정에 이르는지 전 과정이 표시됩니다.</div></div>
@@ -380,7 +381,7 @@ const DEC={
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function cntCard(c,l,n){return '<div class="cnt '+c+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
 function hlStage(k,on){document.querySelectorAll(".lane[data-st='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on));document.querySelectorAll(".fcard[data-rk='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on))}
-function quickPick(id){document.getElementById('insp-repo').value=id;inspectModel()}
+function quickPick(id,skipw){document.getElementById('insp-repo').value=id;if(skipw!==undefined)document.getElementById('insp-skipw').checked=skipw;inspectModel()}
 function durMs(r){const a=Date.parse(r.started_at),b=Date.parse(r.finished_at);if(isNaN(a)||isNaN(b))return null;return Math.max(0,b-a)}
 function fmtMs(n){if(n==null)return '';if(n<1)return '<1ms';if(n<1000)return Math.round(n)+'ms';return (n/1000).toFixed(2)+'s'}
 function toggleDetail(el){const row=el.parentElement;row.classList.toggle('open');const d=row.querySelector('.art-detail');if(d)d.style.display=row.classList.contains('open')?'block':'none'}
