@@ -83,9 +83,9 @@ torch.utils.data.DataLoader</textarea>
 <div class="toast" id="toast"></div>
 
 <script>
-// HuggingMask 인터페이스 정의서 v1.0 14·15장 + /internal/v1 prefix
-// enum은 대문자 (PendingClassification.AUTO_APPROVE, ReviewStatus.PENDING 등)
-const API = window.location.origin + '/internal/v1';
+// Dashboard calls go through a same-origin backend proxy so the shared
+// internal API token never appears in browser JavaScript.
+const API = window.location.origin + '/dashboard/api';
 
 let approvedPage = 0, auditPage = 0;
 

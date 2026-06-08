@@ -76,13 +76,14 @@ class TestDashboardEndpoint:
         assert r.status_code == 200
         assert "text/html" in r.headers.get("content-type", "")
 
-    def test_dashboard_contains_internal_v1_api_base(self, client):
-        """JS가 우리 인터페이스 prefix를 사용하는지 회귀.
-        ``/api/v1`` (원본 lowercase)로 회귀하면 fail.
-        """
+    def test_dashboard_uses_backend_proxy_api_base(self, client):
+        """Dashboard JS must use the backend proxy, not protected internals."""
         r = client.get("/dashboard")
         body = r.text
-        assert "/internal/v1" in body
+        assert "/dashboard/api" in body
+        assert "/internal/v1" not in body
+        assert "HUGGINGMASK_INTERNAL_API_TOKEN" not in body
+        assert "X-Internal-Token" not in body
         assert "'/api/v1'" not in body  # 원본 prefix 회귀 방지
 
     def test_dashboard_uses_uppercase_enum(self, client):
@@ -188,6 +189,51 @@ class TestApprovedListEndpoint:
 # ─────────────────────────────────────────────
 # bulk 스크립트 — smoke + 정합성
 # ─────────────────────────────────────────────
+
+class TestDashboardProxyAuth:
+
+    def test_dashboard_proxy_get_works_with_token_enabled(self, client, monkeypatch):
+        token = "dashboard-proxy-secret"
+        monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", token)
+
+        assert client.get("/internal/v1/stats").status_code == 401
+
+        r = client.get("/dashboard/api/stats")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["whitelist_version"].startswith("wl-")
+        assert token not in r.text
+
+    def test_dashboard_proxy_post_works_with_token_enabled(self, client, monkeypatch):
+        token = "dashboard-proxy-secret"
+        monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", token)
+        payload = {
+            "schema_version": "1.0",
+            "request_id": str(uuid.uuid4()),
+            "job_id": str(uuid.uuid4()),
+            "model": {
+                "repo_id": "dashboard/test",
+                "revision": "main",
+                "source_host": "huggingface.co",
+                "source_url": "https://huggingface.co/dashboard/test",
+                "requested_by": "dashboard",
+                "requested_at": "2026-05-08T00:00:00Z",
+                "endpoint_mode": "HF_ENDPOINT_PROXY",
+            },
+            "apis": ["torch.nn.DashboardProxyLayer"],
+        }
+
+        assert client.post(
+            "/internal/v1/whitelist/check",
+            json=payload,
+        ).status_code == 401
+
+        r = client.post("/dashboard/api/whitelist/check", json=payload)
+        assert r.status_code == 200
+        body = r.json()
+        assert body[0]["api_path"] == "torch.nn.DashboardProxyLayer"
+        assert token not in r.text
+
 
 class TestBulkScripts:
 

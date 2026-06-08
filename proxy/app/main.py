@@ -12,8 +12,9 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI
-from fastapi.responses import HTMLResponse
+import httpx
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import HTMLResponse, Response
 from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
@@ -21,6 +22,8 @@ from analyzer.service import validate_job
 from proxy.auth import require_internal_token
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
+
+_ENV_TOKEN = "HUGGINGMASK_INTERNAL_API_TOKEN"
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
@@ -109,6 +112,56 @@ def dashboard() -> HTMLResponse:
             status_code=404,
         )
     return HTMLResponse(content=_DASHBOARD_HTML.read_text(encoding="utf-8"))
+
+
+def _dashboard_proxy_headers(request: Request) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for name in ("content-type", "accept"):
+        value = request.headers.get(name)
+        if value:
+            headers[name] = value
+
+    token = os.getenv(_ENV_TOKEN)
+    if token and token.strip():
+        headers["X-Internal-Token"] = token.strip()
+    return headers
+
+
+@app.api_route(
+    "/dashboard/api/{internal_path:path}",
+    methods=["GET", "POST"],
+)
+async def dashboard_internal_proxy(
+    internal_path: str,
+    request: Request,
+) -> Response:
+    """Dashboard-only backend proxy for authenticated internal APIs.
+
+    The browser calls this public dashboard path without seeing the shared
+    internal token. When auth is enabled, the server attaches the token while
+    forwarding to the existing /internal/v1 transport-auth-protected routes.
+    """
+    target = f"/internal/v1/{internal_path}"
+    if request.url.query:
+        target = f"{target}?{request.url.query}"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url=str(request.base_url),
+    ) as client:
+        upstream = await client.request(
+            request.method,
+            target,
+            content=await request.body(),
+            headers=_dashboard_proxy_headers(request),
+        )
+
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        media_type=upstream.headers.get("content-type"),
+    )
 
 
 app.include_router(
