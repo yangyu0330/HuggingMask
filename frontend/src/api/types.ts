@@ -140,3 +140,42 @@ export interface ReviewDecisionResult {
   audit_event_id?: number | null;
   audit_event_hash?: string | null;
 }
+
+export interface HealthResponse {
+  status: string;
+}
+
+export interface WhitelistStats {
+  whitelist_version: string | number;
+  approved_active: number;
+  blocked: number;
+  rejected: number;
+  pending_review: number;
+  feedback_total: number;
+}
+
+export interface DemoEvidenceItem {
+  kind: string;
+  title: string;
+  path: string;
+  summary: string;
+  exists: boolean;
+  last_modified: string | null;
+}
+
+export interface DemoReadiness {
+  health: { ok: boolean };
+  openapi: { ok: boolean };
+  dashboard: { ok: boolean };
+  audit_chain: {
+    valid: boolean;
+    violation_count: number;
+    violations: string[];
+  };
+  stats: WhitelistStats;
+  evidence: {
+    missing: string[];
+    items: DemoEvidenceItem[];
+  };
+  warnings: string[];
+}

@@ -163,3 +163,21 @@ def test_frontend_api_client_rejects_applied_false_response():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_overview_binds_required_readiness_endpoints():
+    api_source = (REPO_ROOT / "frontend" / "src" / "api" / "overview.ts").read_text(
+        encoding="utf-8"
+    )
+    overview_source = (
+        REPO_ROOT / "frontend" / "src" / "features" / "overview" / "OverviewPage.tsx"
+    ).read_text(encoding="utf-8")
+
+    assert "fetch('/health'" in api_source
+    assert "apiGet<WhitelistStats>('/stats')" in api_source
+    assert "apiGet<DemoReadiness>('/demo/readiness')" in api_source
+    assert "readiness.evidence.missing" in overview_source
+    assert "readiness.warnings" in overview_source
+    assert "pipelineStages" in overview_source
+    assert "ErrorPanel" in overview_source
+    assert "aria-busy" in overview_source
