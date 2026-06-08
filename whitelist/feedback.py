@@ -19,16 +19,53 @@ from sqlalchemy.orm import Session
 from whitelist.audit import append_audit
 from whitelist.engine import _Classifier
 from whitelist.models import (
-    FeedbackReportResponse, PendingClassification, ReviewStatus,
+    FeedbackReportResponse, PendingClassification, ReviewStatus, WhitelistSource,
 )
 from whitelist.pending_store import upsert_pending
 from whitelist.rules import (
-    PERMANENTLY_BLOCKED_APIS, SLA_HOURS, documentation_url_for,
+    PERMANENTLY_BLOCKED_APIS, SLA_HOURS, WHITELIST_VERSION, documentation_url_for,
 )
 from whitelist.tables import ApprovedApi, FeedbackReport
 
 
 logger = logging.getLogger(__name__)
+
+# 오탐 자동학습 — 사람 검토 없이 ALLOWED로 자동 승격하기 위한 최소 verified org 수.
+AUTO_LEARN_MIN_VERIFIED_ORGS = 3
+
+
+def _auto_learn_eligible(
+    api_path: str,
+    classification: PendingClassification,
+    org_count: int,
+    risk_keywords: list[str],
+) -> bool:
+    """오탐 보고를 사람 검토 없이 ALLOWED로 자동 승격할지 판정.
+
+    핵심 안전 원칙: **보고 행위 자체는 신뢰하지 않는다**(악의적 보고/계정 탈취로
+    위험 API를 승격하는 것을 막기 위해). 위조 불가능한 *외부* 증거가 모두 충족될
+    때만 True:
+      - 영구 차단 목록이 아님
+      - 네임스페이스 규칙이 AUTO_APPROVE(예: torch.nn.*)로 분류한 안전 API
+        (os/subprocess/pickle/importlib/ctypes 등 위험 네임스페이스는 BLOCKED라
+        절대 AUTO_APPROVE가 안 됨)
+      - 함수명에 exec/io 위험 키워드 없음
+      - verified org(mod2, google/meta 등) N개 이상이 실제 모델에서 사용
+
+    ``in_official_docs``(mod1)는 ApprovedApi(INITIAL/AUTO_CRAWL) 등재 여부인데,
+    그게 True면 submit_feedback이 "이미 승인됨"으로 조기 return하므로 이 시점엔
+    항상 False다 → 자동학습 증거로 쓸 수 없어 org_count(mod2)에 의존한다.
+
+    이 조건은 `os.system` 같은 위험 API에는 절대 충족되지 않는다(네임스페이스
+    BLOCKED + 영구차단).
+    """
+    if api_path in PERMANENTLY_BLOCKED_APIS:
+        return False
+    if classification is not PendingClassification.AUTO_APPROVE:
+        return False
+    if risk_keywords:
+        return False
+    return org_count >= AUTO_LEARN_MIN_VERIFIED_ORGS
 
 
 def _generate_report_id() -> str:
@@ -76,11 +113,17 @@ def submit_feedback(
     in_official = is_in_official_docs(db, api_path)
     org_count = get_org_cache().lookup_verified_org_count(api_path)
     auto_rejected = api_path in PERMANENTLY_BLOCKED_APIS
+    auto_learned = (not auto_rejected) and _auto_learn_eligible(
+        api_path, classification, org_count, danger
+    )
 
     if auto_rejected:
         sla = SLA_HOURS[PendingClassification.BLOCKED]
         review_status = ReviewStatus.REJECTED
         classification = PendingClassification.BLOCKED
+    elif auto_learned:
+        sla = 0
+        review_status = ReviewStatus.APPROVED
     else:
         sla = SLA_HOURS.get(classification, 48)
         review_status = ReviewStatus.PENDING
@@ -100,7 +143,37 @@ def submit_feedback(
     )
     db.add(report)
 
-    if not auto_rejected:
+    if auto_learned:
+        # 위조 불가능한 외부 증거(공식 문서 + verified org 다수 + 안전
+        # 네임스페이스 + 위험 키워드 0)만으로 화이트리스트에 자동 승격.
+        # 보고 행위 자체는 신뢰하지 않으므로 악의적 보고로는 도달 불가.
+        db.merge(ApprovedApi(
+            api_path=api_path,
+            namespace=api_path.split(".")[0],
+            source=WhitelistSource.AUTO_CRAWL,
+            matched_rule=matched,
+            source_version=WHITELIST_VERSION,
+            reviewer_id="auto-learn",
+            review_note=(
+                f"auto-approved via feedback {report.report_id}: "
+                f"{org_count} verified orgs (mod2), AUTO_APPROVE namespace"
+            ),
+            is_blocked=False,
+        ))
+        append_audit(
+            db,
+            action="feedback_auto_approved",
+            api_path=api_path,
+            actor="auto-learn",
+            detail=(
+                f"report_id={report.report_id}, verified_org_count={org_count}, "
+                f"classification=AUTO_APPROVE, namespace_rule={matched}"
+            ),
+        )
+        # 다음 append_audit가 방금 추가한 행을 tail로 보도록 flush (autoflush=False
+        # 환경에서 두 감사 행이 같은 prev_hash를 공유해 체인이 깨지는 것 방지).
+        db.flush()
+    elif not auto_rejected:
         # 보안 담당자 큐에 들어가도록 pending에도 등록
         upsert_pending(
             db,
@@ -121,7 +194,7 @@ def submit_feedback(
         actor=reporter_id,
         detail=(
             f"report_id={report.report_id}, model={model_id}, "
-            f"auto_rejected={auto_rejected}, sla={sla}h"
+            f"auto_rejected={auto_rejected}, auto_learned={auto_learned}, sla={sla}h"
         ),
     )
     db.commit()
@@ -130,6 +203,11 @@ def submit_feedback(
         message = (
             f"'{api_path}'는 영구 차단 목록에 등록된 API로, "
             f"자동 거부되었습니다. 다른 접근 방식을 사용하세요."
+        )
+    elif auto_learned:
+        message = (
+            f"'{api_path}'는 verified org {org_count}개 실사용 + 안전 네임스페이스 "
+            f"근거로 화이트리스트에 자동 승인되었습니다 (사람 검토 불필요)."
         )
     else:
         message = (
