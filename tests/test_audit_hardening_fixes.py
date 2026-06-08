@@ -112,6 +112,34 @@ class TestJobsFailOpen:
         assert body["artifact_results"][0]["status"] == "SKIPPED"
         assert body["pending_artifact_ids"] == []
 
+    def test_metadata_spoofed_executable_other_is_gated(self, tmp_path):
+        # 양유상 PR #53: repo_path는 payload.py.txt(실행물)인데 file_name만 README.md로
+        # 위장. file_name만 신뢰하면 우회됨 → repo_path/basename도 검사해야 게이트됨.
+        import hashlib
+
+        p = tmp_path / "payload.py.txt"
+        p.write_bytes(b"import os\nos.system('echo x')\n")  # shebang 없는 일반 파이썬
+        content = p.read_bytes()
+        sha = hashlib.sha256(content).hexdigest()
+        art = {
+            "artifact_id": f"sha256:{sha}",
+            "repo_path": "payload.py.txt",
+            "file_name": "README.md",  # 메타데이터 위장
+            "file_kind": "OTHER",
+            "detected_extension": ".md",
+            "size_bytes": len(content),
+            "sha256": sha,
+            "source_url": "local",
+            "temp_local_path": str(p),
+            "referenced_by": [],
+            "is_generated": False,
+        }
+        resp = client.post("/internal/v1/validation/jobs", json=_job_payload([art]))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["overall_decision"] == "REVIEW_REQUIRED"
+        assert body["artifact_results"][0]["status"] == "PENDING_REVIEW"
+
 
 # ── H2: 역직렬화/원격코드 sink → BLOCK ─────────────────────────────────────
 class TestDeserializerSinksBlocked:

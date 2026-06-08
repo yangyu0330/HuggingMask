@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
-DEFAULT_POLICY_VERSION = "policy-2026.04.20"
+DEFAULT_POLICY_VERSION = "policy-2026.06.08"
 DEFAULT_WHITELIST_VERSION = "wl-inmemory-stage5"
 
 _DEFAULT_ALLOWED_EXACT = frozenset(

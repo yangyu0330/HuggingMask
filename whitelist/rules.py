@@ -17,7 +17,7 @@ from whitelist.models import PendingClassification
 # 형식: wl-YYYY.MM.DD (인터페이스 정의서 14.2절 예시 기준)
 # ─────────────────────────────────────────────
 
-WHITELIST_VERSION = "wl-2026.04.20"
+WHITELIST_VERSION = "wl-2026.06.08"
 
 
 # ─────────────────────────────────────────────
