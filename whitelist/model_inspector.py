@@ -96,11 +96,14 @@ def inspect_artifacts(
     ``HUGGINGMASK_ENABLE_REAL_SANDBOX`` opt-in + Docker/runsc 가용 시 B-2 커스텀
     코드를 실제 runsc 샌드박스에서 실행한다(미설정/실패 시 기존 PENDING 경로).
     """
+    # 운영자 env 토글(HUGGINGMASK_ENABLE_PATH_B)도 존중 — /jobs·/full 과 동일하게
+    # 대시보드 inspect 도 피클 Path B(Docker 샌드박스) 활성. 미설정이면 기존 Path A만.
+    env_path_b = os.getenv("HUGGINGMASK_ENABLE_PATH_B", "").strip().lower() in {"1", "true", "yes", "on"}
     job = {
         "request_id": str(uuid.uuid4()),
         "job_id": str(uuid.uuid4()),
         "artifacts": artifacts,
-        "enable_path_b": enable_path_b,
+        "enable_path_b": bool(enable_path_b or env_path_b),
         "policy_fingerprint": "dashboard-inspect-policy",
         "notes": notes or f"dashboard inspect for {repo_id}",
     }
