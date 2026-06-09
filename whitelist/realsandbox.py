@@ -49,7 +49,13 @@ def build_real_b2_context(
         from sandbox.b2.host_runner_executor import B2HostRunner
         from sandbox.b2.real_command_runner import RealDockerCommandRunner
 
-        evidence_path = Path(evidence_dir)
+        # evidence/staging/runner 는 컨테이너(--user=1000:1000)가 쓰는 바인드마운트
+        # 대상이므로 Linux 네이티브 FS여야 한다(/mnt/c 같은 DrvFs는 chmod 미지원으로
+        # docker cp/write 실패). WSL2에서는 HUGGINGMASK_SANDBOX_EVIDENCE_DIR 로
+        # ``~/hm-evidence`` 같은 홈 경로를 지정.
+        evidence_path = Path(
+            os.getenv("HUGGINGMASK_SANDBOX_EVIDENCE_DIR", "").strip() or evidence_dir
+        )
         evidence_path.mkdir(parents=True, exist_ok=True)
 
         config = B2DockerRuntimeConfig(
@@ -57,10 +63,17 @@ def build_real_b2_context(
             docker_runtime=os.getenv("HUGGINGMASK_B2_RUNTIME", "runsc"),
             docker_binary=os.getenv("HUGGINGMASK_DOCKER_BINARY", "docker"),
         )
+        # runsc strace 캡처: 런타임이 ``--strace --debug --debug-log=<dir>`` 로 구성된
+        # 경우 그 ``<dir>``을 지정하면 strace 관측 → #55 require_runsc_strace 게이트
+        # 통과(clean review). 미지정이면 fail-closed(LOG_INCOMPLETE) 유지.
+        runner_kwargs: dict[str, Any] = {"evidence_dir": evidence_path}
+        strace_dir = os.getenv("HUGGINGMASK_B2_STRACE_LOG_DIR", "").strip()
+        if strace_dir:
+            runner_kwargs["runsc_strace_log_dir"] = Path(strace_dir)
         b2_runner = B2HostRunner(
             config=config,
             output_dir=evidence_path / "runner",
-            command_runner=RealDockerCommandRunner(evidence_dir=evidence_path),
+            command_runner=RealDockerCommandRunner(**runner_kwargs),
             repo_root=Path.cwd(),
         )
         resolver = (
