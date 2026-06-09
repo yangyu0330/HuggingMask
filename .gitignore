@@ -27,3 +27,6 @@ data/crawl_output.json
 data/api_inspection.json
 data/api_pytorch.json
 data/org_analysis_output.json
+
+# Nexus 사내 저장소 — 다운로드된 모델 파일(커밋 금지)
+nexus_store/

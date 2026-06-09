@@ -58,7 +58,11 @@ async def _decide(repo: str, revision: str, db: Session) -> dict:
     """repo 단위 게이트 결정(캐시). 최초 1회만 실검사(동기 IO→threadpool) 후 재사용."""
     cached = _gate_cache.get(repo)
     if cached is None:
-        cached = await run_in_threadpool(gate_model, repo, db=db, revision=revision)
+        # 통과(APPROVE)한 모델은 경로(대시보드/CLI/브라우저) 무관하게 사내 Nexus 에
+        # 보관한다 — "검사 통과 모델은 사내 레포에 저장"을 일관 적용.
+        cached = await run_in_threadpool(
+            gate_model, repo, db=db, revision=revision, store=True
+        )
         _gate_cache[repo] = cached
     return cached
 

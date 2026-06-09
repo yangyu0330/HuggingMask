@@ -28,6 +28,10 @@ fi
 source "$VENV/bin/activate"
 
 echo "==> [3/4] 실 sandbox 토글 설정 (runsc-strace + Linux evidence)"
+# 루프 방지: 서버 프로세스는 항상 실제 huggingface.co 로 직접 나가야 한다.
+# (이 셸에서 export HF_ENDPOINT/HTTP(S)_PROXY 했다면 게이트의 검사 다운로드가
+#  자기 자신(프록시)을 거쳐 깨진 내용을 받아 config.json 이 'JSON 아님'으로 BLOCK 됨.)
+unset HF_ENDPOINT HTTP_PROXY HTTPS_PROXY http_proxy https_proxy 2>/dev/null || true
 export HUGGINGMASK_ENABLE_REAL_SANDBOX=1
 export HUGGINGMASK_ENABLE_PATH_B=1
 export HUGGINGMASK_B2_IMAGE="${HUGGINGMASK_B2_IMAGE:-huggingmask-b2-sandbox:local}"

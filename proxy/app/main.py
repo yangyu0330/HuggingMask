@@ -152,6 +152,59 @@ def proxy_acquired(db: Session = Depends(get_db)):
     return {"items": list_acquired(db)}
 
 
+@app.get(
+    "/internal/v1/proxy/nexus",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_nexus():
+    """Nexus 사내 저장소에 실제 보관된 모델 파일 목록(매니페스트 기반)."""
+    from whitelist.acquisition import list_nexus
+
+    return {"items": list_nexus()}
+
+
+@app.get(
+    "/internal/v1/proxy/nexus/file",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_nexus_file(repo: str, path: str, revision: str = "main"):
+    """Nexus 에 보관된 개별 파일 다운로드(저장 디렉터리 밖 접근 차단)."""
+    from fastapi.responses import FileResponse, JSONResponse
+
+    from whitelist.acquisition import nexus_file_path
+
+    target = nexus_file_path(repo, revision, path)
+    if target is None:
+        return JSONResponse(
+            {"error": "file not found in nexus store", "repo": repo, "path": path},
+            status_code=404,
+        )
+    return FileResponse(str(target), filename=path.split("/")[-1])
+
+
+@app.get(
+    "/internal/v1/proxy/nexus/zip",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_nexus_zip(repo: str, revision: str = "main"):
+    """Nexus 에 보관된 모델 '전체'를 ZIP 1개로 다운로드(브라우저 일괄 받기)."""
+    from fastapi.responses import JSONResponse, Response
+
+    from whitelist.acquisition import build_nexus_zip
+
+    data = build_nexus_zip(repo, revision)
+    if data is None:
+        return JSONResponse(
+            {"error": "model not stored in nexus", "repo": repo}, status_code=404
+        )
+    fname = repo.replace("/", "__") + ".zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 # ─────────────────────────────────────────────
 # 운영 대시보드 (보안 담당자 UI)
 # ─────────────────────────────────────────────
