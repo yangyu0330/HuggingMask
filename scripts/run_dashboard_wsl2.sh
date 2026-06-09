@@ -39,6 +39,9 @@ export HUGGINGMASK_B2_RUNTIME="${HUGGINGMASK_B2_RUNTIME:-runsc-strace}"
 export HUGGINGMASK_B2_STRACE_LOG_DIR="${HUGGINGMASK_B2_STRACE_LOG_DIR:-/tmp/runsc-strace}"
 export HUGGINGMASK_SANDBOX_EVIDENCE_DIR="${HUGGINGMASK_SANDBOX_EVIDENCE_DIR:-$HOME/hm-evidence}"
 export HUGGINGMASK_PATH_B_TIMEOUT="${HUGGINGMASK_PATH_B_TIMEOUT:-120}"  # runsc+torch cold start 여유
+# 전처리 자동화 B: baseline 없어도 구조적으로 안전(커스텀코드/인젝션/네트워크경로 0)하면
+# 자동 통과 — 검토대기 부담 감소. (A=레지스트리 해시 매칭은 항상 동작, 악성은 항상 차단)
+export HUGGINGMASK_PREPROCESSING_INVARIANTS="${HUGGINGMASK_PREPROCESSING_INVARIANTS:-1}"
 
 echo "==> [4/4] uvicorn 백그라운드 기동 (port $PORT, 로그=$LOG)"
 nohup uvicorn proxy.app.main:app --port "$PORT" > "$LOG" 2>&1 &
