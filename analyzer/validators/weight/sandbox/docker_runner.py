@@ -38,6 +38,9 @@ def run_in_docker(
     runtime: str = "runsc",
     docker_bin: str | None = None,
 ) -> dict:
+    # runsc + torch import 는 기본 10초를 넘길 수 있어 운영자 env 로 상향 허용
+    # (gVisor 호스트 e2e 실측: 첫 cold start 시 torch 로딩이 느림).
+    timeout_sec = max(timeout_sec, int(os.getenv("HUGGINGMASK_PATH_B_TIMEOUT", "0") or 0))
     host_path = Path(file_path).resolve()
     docker_cmd = docker_bin or os.getenv("DOCKER_BIN", "docker")
     nonce = secrets.token_hex(16)
