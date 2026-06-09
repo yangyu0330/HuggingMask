@@ -182,3 +182,10 @@ app.include_router(
     whitelist_router,
     dependencies=[Depends(require_internal_token)],
 )
+
+# HuggingFace 다운로드 transparent 가로채기(HF_ENDPOINT 리버스 프록시).
+# catch-all 라우트('/{full_path:path}')를 포함하므로 반드시 맨 마지막에 등록해
+# /dashboard·/health·/internal/v1/* 등 명시 라우트를 가리지 않게 한다.
+from proxy.app.hf_proxy import router as hf_proxy_router
+
+app.include_router(hf_proxy_router)

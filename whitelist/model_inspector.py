@@ -230,6 +230,113 @@ def _inspect_pickle_pathb_demo(*, db: Session) -> dict:
     }
 
 
+def _inspect_clean_model_demo(*, db: Session) -> dict:
+    """내장 '정상 모델' 데모. 시스템이 승인하는 안전 포맷인 safetensors 가중치를
+    만들어 검사 — 안전텐서 해시 검증 통과 → APPROVE. (실행 가능 코드를 담을 수
+    없는 포맷이라 pickle RCE 위험이 구조적으로 없음.)"""
+    import tempfile
+
+    import torch
+    from safetensors.torch import save_file
+
+    snapshot_root = Path(tempfile.mkdtemp(prefix="hm-clean-demo-"))
+    repo_path = "model.safetensors"
+    target = snapshot_root / repo_path
+    save_file(
+        {"linear.weight": torch.zeros(2, 2), "linear.bias": torch.zeros(2)},
+        str(target),
+    )
+    data = target.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    artifacts = [
+        {
+            "artifact_id": f"sha256:{digest}",
+            "repo_path": repo_path,
+            "file_name": repo_path,
+            "file_kind": "SAFETENSORS",
+            "detected_extension": ".safetensors",
+            "size_bytes": len(data),
+            "sha256": digest,
+            "source_url": "local://demo/clean-model",
+            "temp_local_path": str(target),
+        }
+    ]
+    response = inspect_artifacts(
+        artifacts,
+        db=db,
+        repo_id="demo:clean-model",
+        enable_path_b=False,
+        notes="정상 모델 내장 데모 (안전 safetensors → APPROVE)",
+        snapshot_root=str(snapshot_root),
+    )
+    return {
+        "ok": True,
+        "repo_id": "demo:clean-model (내장 정상 모델 데모)",
+        "revision": "local",
+        "skip_weights": False,
+        "validated_count": len(artifacts),
+        "skipped_other": [],
+        "skipped_weights": [],
+        "response": response,
+    }
+
+
+def _inspect_pickle_malicious_demo(*, db: Session) -> dict:
+    """내장 '악성 모델' 데모. pickle 역직렬화 시 os.system 을 실행시키는 RCE
+    reducer(REDUCE/GLOBAL opcode)를 심은 pickle 을 만들어 검사 — Path A opcode
+    화이트리스트가 실행 가능 opcode 를 탐지해 즉시 BLOCK(DENY). 코드는 실행되지
+    않는다(정적 파싱만)."""
+    import pickle
+    import tempfile
+
+    snapshot_root = Path(tempfile.mkdtemp(prefix="hm-malicious-demo-"))
+    repo_path = "pytorch_model.bin"
+    target = snapshot_root / repo_path
+
+    class _Rce:
+        def __reduce__(self):
+            import os as _os
+
+            return (_os.system, ("echo HUGGINGMASK_PWNED",))
+
+    # 인스턴스를 pickle 하면 GLOBAL os.system + REDUCE opcode 가 직렬화된다.
+    # 검사 시점엔 절대 unpickle 하지 않고 opcode 만 정적 스캔하므로 안전.
+    target.write_bytes(pickle.dumps({"weight": _Rce()}))
+    data = target.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    artifacts = [
+        {
+            "artifact_id": f"sha256:{digest}",
+            "repo_path": repo_path,
+            "file_name": repo_path,
+            "file_kind": "PICKLE",
+            "detected_extension": ".bin",
+            "size_bytes": len(data),
+            "sha256": digest,
+            "source_url": "local://demo/pickle-malicious",
+            "temp_local_path": str(target),
+        }
+    ]
+    response = inspect_artifacts(
+        artifacts,
+        db=db,
+        repo_id="demo:pickle-malicious",
+        enable_path_b=False,  # Path A opcode 차단으로 충분 — 샌드박스 도달 전 DENY
+        notes="악성 모델 내장 데모 (os.system RCE reducer → opcode 차단)",
+        snapshot_root=str(snapshot_root),
+    )
+    return {
+        "ok": True,
+        "repo_id": "demo:pickle-malicious (내장 악성 모델 데모)",
+        "revision": "local",
+        "skip_weights": False,
+        "validated_count": len(artifacts),
+        "skipped_other": [],
+        "skipped_weights": [],
+        "response": response,
+    }
+
+
 def inspect_model_repo(
     repo_id: str,
     *,
@@ -255,6 +362,10 @@ def inspect_model_repo(
         return _inspect_b2_demo(db=db, enable_path_b=enable_path_b)
     if repo_id in {"demo:pickle-path-b", "demo:pathb"}:
         return _inspect_pickle_pathb_demo(db=db)
+    if repo_id in {"demo:clean-model", "demo:pickle-clean", "demo:clean"}:
+        return _inspect_clean_model_demo(db=db)
+    if repo_id in {"demo:pickle-malicious", "demo:malicious"}:
+        return _inspect_pickle_malicious_demo(db=db)
 
     try:
         from huggingface_hub import snapshot_download

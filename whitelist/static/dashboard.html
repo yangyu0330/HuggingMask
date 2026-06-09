@@ -129,6 +129,8 @@
 <button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-custom-architecture',false)">tiny-random-custom-architecture<span class="tag sb">샌드박스 레인</span></button>
 <button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-bert',false)">tiny-random-bert<span class="tag wt">가중치 단계</span></button>
 <button class="chip-btn" onclick="quickPick('demo:b2-sandbox',true)">🏖️ B-2 샌드박스 데모<span class="tag sb">runsc 실행</span></button>
+<button class="chip-btn" onclick="quickPick('demo:clean-model',false)">🟢 정상 모델<span class="tag ok">APPROVE</span></button>
+<button class="chip-btn" onclick="quickPick('demo:pickle-malicious',false)">🔴 악성 모델<span class="tag deny">DENY</span></button>
 <button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3',true)">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
 </div>
 </div>
@@ -143,6 +145,8 @@
 <button class="btn btn-primary" id="gate-run" onclick="gateModel()">게이트 검사</button>
 </div>
 <div class="quick-row"><span class="ql">데모</span>
+<button class="chip-btn" onclick="gatePick('demo:clean-model')">🟢 정상 모델<span class="tag ok">Nexus 저장</span></button>
+<button class="chip-btn" onclick="gatePick('demo:pickle-malicious')">🔴 악성 모델<span class="tag deny">격리</span></button>
 <button class="chip-btn" onclick="gatePick('THUDM/chatglm3-6b')">THUDM/chatglm3-6b<span class="tag deny">격리 예상</span></button>
 <button class="chip-btn" onclick="gatePick('vmaca123/korean-pii-ner-v3')">vmaca123/korean-pii-ner-v3<span class="tag ok">보류</span></button>
 <button class="chip-btn" onclick="gatePick('demo:b2-sandbox')">🏖️ B-2 데모<span class="tag sb">보류</span></button>
