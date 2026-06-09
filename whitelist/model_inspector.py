@@ -119,6 +119,62 @@ def inspect_artifacts(
     return run_full_validation(job, db=db)
 
 
+# B-2 샌드박스 데모 타깃 — 파일명 modeling_*.py 로 MODELING 분류, self.custom_activation
+# 은 미등록 API ref(pending_api_refs) 라 B-2/CODE_SANDBOX_RUNTIME 로 라우팅되고
+# _requires_b2_sandbox 를 만족한다. 위험/동적/난독화 패턴은 없어 정적 차단 안 됨.
+_B2_DEMO_SOURCE = (
+    "class DemoModel:\n"
+    "    def custom_activation(self, x):\n"
+    "        return x\n\n"
+    "    def forward(self, x):\n"
+    "        return self.custom_activation(x)\n"
+)
+
+
+def _inspect_b2_demo(*, db: Session, enable_path_b: bool = False) -> dict:
+    """내장 B-2 샌드박스 데모. Linux 네이티브 임시 디렉토리에 데모 코드를 써서
+    검사 — 실 sandbox 토글 ON 이면 runsc 에서 실제 실행된다."""
+    import tempfile
+
+    snapshot_root = Path(tempfile.mkdtemp(prefix="hm-b2-demo-"))
+    repo_path = "modeling_b2_demo.py"
+    target = snapshot_root / repo_path
+    target.write_text(_B2_DEMO_SOURCE, encoding="utf-8")
+    data = target.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    artifacts = [
+        {
+            "artifact_id": f"sha256:{digest}",
+            "repo_path": repo_path,
+            "file_name": repo_path,
+            "file_kind": "PYTHON",
+            "detected_extension": ".py",
+            "size_bytes": len(data),
+            "sha256": digest,
+            "source_url": "local://demo/b2-sandbox",
+            "temp_local_path": str(target),
+        }
+    ]
+    response = inspect_artifacts(
+        artifacts,
+        db=db,
+        repo_id="demo:b2-sandbox",
+        enable_path_b=enable_path_b,
+        notes="B-2 gVisor 샌드박스 내장 데모",
+        snapshot_root=str(snapshot_root),
+    )
+    return {
+        "ok": True,
+        "repo_id": "demo:b2-sandbox (내장 B-2 데모)",
+        "revision": "local",
+        "skip_weights": True,
+        "validated_count": len(artifacts),
+        "skipped_other": [],
+        "skipped_weights": [],
+        "response": response,
+    }
+
+
 def inspect_model_repo(
     repo_id: str,
     *,
@@ -136,6 +192,12 @@ def inspect_model_repo(
     repo_id = (repo_id or "").strip()
     if not repo_id:
         return {"ok": False, "error": "repo_id를 입력하세요.", "error_code": "EMPTY_REPO_ID"}
+
+    # 내장 B-2 샌드박스 데모 — HF 다운로드 없이 _requires_b2_sandbox 를 확실히
+    # 트리거하는 benign 커스텀 코드(self.custom_activation = 미등록 API ref)를
+    # 검사. 실 sandbox 토글이 켜져 있으면 runsc 에서 실제 실행된다.
+    if repo_id in {"demo:b2-sandbox", "demo:gvisor"}:
+        return _inspect_b2_demo(db=db, enable_path_b=enable_path_b)
 
     try:
         from huggingface_hub import snapshot_download

@@ -109,3 +109,14 @@ def test_inspect_model_repo_empty_repo_id_fails_gracefully(db_session):
     out = inspect_model_repo("  ", db=db_session)
     assert out["ok"] is False
     assert out["error_code"] == "EMPTY_REPO_ID"
+
+
+def test_b2_demo_routes_to_sandbox(db_session):
+    # 내장 B-2 데모가 CODE_SANDBOX_RUNTIME(gVisor 레인)으로 라우팅돼야 실
+    # sandbox 실행(toggle ON, WSL2)이 트리거된다. 라우팅 자체는 OS 무관.
+    out = inspect_model_repo("demo:b2-sandbox", db=db_session)
+    assert out["ok"] is True
+    by_path = {r.artifact.repo_path: r for r in out["response"].artifact_results}
+    r = by_path["modeling_b2_demo.py"]
+    assert r.route_kind.value == "CODE_SANDBOX_RUNTIME", r.route_kind.value
+    assert r.grade.value == "B-2", r.grade.value

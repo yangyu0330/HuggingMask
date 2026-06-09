@@ -88,6 +88,9 @@
 .art-detail{margin-top:7px;padding:9px 11px;background:#fafbfc;border:1px solid #f0f0f0;border-radius:8px}
 .art-meta{font-size:10px;color:#999;font-family:monospace;margin-top:7px;word-break:break-all}
 .pass-note{font-size:11px;color:#0f6e56}
+.sbx{margin-top:8px;padding:9px 11px;border-radius:8px;background:#f3eafc;border:1px solid #e2d4f5;font-size:11px;line-height:1.7;color:#4a3a6b}
+.sbx b{color:#7b3fb8}
+.sbx .ok{color:#0f6e56;font-weight:700}
 .idle-reason{padding:2px 14px 11px;font-size:10px;color:#b3b3b3;font-style:italic}
 .flow-legend{margin:0 20px 12px;font-size:11px;color:#888;line-height:1.6;background:#fafbfc;border:1px solid #eee;border-radius:8px;padding:9px 13px}
 .flow-legend b{color:#666}
@@ -124,6 +127,7 @@
 <button class="chip-btn" onclick="quickPick('THUDM/chatglm3-6b',true)">THUDM/chatglm3-6b<span class="tag deny">코드 DENY</span></button>
 <button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-custom-architecture',false)">tiny-random-custom-architecture<span class="tag sb">샌드박스 레인</span></button>
 <button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-bert',false)">tiny-random-bert<span class="tag wt">가중치 단계</span></button>
+<button class="chip-btn" onclick="quickPick('demo:b2-sandbox',true)">🏖️ B-2 샌드박스 데모<span class="tag sb">runsc 실행</span></button>
 <button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3',true)">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
 </div>
 </div>
@@ -479,6 +483,24 @@ function renderInspect(data){
           h+='</div>';
         }else{
           h+='<div class="pass-note">✓ 위험 신호 없음 — 이 단계 통과</div>';
+        }
+        // gVisor 샌드박스 실제 실행 evidence (B-2 + 실 sandbox 토글 ON일 때)
+        const sc=r.details&&r.details.sandbox_check;
+        if(sc){
+          const re_=sc.runtime_evidence||{},ex=sc.execution||{};
+          const dec=sc.decision||'',clean=dec==='B2_POLICY_REVIEW_REQUIRED';
+          const rt=sc.sandbox_runtime||re_.runtime||'';
+          const isolated=(re_.runtime||'').indexOf('runsc')>=0&&re_.network_mode==='none';
+          h+='<div class="sbx">🏖️ <b>gVisor 샌드박스 실제 실행</b>'
+            +(rt?' · runtime=<b>'+esc(rt)+'</b>':'')
+            +(isolated?' · <span class="ok">격리 검증 ✓</span>':'')
+            +(re_.network_mode?' · net='+esc(re_.network_mode):'')
+            +(re_.rootfs_readonly?' · read-only':'')
+            +(re_.cap_drop_all?' · cap-drop=ALL':'')
+            +(ex.forward_status&&ex.forward_status!=='not_run'?' · forward='+esc(ex.forward_status):'')
+            +'<br>판정 <b>'+esc(dec)+'</b>'
+            +(clean?' <span class="ok">(샌드박스 통과 — 사람 검토 대기)</span>':(sc.reason?' · '+esc(sc.reason):''))
+            +' · deployable='+(sc.deployable?'true':'false')+'</div>';
         }
         const sha=(r.artifact.sha256||'').slice(0,12);
         h+='<div class="art-meta">'+esc(r.route_kind)+' · '+esc(r.review_action||'')
