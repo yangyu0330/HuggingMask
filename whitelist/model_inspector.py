@@ -178,6 +178,58 @@ def _inspect_b2_demo(*, db: Session, enable_path_b: bool = False) -> dict:
     }
 
 
+def _inspect_pickle_pathb_demo(*, db: Session) -> dict:
+    """내장 피클 Path B 데모. 정적 파서가 못 푸는 피클(torch.save zip 포맷)을 만들어
+    검사 — Path A가 PARSE_ERROR/UNSUPPORTED → Docker 샌드박스(Path B)로 깊은 검증.
+    torch 없으면 raw 피클(Path A 머물 수 있음)로 graceful degrade."""
+    import tempfile
+
+    snapshot_root = Path(tempfile.mkdtemp(prefix="hm-pb-demo-"))
+    repo_path = "pytorch_model.bin"
+    target = snapshot_root / repo_path
+    try:
+        import torch
+
+        torch.save({"weight": torch.zeros(4)}, str(target))  # zip 포맷 → 정적 파서 PARSE_ERROR
+    except Exception:  # noqa: BLE001
+        import pickle
+
+        target.write_bytes(pickle.dumps({"weight": [0, 0, 0, 0]}))
+    data = target.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    artifacts = [
+        {
+            "artifact_id": f"sha256:{digest}",
+            "repo_path": repo_path,
+            "file_name": repo_path,
+            "file_kind": "PICKLE",
+            "detected_extension": ".bin",
+            "size_bytes": len(data),
+            "sha256": digest,
+            "source_url": "local://demo/pickle-path-b",
+            "temp_local_path": str(target),
+        }
+    ]
+    response = inspect_artifacts(
+        artifacts,
+        db=db,
+        repo_id="demo:pickle-path-b",
+        enable_path_b=True,  # Path B 명시 활성(파서가 못 풀면 Docker 샌드박스로)
+        notes="피클 Path B 내장 데모",
+        snapshot_root=str(snapshot_root),
+    )
+    return {
+        "ok": True,
+        "repo_id": "demo:pickle-path-b (내장 Path B 데모)",
+        "revision": "local",
+        "skip_weights": False,
+        "validated_count": len(artifacts),
+        "skipped_other": [],
+        "skipped_weights": [],
+        "response": response,
+    }
+
+
 def inspect_model_repo(
     repo_id: str,
     *,
@@ -201,6 +253,8 @@ def inspect_model_repo(
     # 검사. 실 sandbox 토글이 켜져 있으면 runsc 에서 실제 실행된다.
     if repo_id in {"demo:b2-sandbox", "demo:gvisor"}:
         return _inspect_b2_demo(db=db, enable_path_b=enable_path_b)
+    if repo_id in {"demo:pickle-path-b", "demo:pathb"}:
+        return _inspect_pickle_pathb_demo(db=db)
 
     try:
         from huggingface_hub import snapshot_download
