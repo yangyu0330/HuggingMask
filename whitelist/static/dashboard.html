@@ -107,6 +107,7 @@
 </div>
 <div class="tabs">
 <button class="tab active" onclick="switchTab('inspect',this)">🔬 모델 검사</button>
+<button class="tab" onclick="switchTab('gate',this)">🛡️ 다운로드 게이트</button>
 <button class="tab" onclick="switchTab('classify',this)">🔍 분류 테스트</button>
 <button class="tab" onclick="switchTab('pending',this)">📋 리뷰 대기</button>
 <button class="tab" onclick="switchTab('approved',this)">✅ 승인 목록</button>
@@ -132,6 +133,26 @@
 </div>
 </div>
 <div id="insp-result"><div class="insp-empty"><span class="big">🔬</span>모델 repo_id를 입력하고 <b>검사 실행</b>을 누르면<br>각 파일이 어떤 검증 단계를 거쳐 최종 판정에 이르는지 전 과정이 표시됩니다.</div></div>
+</div>
+
+<div class="tab-content" id="tab-gate">
+<div class="section">
+<div class="section-header"><h2>🛡️ 다운로드 게이트 — 받기 전에 검사하고 차단</h2></div>
+<div class="inspect-bar">
+<input type="text" id="gate-repo" placeholder="HuggingFace repo_id (다운로드 전 검사)" value="THUDM/chatglm3-6b">
+<button class="btn btn-primary" id="gate-run" onclick="gateModel()">게이트 검사</button>
+</div>
+<div class="quick-row"><span class="ql">데모</span>
+<button class="chip-btn" onclick="gatePick('THUDM/chatglm3-6b')">THUDM/chatglm3-6b<span class="tag deny">격리 예상</span></button>
+<button class="chip-btn" onclick="gatePick('vmaca123/korean-pii-ner-v3')">vmaca123/korean-pii-ner-v3<span class="tag ok">보류</span></button>
+<button class="chip-btn" onclick="gatePick('demo:b2-sandbox')">🏖️ B-2 데모<span class="tag sb">보류</span></button>
+</div>
+<div style="padding:0 20px 8px;font-size:12px;color:#888;line-height:1.6">프록시가 가중치를 받기 <b>전에</b> 코드/config를 먼저 검사합니다. <span style="color:#a32d2d">위험 → 격리(다운로드 차단)</span> · <span style="color:#0f6e56">안전 → 통과·저장(Nexus)</span> · <span style="color:#ba7517">불확실 → 검토 보류</span>.</div>
+</div>
+<div id="gate-result"></div>
+<div class="section"><div class="section-header"><h2>📦 게이트 저장소 (Nexus 역할)</h2><button class="btn btn-primary btn-sm" onclick="loadAcquired()">새로고침</button></div>
+<div class="audit-row table-header" style="grid-template-columns:1.4fr 110px 90px 90px 1fr"><div>repo_id</div><div>상태</div><div>검사</div><div>차단</div><div>사유</div></div>
+<div id="acquired-list"></div></div>
 </div>
 
 <div class="tab-content" id="tab-classify">
@@ -215,7 +236,7 @@ function _uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c
 
 async function fetchJson(u,o){try{const r=await fetch(u,o);return await r.json()}catch(e){showToast('서버 연결 실패');return null}}
 
-function switchTab(n,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.getElementById('tab-'+n).classList.add('active');if(n==='approved')loadApproved();if(n==='audit')loadAudit();if(n==='pending')loadPending();if(n==='feedback')loadFeedback()}
+function switchTab(n,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.getElementById('tab-'+n).classList.add('active');if(n==='approved')loadApproved();if(n==='audit')loadAudit();if(n==='pending')loadPending();if(n==='feedback')loadFeedback();if(n==='gate')loadAcquired()}
 
 async function submitFeedback(){
   const api=document.getElementById('fb-api').value.trim();
@@ -416,7 +437,7 @@ async function inspectModel(){
   renderInspect(data);loadStats()
 }
 
-function renderInspect(data){
+function buildPipelineHtml(data){
   const resp=data.response||{};
   // config auto_map이 참조 코드를 재검증해 동일 (파일|단계|상태) 항목이 중복될 수 있어
   // 정확히 같은 발견은 한 번만 표시(검사 대상 수와 일치하게).
@@ -522,7 +543,49 @@ function renderInspect(data){
     if(so.length)h+='⏭ 검사 대상 아님(OTHER '+so.length+'): '+esc(so.slice(0,6).join(', '))+(so.length>6?' …':'');
     h+='</div>';
   }
-  document.getElementById('insp-result').innerHTML=h;
+  return h;
+}
+function renderInspect(data){document.getElementById('insp-result').innerHTML=buildPipelineHtml(data)}
+
+// ── 다운로드 게이트 (받기 전 검사 → 허용/격리/보류 + 저장소) ──────────────
+const GATE={
+  ACQUIRED:{l:'다운로드 허용',s:'안전 — 저장소(Nexus)에 저장',c:'dec-approve',ic:'✅'},
+  QUARANTINED:{l:'격리 — 다운로드 차단',s:'위험 탐지 — 가중치도 받지 않음',c:'dec-deny',ic:'⛔'},
+  PENDING:{l:'검토 보류',s:'사람 승인 전 미배포',c:'dec-review',ic:'⏳'}
+};
+function gatePick(id){document.getElementById('gate-repo').value=id;gateModel()}
+async function gateModel(){
+  const repo=document.getElementById('gate-repo').value.trim();
+  if(!repo){showToast('repo_id를 입력하세요');return}
+  const btn=document.getElementById('gate-run');btn.disabled=true;btn.innerHTML='<span class="spinner"></span>검사 중...';
+  document.getElementById('gate-result').innerHTML='<div class="insp-empty"><span class="big">⏳</span><b>'+esc(repo)+'</b> 다운로드 전 검사 중...</div>';
+  const d=await fetchJson(API+'/proxy/acquire',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_id:repo})});
+  btn.disabled=false;btn.textContent='게이트 검사';
+  const box=document.getElementById('gate-result');
+  if(!d){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>서버 연결 실패</div>';return}
+  if(!d.ok){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>'+esc(d.error||'게이트 실패')+'</div>';return}
+  const g=GATE[d.status]||{l:d.status,s:'',c:'dec-error',ic:'?'};
+  let h='<div class="verdict pop '+g.c+'"><div><div class="vbig">'+g.ic+' '+esc(g.l)+'</div><div class="vsub">'+esc(g.s)+'</div></div>'
+    +'<div class="vmeta"><b>'+esc(d.repo_id)+'</b><br>판정='+esc(d.decision)+' · 검사 '+d.validated_count+'개 · 차단 '+d.blocked_count+'개'+(d.reason?'<br>'+esc(d.reason):'')+'</div></div>';
+  // 받기 전 검사한 파이프라인도 그대로 보여줌
+  h+=buildPipelineHtml({repo_id:d.repo_id,revision:d.revision||'main',validated_count:d.validated_count,skipped_other:[],skipped_weights:[],response:d.response});
+  box.innerHTML=h;
+  loadAcquired();loadStats()
+}
+async function loadAcquired(){
+  const d=await fetchJson(API+'/proxy/acquired');if(!d)return;
+  const el=document.getElementById('acquired-list');
+  if(!d.items?.length){el.innerHTML='<div class="empty">게이트 통과한 모델이 없습니다</div>';return}
+  const sb={ACQUIRED:['통과·저장','badge-approved'],QUARANTINED:['격리','badge-blocked'],PENDING:['보류','badge-pending']};
+  let h='';
+  for(const i of d.items){
+    const[l,c]=sb[i.status]||[i.status,''];
+    h+='<div class="audit-row" style="grid-template-columns:1.4fr 110px 90px 90px 1fr"><div class="api-path">'+esc(i.repo_id)+'</div>'
+      +'<div><span class="badge '+c+'">'+l+'</span></div><div>'+i.validated_count+'</div>'
+      +'<div style="color:'+(i.blocked_count?'#a32d2d':'#888')+'">'+i.blocked_count+'</div>'
+      +'<div style="font-size:11px;color:#666">'+esc(i.reason||'—')+'</div></div>';
+  }
+  el.innerHTML=h
 }
 
 loadStats();loadPending()

@@ -119,6 +119,39 @@ def validation_inspect(payload: InspectModelRequest, db: Session = Depends(get_d
     )
 
 
+class ProxyGateRequest(BaseModel):
+    """프록시 다운로드 게이트 입력."""
+
+    repo_id: str
+    revision: str = "main"
+
+
+@app.post(
+    "/internal/v1/proxy/acquire",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_acquire(payload: ProxyGateRequest, db: Session = Depends(get_db)):
+    """다운로드 게이트 — 받기 전에 검사하고 안전하면 통과·저장, 아니면 차단.
+
+    HuggingMask 제품 thesis 를 다운로드 경로에 적용: 코드/config 를 먼저 검사
+    (가중치 제외)해 DENY 면 격리(다운로드 차단), 안전하면 acquire + 저장소 기록.
+    """
+    from whitelist.acquisition import gate_model
+
+    return gate_model(payload.repo_id, db=db, revision=payload.revision)
+
+
+@app.get(
+    "/internal/v1/proxy/acquired",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_acquired(db: Session = Depends(get_db)):
+    """게이트 저장소(Nexus 역할) 목록 — ACQUIRED/QUARANTINED/PENDING."""
+    from whitelist.acquisition import list_acquired
+
+    return {"items": list_acquired(db)}
+
+
 # ─────────────────────────────────────────────
 # 운영 대시보드 (보안 담당자 UI)
 # ─────────────────────────────────────────────

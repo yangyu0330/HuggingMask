@@ -128,6 +128,32 @@ class ReviewDecisionLog(Base):
         return f"<ReviewDecision {self.review_id} {self.api_path} {self.decision}>"
 
 
+class AcquiredModel(Base):
+    """프록시 다운로드 게이트 결과 — 모델 단위 acquisition 저장소(Nexus 역할).
+
+    프록시가 다운로드 전에 검사한 모델의 게이트 판정을 기록한다.
+      ACQUIRED    : 안전 → 통과·저장(다운로드 허용)
+      QUARANTINED : DENY → 격리(다운로드 차단)
+      PENDING     : REVIEW_REQUIRED → 사람 검토 보류
+    """
+    __tablename__ = "acquired_models"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    repo_id: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    revision: Mapped[str] = mapped_column(String(128), default="main")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    decision: Mapped[str] = mapped_column(String(24), nullable=False)
+    validated_count: Mapped[int] = mapped_column(Integer, default=0)
+    blocked_count: Mapped[int] = mapped_column(Integer, default=0)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    acquired_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, index=True)
+
+    __table_args__ = (Index("ix_acquired_repo_status", "repo_id", "status"),)
+
+    def __repr__(self) -> str:
+        return f"<AcquiredModel {self.repo_id} [{self.status}]>"
+
+
 class FeedbackReport(Base):
     """오탐 피드백 보고 (모듈 5)"""
     __tablename__ = "feedback_reports"
