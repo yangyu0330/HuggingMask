@@ -171,3 +171,9 @@ def test_run_demo_writes_review_evidence_with_injected_lifecycle_runner(tmp_path
     assert (result.evidence_dir / "demo_snapshot_manifest.json").is_file()
     assert (result.evidence_dir / "b2_input_manifest.json").is_file()
     assert (result.evidence_dir / "runner_result.json").is_file()
+
+
+def test_parse_args_accepts_runsc_strace_log_dir(tmp_path: Path) -> None:
+    args = demo_b2_run._parse_args(["--runsc-strace-log-dir", str(tmp_path / "runsc")])
+
+    assert args.runsc_strace_log_dir == tmp_path / "runsc"
