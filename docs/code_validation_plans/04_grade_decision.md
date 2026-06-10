@@ -4,10 +4,10 @@
 
 역할 분류, AST scan, API scan, context analyzer, 제한 런타임 gate 결과를 합쳐 코드 파일별 최종 등급과 상태를 결정한다. 이 단계는 검증 3 `GRADE_DECISION`이며, 코드검증이 반환할 `ArtifactValidationResult`를 완성한다.
 
-## 구현 반영 상태 (2026-04-21)
+## 구현 반영 상태 (2026-05-22)
 
 - 상태: 완료. code validator 통합과 A/B-1/B-2/C 등급 판정이 구현되어 `ArtifactValidationResult`를 반환한다.
-- 경계: `runtime_check`는 테스트 stub 또는 외부 입력으로만 반영한다. runtime/gVisor/Docker 실제 실행은 아직 구현하지 않았다.
+- 경계: 제한 런타임 실행은 `analyzer/validators/code_restricted_runtime.py`와 orchestrator runtime loader로 연결됐다. B-2 sandbox는 `sandbox/b2` phase0로 증거 수집/정책 게이트를 제공하지만, clean 결과만으로 자동 승인하지 않는다.
 
 ## 담당 범위
 
@@ -23,8 +23,8 @@
 
 ## 비범위
 
-- 제한 런타임 자체의 완성 구현
-- gVisor/Docker sandbox 운영 구현
+- 제한 런타임 운영 정책 고도화
+- gVisor/Docker sandbox 운영 배포와 모니터링
 - sandbox 로그 저장소
 - 보안 담당자 review queue 생성/운영
 - 정식 whitelist DB 업데이트
@@ -88,8 +88,7 @@
 - unregistered API는 `B-2/PENDING_REVIEW/SECURITY_OWNER_GATE`로 매핑한다.
 - 모델 실행형 `B-1/PASS`는 allowed API만 사용하고 context 결과가 모두 `safe`이며 runtime gate가 통과한 경우에만 허용한다.
 - 제한 런타임은 B-1 후보를 최종 `PASS`시키기 위한 gate다.
-- 1차 구현에서는 제한 런타임을 실제 실행하지 않고 외부에서 주입된 `runtime_check` 입력과 테스트 stub만 반영한다.
-- runtime gate가 미구현, skipped, fixture 부족이면 `B-1/PASS`가 아니라 `B-2/PENDING_REVIEW` 또는 명시적 B-1 candidate detail로 남긴다.
+- 제한 런타임 loader가 제공되지 않거나 skipped/fixture 부족이면 `B-1/PASS`가 아니라 `B-2/PENDING_REVIEW` 또는 명시적 B-1 candidate detail로 남긴다.
 - gVisor/Docker 샌드박스는 B-2/C 후보의 증거 수집과 리뷰 보조용이지 자동 승인 증명이 아니다.
 - A 등급 config는 원본 `configuration_*.py`를 import하거나 `to_dict()`를 호출하지 않는다.
 - A 등급은 AST/source metadata로 class name, `model_type`, 생성자 인자, 기본값, `self.xxx`, `attribute_map`, 하위 config 필드를 확인한다.

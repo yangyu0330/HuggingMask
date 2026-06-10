@@ -4,10 +4,10 @@
 
 AST에서 추출한 호출을 API 단위로 해석하고, 정책 순서에 따라 `ALLOWED`, `BLOCKED`, `UNREGISTERED`, `CONTEXTUAL`로 분류한다. 문맥 의존 API 분석은 독립 단계가 아니라 검증 2 `API_POLICY_SCAN` 내부 하위 단계이며, context analyzer로 보내 `safe/review/block`을 판정한다.
 
-## 구현 반영 상태 (2026-04-21)
+## 구현 반영 상태 (2026-05-22)
 
 - 상태: 완료. API 호출 해석, 정책 분류, 문맥 의존 API 분석이 구현되어 `api_scan`, `context_api_scan`, `pending_api_refs` 후보를 만든다.
-- 경계: 정식 whitelist DB는 없으며, 선행 구현용 protocol/in-memory policy로만 연결한다. pending API는 persistent store가 아니라 `pending_api_refs`와 `review_findings` 입력으로 남긴다.
+- 경계: 코드검증은 `WhitelistLookup` protocol을 통해 whitelist를 질의하고, 운영 DB 접근은 `whitelist.integration` adapter가 담당한다. pending API는 코드검증 details에 남기고, 영속 저장은 whitelist/review 경로에서 처리한다.
 
 ## 담당 범위
 
@@ -19,14 +19,14 @@ AST에서 추출한 호출을 API 단위로 해석하고, 정책 순서에 따�
 - unregistered API 수집
 - contextual API 매칭과 `code_context.py` 디스패처 호출
 - `WhitelistLookup` protocol
-- 선행 구현용 in-memory whitelist adapter
+- 선행 구현용 in-memory whitelist adapter 및 production `whitelist.integration` adapter 연결 지점
 - `pending_api_refs` 후보 생성
 - `api_scan`, `context_api_scan` detail 생성
 
 ## 비범위
 
-- 정식 whitelist DB 구현
-- 미등록 API persistent pending store
+- whitelist DB schema 자체 구현
+- 미등록 API persistent pending store 직접 호출
 - 공식 문서 등재 여부 crawling
 - Verified Org 사용 여부 판단
 - 보안 담당자 승인 workflow
