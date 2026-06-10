@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -201,6 +202,12 @@ def validate_preprocessing_metadata_artifact(
     started_at = _utc_now()
     file_kind = FileKind(artifact.file_kind)
     source_text = _to_source_text(source)
+    # 자동화 A: baseline 미지정이면 known-good 레지스트리 조회 — 등록된 정상본과 sha256
+    # 일치 시 자기 자신을 baseline 으로 사용해 semantic preserved(자동 통과)로 처리한다.
+    if baseline_source is None:
+        from analyzer.validators.baseline_registry import lookup_baseline_source
+
+        baseline_source = lookup_baseline_source(source_text)
     baseline_text = _to_source_text(baseline_source) if baseline_source is not None else None
 
     parse_error: str | None = None
@@ -751,10 +758,28 @@ def _semantic_check_status(
     if any(item.get("severity") == "HIGH" for item in findings):
         return "FAILED"
     if baseline_text is None:
+        # 자동화 B(opt-in): baseline 없어도 '실행 위협' finding 이 0(BASELINE_MISSING 외
+        # 다른 finding 없음)이면 구조적으로 안전 → 의미 불변식 통과로 본다.
+        # HIGH(커스텀코드/인젝션)는 위에서 이미 FAILED, MEDIUM(네트워크/경로)이 있으면
+        # 검토대기 유지. baseline-proven(A)과 구분되는 별도 PASS 코드로 감사 가시성 유지.
+        if _invariants_pass_enabled():
+            other = [f for f in findings if f.get("code") != "BASELINE_MISSING"]
+            if not other:
+                return "INVARIANTS_OK"
         return "BASELINE_MISSING"
     if _sha256_text(source_text) != _sha256_text(baseline_text):
         return "REVIEW"
     return "PASSED"
+
+
+def _invariants_pass_enabled() -> bool:
+    """B 계층(baseline 없이 구조 안전 시 자동 통과) 활성 여부 — opt-in."""
+    return os.getenv("HUGGINGMASK_PREPROCESSING_INVARIANTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _decision_for_semantic_status(
@@ -763,6 +788,8 @@ def _decision_for_semantic_status(
 ) -> tuple[CodeGrade, ValidationStatus, ReviewAction, str]:
     if check_status == "PASSED":
         return CodeGrade.B1, ValidationStatus.PASS, ReviewAction.AUTO_APPROVE, "SEMANTIC_CHECK_PASSED"
+    if check_status == "INVARIANTS_OK":
+        return CodeGrade.B2, ValidationStatus.PASS, ReviewAction.AUTO_APPROVE, "PREPROCESSING_INVARIANTS_OK"
     if check_status == "FAILED":
         return (
             CodeGrade.C,
@@ -813,6 +840,7 @@ def _reason_message(code: str) -> str:
         "PREPROCESSING_CUSTOM_CODE_REF": "preprocessing metadata references custom code (trust_remote_code) requiring review",
         "SEMANTIC_REVIEW_REQUIRED": "preprocessing metadata requires semantic review",
         "SEMANTIC_CHECK_PASSED": "preprocessing semantic check passed against baseline",
+        "PREPROCESSING_INVARIANTS_OK": "no baseline, but structurally safe (no custom code / injection / network-path); passed invariant checks",
     }.get(code, "preprocessing metadata requires semantic review")
 
 

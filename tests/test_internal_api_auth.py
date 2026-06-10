@@ -89,6 +89,14 @@ def test_whitelist_router_protected(monkeypatch):
     assert client.post("/internal/v1/review", json={}).status_code == 401
 
 
+def test_inspect_endpoint_protected(monkeypatch):
+    # 모델 검사 엔드포인트도 실 검증 파이프라인을 돌리므로 /full과 동일 인증.
+    # 인증 게이트가 다운로드 이전에 차단 → 네트워크 불필요.
+    monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", _TOKEN)
+    r = client.post("/internal/v1/validation/inspect", json={"repo_id": "demo/x"})
+    assert r.status_code == 401
+
+
 def test_health_and_dashboard_open_even_with_token(monkeypatch):
     monkeypatch.setenv("HUGGINGMASK_INTERNAL_API_TOKEN", _TOKEN)
     assert client.get("/health").status_code == 200

@@ -576,8 +576,17 @@ def run_full_validation(
     db: Session,
     engine=None,
     model=None,
+    b2_runner=None,
+    b2_output_dir=None,
+    source_resolver=None,
+    revision: str = "main",
 ) -> ValidationJobResponse:
-    """가중치 + 코드 + config + 화이트리스트 + 제한 런타임 통합 검증."""
+    """가중치 + 코드 + config + 화이트리스트 + 제한 런타임 통합 검증.
+
+    ``b2_runner`` 가 주어지면(opt-in, WSL2+Docker+gVisor 환경) B-2 커스텀 코드를
+    실제 runsc 샌드박스에서 실행한다. 미지정(기본)이면 기존 동작 그대로
+    (B-2는 PENDING 라우팅까지). [[whitelist.realsandbox]]
+    """
     if not isinstance(request, ValidationJobRequest):
         request = ValidationJobRequest.from_dict(request)
 
@@ -649,6 +658,15 @@ def run_full_validation(
             # WhitelistEngineLookup용 pydantic ModelRef (model= 인자는 별도 타입)
             wl_model = model if model is not None else _whitelist_model(analyzer_model)
 
+            # opt-in: 실제 B-2 runsc 샌드박스 실행 인자(기본 None → 호출 동일)
+            b2_forward = {}
+            if b2_runner is not None:
+                b2_forward = {
+                    "b2_runner": b2_runner,
+                    "b2_output_dir": b2_output_dir,
+                    "source_resolver": source_resolver,
+                    "revision": revision,
+                }
             cresp = run_validation_job_with_whitelist_engine(
                 cc_request,
                 db=db,
@@ -657,6 +675,7 @@ def run_full_validation(
                 source_loader=sources,
                 runtime_check_loader=runtime_loader,
                 ast_call_metadata_loader=ast_call_metadata_loader,
+                **b2_forward,
             )
             results.extend(cresp.artifact_results)
             _extend_unique(approved_artifact_ids, cresp.approved_artifact_ids)

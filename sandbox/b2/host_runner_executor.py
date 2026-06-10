@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -59,6 +60,15 @@ class B2HostRunner:
             container_name=self.container_name
             or f"huggingmask-b2-{_safe_segment(context.request_id)}-{_safe_segment(context.job_id)}-{artifact_segment}",
         )
+        # 컨테이너(--user=1000:1000)가 /tmp/huggingmask(=output_dir 바인드마운트)에
+        # runner_result.json 을 쓰려면 output_dir 이 docker create 이전에 존재하고
+        # 그 uid 가 쓸 수 있어야 한다. 미생성 시 Docker 가 root 소유로 만들어 sandbox
+        # uid 가 PermissionError 로 실패한다(gVisor/WSL2에서 실측). 사전 생성 + 쓰기 허용.
+        try:
+            job.output_dir.mkdir(parents=True, exist_ok=True)
+            os.chmod(job.output_dir, 0o777)
+        except OSError:
+            pass
         plan = build_docker_lifecycle_plan(job)
         results: dict[str, CommandResult] = {}
         runtime_setup_errors: list[str] = []

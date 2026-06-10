@@ -2,7 +2,10 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir torch safetensors numpy
+# CPU torch — full(CUDA) torch는 ~2GB + runsc 에서 import 시 CUDA 탐색으로 매우
+# 느림(피클 Path B DOCKER_TIMEOUT 원인). CPU 휠은 작고 import 빠름(샌드박스엔 GPU 불요).
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu \
+ && pip install --no-cache-dir safetensors numpy
 
 COPY analyzer/validators/weight/dtypes.py /app/dtypes.py
 COPY analyzer/validators/weight/sandbox/load_and_extract.py /app/load_and_extract.py

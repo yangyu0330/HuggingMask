@@ -3,30 +3,246 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>적응형 화이트리스트 엔진 — 보안 관리 대시보드</title>
+<title>HuggingMask — AI Model Security Gateway</title>
 <style>
-*{margin:0;padding:0;box-sizing:border-box}body{font-family:'Segoe UI',system-ui,sans-serif;background:#f0f2f5;color:#1a1a2e;min-height:100vh}.header{background:linear-gradient(135deg,#1a1a2e,#16213e);color:#fff;padding:24px 32px}.header h1{font-size:22px;font-weight:600}.header p{font-size:13px;opacity:.7;margin-top:4px}.container{max-width:1200px;margin:0 auto;padding:24px}.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:24px}.stat-card{background:#fff;border-radius:12px;padding:20px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.stat-card .label{font-size:12px;color:#666;text-transform:uppercase;letter-spacing:.5px}.stat-card .value{font-size:32px;font-weight:700;margin-top:4px}.stat-card.approved .value{color:#0f6e56}.stat-card.pending .value{color:#ba7517}.stat-card.blocked .value{color:#a32d2d}.stat-card.total .value{color:#534ab7}.tabs{display:flex;gap:4px;margin-bottom:24px;background:#fff;border-radius:12px;padding:4px;box-shadow:0 1px 3px rgba(0,0,0,.08)}.tab{padding:10px 20px;border-radius:8px;border:none;background:transparent;cursor:pointer;font-size:14px;font-weight:500;color:#666;transition:all .15s}.tab.active{background:#534ab7;color:#fff}.tab:hover:not(.active){background:#f0f0f0}.tab-content{display:none}.tab-content.active{display:block}.section{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:24px;overflow:hidden}.section-header{padding:16px 20px;border-bottom:1px solid #e8e8e8;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}.section-header h2{font-size:16px;font-weight:600}.search-row{display:flex;gap:8px}.search-row input,.search-row select{border:1px solid #ddd;border-radius:8px;padding:6px 12px;font-size:13px}.search-row input{width:200px}.classify-form{padding:20px}.classify-form textarea{width:100%;height:80px;border:1px solid #ddd;border-radius:8px;padding:12px;font-family:monospace;font-size:13px;resize:vertical}.classify-form .row{display:flex;gap:12px;margin-top:12px;align-items:center}.classify-form input[type=text]{flex:1;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px}.btn{border:none;border-radius:8px;padding:8px 20px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}.btn-primary{background:#534ab7;color:#fff}.btn-primary:hover{background:#3c3489}.btn-approve{background:#0f6e56;color:#fff}.btn-approve:hover{background:#085041}.btn-reject{background:#a32d2d;color:#fff}.btn-reject:hover{background:#791f1f}.btn-defer{background:#ba7517;color:#fff}.btn-defer:hover{background:#854f0b}.btn-sm{padding:5px 12px;font-size:12px}.api-path{font-family:monospace;font-weight:500;word-break:break-all}.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600}.badge-auto{background:#e1f5ee;color:#0f6e56}.badge-conditional{background:#faeeda;color:#854f0b}.badge-manual{background:#faeeda;color:#ba7517}.badge-blocked{background:#fcebeb;color:#a32d2d}.badge-pending{background:#eeedfe;color:#534ab7}.badge-approved{background:#e1f5ee;color:#0f6e56}.badge-rejected{background:#fcebeb;color:#a32d2d}.result-row{display:grid;grid-template-columns:1fr 120px 140px 200px;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px}.result-row:hover{background:#fafbfc}.pending-row{display:grid;grid-template-columns:1fr 100px 80px 100px 180px;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px;gap:8px}.pending-row:hover{background:#fafbfc}.danger-kw{font-family:monospace;font-size:11px;color:#a32d2d}.model-info{font-size:11px;color:#666}.approved-row{display:grid;grid-template-columns:1.2fr .8fr 100px 120px 1fr;align-items:center;padding:12px 20px;border-bottom:1px solid #f0f0f0;font-size:13px;gap:8px}.approved-row:hover{background:#fafbfc}.audit-row{display:grid;grid-template-columns:60px 140px 100px 1fr 100px 1fr 120px;align-items:center;padding:10px 20px;border-bottom:1px solid #f0f0f0;font-size:12px;gap:8px}.audit-row:hover{background:#fafbfc}.hash-val{font-family:monospace;font-size:10px;color:#999}.action-badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600}.action-approve{background:#e1f5ee;color:#0f6e56}.action-reject{background:#fcebeb;color:#a32d2d}.action-defer{background:#faeeda;color:#ba7517}.action-pending{background:#eeedfe;color:#534ab7}.action-add{background:#e6f1fb;color:#185fa5}.table-header{font-weight:600;color:#666;font-size:11px;text-transform:uppercase;letter-spacing:.5px;background:#fafbfc}.table-header:hover{background:#fafbfc}.empty{padding:40px;text-align:center;color:#999;font-size:14px}.pagination{display:flex;justify-content:center;gap:8px;padding:16px}.pagination button{border:1px solid #ddd;border-radius:6px;padding:6px 14px;background:#fff;cursor:pointer;font-size:12px}.pagination button:hover{background:#f0f0f0}.pagination span{padding:6px 10px;font-size:12px;color:#666}.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;align-items:center;justify-content:center}.modal-overlay.active{display:flex}.modal{background:#fff;border-radius:16px;padding:24px;width:500px;max-width:90vw}.modal h3{font-size:18px;margin-bottom:16px}.modal .field{margin-bottom:12px}.modal .field label{display:block;font-size:12px;font-weight:600;color:#666;margin-bottom:4px}.modal .field input,.modal .field textarea{width:100%;border:1px solid #ddd;border-radius:8px;padding:8px 12px;font-size:13px}.modal .field textarea{height:60px;resize:vertical}.modal .actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}.toast{position:fixed;bottom:24px;right:24px;background:#1a1a2e;color:#fff;padding:12px 20px;border-radius:10px;font-size:13px;z-index:200;opacity:0;transform:translateY(10px);transition:all .3s}.toast.show{opacity:1;transform:translateY(0)}
+:root{--bg:#f7f8fa;--surface:#fff;--border:#e8ebef;--border2:#eef0f3;--ink:#0e1525;--ink2:#5b6675;--ink3:#8a93a3;--brand:#5b5bd6;--brand-d:#4a47b8;--brand-soft:#eef0fe;--ok:#0e9f6e;--ok-soft:#e6f6ef;--warn:#c2710c;--warn-soft:#fbf2e3;--danger:#dc3b3b;--danger-soft:#fdecec;--info:#2563c9;--info-soft:#e8f0fc;--shadow:0 1px 2px rgba(16,24,40,.04),0 1px 3px rgba(16,24,40,.06);--shadow-lg:0 4px 16px rgba(16,24,40,.08)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter','Pretendard','Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;-webkit-font-smoothing:antialiased;letter-spacing:-.01em}
+.header{background:#0c1322;color:#fff;padding:0;border-bottom:1px solid #1c2536}
+.header-inner{max-width:1200px;margin:0 auto;padding:18px 24px;display:flex;align-items:center;gap:14px}
+.brand-mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,#6d6df0,#4a47b8);display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 2px 8px rgba(74,71,184,.4)}
+.header h1{font-size:17px;font-weight:650;letter-spacing:-.02em}
+.header .sub{font-size:12px;color:#8b96a8;margin-top:1px;font-weight:400}
+.header .ver{margin-left:auto;font-size:11px;color:#6b7689;border:1px solid #232c3d;border-radius:20px;padding:4px 11px;letter-spacing:.02em}
+.container{max-width:1200px;margin:0 auto;padding:24px}
+.stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.stat-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px 20px;box-shadow:var(--shadow)}
+.stat-card .label{font-size:11.5px;color:var(--ink3);font-weight:500;letter-spacing:.02em}
+.stat-card .value{font-size:30px;font-weight:700;margin-top:6px;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.stat-card.approved .value{color:var(--ok)}.stat-card.pending .value{color:var(--warn)}.stat-card.blocked .value{color:var(--danger)}.stat-card.total .value{color:var(--brand)}
+.tabs{display:flex;gap:2px;margin-bottom:22px;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:5px;box-shadow:var(--shadow);overflow-x:auto}
+.tab{padding:9px 16px;border-radius:8px;border:none;background:transparent;cursor:pointer;font-size:13.5px;font-weight:550;color:var(--ink2);transition:all .14s;white-space:nowrap}
+.tab.active{background:var(--brand);color:#fff;box-shadow:0 1px 4px rgba(91,91,214,.35)}
+.tab:hover:not(.active){background:#f1f2f5;color:var(--ink)}
+.tab-content{display:none}.tab-content.active{display:block;animation:fadeUp .25s ease both}
+.section{background:var(--surface);border:1px solid var(--border);border-radius:14px;box-shadow:var(--shadow);margin-bottom:20px;overflow:hidden}
+.section-header{padding:15px 20px;border-bottom:1px solid var(--border2);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+.section-header h2{font-size:14.5px;font-weight:650;letter-spacing:-.01em}
+.search-row{display:flex;gap:8px}.search-row input,.search-row select{border:1px solid var(--border);border-radius:9px;padding:7px 12px;font-size:13px}.search-row input{width:200px}
+.classify-form{padding:20px}.classify-form textarea{width:100%;height:80px;border:1px solid var(--border);border-radius:10px;padding:12px;font-family:ui-monospace,monospace;font-size:13px;resize:vertical}.classify-form .row{display:flex;gap:12px;margin-top:12px;align-items:center}.classify-form input[type=text]{flex:1;border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:13px}
+.btn{border:none;border-radius:9px;padding:8px 18px;font-size:13px;font-weight:600;cursor:pointer;transition:all .14s;letter-spacing:-.01em}
+.btn-primary{background:var(--brand);color:#fff}.btn-primary:hover{background:var(--brand-d)}
+.btn-approve{background:var(--ok);color:#fff}.btn-approve:hover{filter:brightness(.92)}
+.btn-reject{background:var(--danger);color:#fff}.btn-reject:hover{filter:brightness(.92)}
+.btn-defer{background:var(--warn);color:#fff}.btn-defer:hover{filter:brightness(.92)}
+.btn-sm{padding:5px 12px;font-size:12px}
+.api-path{font-family:ui-monospace,monospace;font-weight:500;word-break:break-all}
+.badge{display:inline-block;padding:3px 10px;border-radius:7px;font-size:11px;font-weight:600;letter-spacing:.01em}
+.badge-auto{background:var(--ok-soft);color:var(--ok)}.badge-conditional{background:var(--warn-soft);color:var(--warn)}.badge-manual{background:var(--warn-soft);color:var(--warn)}.badge-blocked{background:var(--danger-soft);color:var(--danger)}.badge-pending{background:var(--brand-soft);color:var(--brand)}.badge-approved{background:var(--ok-soft);color:var(--ok)}.badge-rejected{background:var(--danger-soft);color:var(--danger)}
+.result-row{display:grid;grid-template-columns:1fr 120px 140px 200px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--border2);font-size:13px}.result-row:hover{background:#fafbfc}
+.pending-row{display:grid;grid-template-columns:1fr 100px 80px 100px 180px;align-items:center;padding:12px 20px;border-bottom:1px solid var(--border2);font-size:13px;gap:8px}.pending-row:hover{background:#fafbfc}
+.danger-kw{font-family:ui-monospace,monospace;font-size:11px;color:var(--danger)}.model-info{font-size:11px;color:var(--ink2)}
+.approved-row{display:grid;grid-template-columns:1.2fr .8fr 100px 120px 1fr;align-items:center;padding:12px 20px;border-bottom:1px solid var(--border2);font-size:13px;gap:8px}.approved-row:hover{background:#fafbfc}
+.audit-row{display:grid;grid-template-columns:60px 140px 100px 1fr 100px 1fr 120px;align-items:center;padding:10px 20px;border-bottom:1px solid var(--border2);font-size:12px;gap:8px}.audit-row:hover{background:#fafbfc}
+.hash-val{font-family:ui-monospace,monospace;font-size:10px;color:var(--ink3)}
+.action-badge{display:inline-block;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.action-approve{background:var(--ok-soft);color:var(--ok)}.action-reject{background:var(--danger-soft);color:var(--danger)}.action-defer{background:var(--warn-soft);color:var(--warn)}.action-pending{background:var(--brand-soft);color:var(--brand)}.action-add{background:var(--info-soft);color:var(--info)}
+.table-header{font-weight:600;color:var(--ink3);font-size:11px;text-transform:uppercase;letter-spacing:.04em;background:#fafbfc}.table-header:hover{background:#fafbfc}
+.empty{padding:40px;text-align:center;color:var(--ink3);font-size:14px}
+.pagination{display:flex;justify-content:center;gap:8px;padding:16px}.pagination button{border:1px solid var(--border);border-radius:8px;padding:6px 14px;background:#fff;cursor:pointer;font-size:12px}.pagination button:hover{background:#f1f2f5}.pagination span{padding:6px 10px;font-size:12px;color:var(--ink2)}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(12,19,34,.55);backdrop-filter:blur(2px);z-index:100;align-items:center;justify-content:center}.modal-overlay.active{display:flex}
+.modal{background:#fff;border-radius:16px;padding:24px;width:500px;max-width:90vw;box-shadow:var(--shadow-lg)}.modal h3{font-size:17px;margin-bottom:16px;font-weight:650}.modal .field{margin-bottom:12px}.modal .field label{display:block;font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:4px}.modal .field input,.modal .field textarea{width:100%;border:1px solid var(--border);border-radius:9px;padding:8px 12px;font-size:13px}.modal .field textarea{height:60px;resize:vertical}.modal .actions{display:flex;gap:8px;margin-top:16px;justify-content:flex-end}
+.toast{position:fixed;bottom:24px;right:24px;background:var(--ink);color:#fff;padding:12px 20px;border-radius:11px;font-size:13px;z-index:200;opacity:0;transform:translateY(10px);transition:all .3s;box-shadow:var(--shadow-lg)}.toast.show{opacity:1;transform:translateY(0)}
+</style>
+<style>
+/* ── 모델 검사 탭 (가로 파이프라인 흐름) ───────────────────────────── */
+.inspect-bar{padding:20px;display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.inspect-bar input[type=text]{flex:1;min-width:240px;border:1px solid #ddd;border-radius:8px;padding:9px 12px;font-size:14px;font-family:monospace}
+.inspect-bar .rev{flex:0 0 110px;min-width:90px}
+.inspect-bar label{font-size:12px;color:#555;display:flex;align-items:center;gap:5px;cursor:pointer}
+.quick-row{padding:0 20px 16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.quick-row .ql{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-right:2px}
+.chip-btn{border:1px solid var(--border);background:#fff;color:var(--ink2);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;font-family:ui-monospace,monospace;transition:all .14s}
+.chip-btn:hover{background:#f1f2f5;border-color:#d6dae1;color:var(--ink)}
+.chip-btn .tag{font-family:'Segoe UI',sans-serif;font-weight:600;margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px}
+.chip-btn .tag.deny{background:#fcebeb;color:#a32d2d}.chip-btn .tag.ok{background:#e1f5ee;color:#0f6e56}.chip-btn .tag.wt{background:#e6f1fb;color:#185fa5}.chip-btn .tag.sb{background:#f3eafc;color:#7b3fb8}
+.spinner{display:inline-block;width:15px;height:15px;border:2px solid #fff;border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes spin{to{transform:rotate(360deg)}}
+.insp-empty{padding:48px 20px;text-align:center;color:#9a9a9a;font-size:14px;line-height:1.7}
+.insp-empty .big{font-size:34px;display:block;margin-bottom:8px;opacity:.5}
+/* 요약 배너 + 통계 */
+.verdict{margin:0 20px 16px;border-radius:14px;padding:20px 24px;display:flex;align-items:center;gap:18px;color:#fff}
+.verdict .vbig{font-size:30px;font-weight:800;letter-spacing:.5px}
+.verdict .vbig svg{width:26px;height:26px;vertical-align:-5px;fill:none;stroke:currentColor;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round;margin-right:5px}
+.verdict .vsub{font-size:13px;opacity:.9}
+.verdict .vmeta{margin-left:auto;text-align:right;font-size:12px;opacity:.92;line-height:1.6}
+.dec-deny{background:linear-gradient(135deg,#a32d2d,#7a1f1f)}
+.dec-review{background:linear-gradient(135deg,#ba7517,#8a560f)}
+.dec-approve{background:linear-gradient(135deg,#0f6e56,#0a5040)}
+.dec-error{background:linear-gradient(135deg,#5a5a6e,#3a3a4a)}
+.insp-counts{display:flex;gap:10px;padding:0 20px 16px;flex-wrap:wrap}
+.cnt{flex:1;min-width:90px;background:#fafbfc;border:1px solid #eee;border-radius:10px;padding:10px 14px;text-align:center}
+.cnt .n{font-size:22px;font-weight:700}.cnt .l{font-size:11px;color:#888}
+.cnt.pass .n{color:#0f6e56}.cnt.block .n{color:#a32d2d}.cnt.pending .n{color:#ba7517}.cnt.skip .n{color:#888}.cnt.error .n{color:#a32d2d}
+/* 3-컬럼 파이프라인 흐름 */
+.flow{display:grid;grid-template-columns:minmax(180px,230px) 28px 1fr 28px minmax(150px,200px);gap:8px;align-items:start;padding:8px 20px 24px}
+.flow-col-title{font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px;padding-left:2px}
+.flow-arrow{display:flex;align-items:center;justify-content:center;color:#cfcce6;font-size:22px;padding-top:40px}
+.fcard{background:#fff;border:1px solid #eaeaea;border-left:4px solid #ccc;border-radius:9px;padding:10px 12px;margin-bottom:8px;transition:all .15s}
+.fcard:hover{box-shadow:0 2px 8px rgba(0,0,0,.09)}
+.fcard.hl{box-shadow:0 0 0 2px #534ab7;border-left-color:#534ab7}
+.fcard .fn{font-family:monospace;font-size:12px;font-weight:600;word-break:break-all}
+.fcard .fk{font-size:10px;color:#888;margin-top:3px}
+.fcard.b-pass{border-left-color:#0f6e56}.fcard.b-block{border-left-color:#a32d2d}.fcard.b-pending{border-left-color:#ba7517}.fcard.b-skip{border-left-color:#bbb}.fcard.b-error{border-left-color:#a32d2d}
+/* 검증 단계 레인 */
+.lane{border:1px solid #eaeaea;border-radius:11px;margin-bottom:8px;overflow:hidden;transition:all .15s}
+.lane.active{background:#fff}.lane.idle{background:#f7f7f9;opacity:.6}
+.lane.hl{box-shadow:0 0 0 2px #534ab7}
+.lane-head{display:flex;align-items:center;gap:10px;padding:10px 14px}
+.lane-head .lic{display:inline-flex;width:30px;height:30px;border-radius:8px;background:#f1f2f6;align-items:center;justify-content:center;color:var(--ink2);flex-shrink:0}
+.lane-head .lic svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.lane.active .lane-head .lic{background:var(--brand-soft);color:var(--brand)}
+.lane-head .lname{font-size:13px;font-weight:600}
+.lane-head .lowner{font-size:10px;color:#999;margin-top:1px}
+.lane-head .lcount{margin-left:auto;font-size:11px;color:#888}
+.lane.idle .lane-head .lcount{font-style:italic}
+.lane-body{padding:0 14px 10px}
+.art-row{border-top:1px solid #f0f0f0;padding:8px 0}
+.art-row .arl{display:flex;align-items:center;gap:8px}
+.art-row .afn{font-family:monospace;font-size:12px;flex:1;word-break:break-all}
+.st-chip{font-size:11px;font-weight:700;padding:2px 9px;border-radius:12px;white-space:nowrap}
+.st-pass{background:#e1f5ee;color:#0f6e56}.st-block{background:#fcebeb;color:#a32d2d}.st-pending{background:#faeeda;color:#854f0b}.st-skip{background:#eee;color:#777}.st-error{background:#fcebeb;color:#a32d2d}
+.reasons{margin-top:7px;padding-left:2px}
+.reason{display:flex;gap:7px;align-items:flex-start;font-size:11px;margin-top:5px;line-height:1.45}
+.sev{font-size:9px;font-weight:700;padding:1px 6px;border-radius:8px;white-space:nowrap;margin-top:1px}
+.sev-HIGH{background:#fcebeb;color:#a32d2d}.sev-MEDIUM{background:#faeeda;color:#854f0b}.sev-LOW{background:#eef;color:#4a42a8}
+.reason .rc{font-family:monospace;font-weight:600;color:#444}
+.reason .rm{color:#666}
+.reason .rev{font-family:monospace;color:#a32d2d;font-size:10px}
+.grade-tag{font-size:10px;font-family:monospace;color:#999;margin-left:6px}
+.insp-skipped{margin:0 20px 20px;font-size:11px;color:#999;line-height:1.6}
+/* 폴리싱: 진행 애니메이션 / 소요시간 / 펼쳐보기 */
+@keyframes fadeUp{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}
+@keyframes popIn{0%{opacity:0;transform:scale(.96)}60%{transform:scale(1.012)}100%{opacity:1;transform:scale(1)}}
+@keyframes scan{0%{left:-30%}100%{left:130%}}
+.reveal{animation:fadeUp .34s ease both}
+.verdict.pop{animation:popIn .5s ease both}
+.lane.scanning{position:relative}
+.lane.scanning::after{content:'';position:absolute;top:0;bottom:0;width:30%;background:linear-gradient(90deg,transparent,rgba(83,74,183,.10),transparent);animation:scan .7s ease-out 1}
+.art-row .arl{cursor:pointer;user-select:none}
+.art-row .arl:hover{opacity:.85}
+.caret{font-size:10px;color:#aaa;transition:transform .15s;display:inline-block;width:10px}
+.art-row.open .caret{transform:rotate(90deg)}
+.ms{font-size:10px;font-family:monospace;color:#9a9a9a;white-space:nowrap}
+.lane-time{font-size:10px;color:#aaa;font-family:monospace;margin-left:8px;font-style:normal}
+.art-detail{margin-top:7px;padding:9px 11px;background:#fafbfc;border:1px solid #f0f0f0;border-radius:8px}
+.art-meta{font-size:10px;color:#999;font-family:monospace;margin-top:7px;word-break:break-all}
+.pass-note{font-size:11px;color:#0f6e56}
+.sbx{margin-top:8px;padding:9px 11px;border-radius:8px;background:#f3eafc;border:1px solid #e2d4f5;font-size:11px;line-height:1.7;color:#4a3a6b}
+.sbx b{color:#7b3fb8}
+.sbx .ok{color:#0f6e56;font-weight:700}
+.idle-reason{padding:2px 14px 11px;font-size:10px;color:#b3b3b3;font-style:italic}
+.flow-legend{margin:0 20px 12px;font-size:11px;color:#888;line-height:1.6;background:#fafbfc;border:1px solid #eee;border-radius:8px;padding:9px 13px}
+.flow-legend b{color:#666}
+/* ── 사이드바 레이아웃 (상용 SaaS) ───────────────────────────── */
+.app{display:flex;min-height:100vh}
+.sidebar{width:236px;flex-shrink:0;background:#0b1120;color:#fff;display:flex;flex-direction:column;padding:18px 14px;position:sticky;top:0;height:100vh;border-right:1px solid #1a2335}
+.brand{display:flex;align-items:center;gap:11px;padding:4px 8px 16px;margin-bottom:12px;border-bottom:1px solid #1a2335}
+.brand-name{font-weight:750;font-size:15.5px;letter-spacing:-.02em}
+.brand-sub{font-size:10px;color:#7f8aa0;margin-top:1px;letter-spacing:.01em}
+.nav{display:flex;flex-direction:column;gap:2px;flex:1}
+.nav-item{display:flex;align-items:center;gap:11px;width:100%;text-align:left;padding:9px 12px;border-radius:9px;border:none;background:transparent;color:#9aa4b6;font-size:13.5px;font-weight:550;cursor:pointer;transition:all .14s;letter-spacing:-.01em}
+.nav-item svg{width:17px;height:17px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.9}
+.nav-item:hover{background:#161f33;color:#fff}
+.nav .nav-item.active{background:linear-gradient(135deg,#6366f1,#4f46e5);color:#fff;box-shadow:0 4px 14px rgba(79,70,229,.45)}
+.side-foot{display:flex;align-items:center;gap:8px;font-size:11px;color:#6b7689;padding:13px 10px 2px;margin-top:8px;border-top:1px solid #1a2335}
+.status-dot{width:7px;height:7px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,.18)}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+.topbar{background:#fff;border-bottom:1px solid var(--border);padding:17px 30px;position:sticky;top:0;z-index:10}
+.page-title{font-size:18px;font-weight:750;letter-spacing:-.025em}
+.page-sub{font-size:12px;color:var(--ink2);margin-top:2px}
+.content{padding:26px 30px;max-width:1280px;width:100%}
+.stat-card{position:relative;overflow:hidden;transition:transform .14s,box-shadow .14s}
+.stat-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:3px}
+.stat-card.approved::before{background:var(--ok)}.stat-card.pending::before{background:var(--warn)}.stat-card.blocked::before{background:var(--danger)}.stat-card.total::before{background:var(--brand)}
+.stat-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.section:hover{box-shadow:var(--shadow-lg)}.section{transition:box-shadow .16s}
+@media(max-width:820px){.app{flex-direction:column}.sidebar{width:100%;height:auto;position:static;flex-direction:row;flex-wrap:wrap;overflow-x:auto}.nav{flex-direction:row;flex-wrap:wrap}.side-foot{display:none}.brand{border:none;margin:0;padding:4px 8px}}
 </style>
 </head>
 <body>
-<div class="header"><h1>🛡️ 적응형 화이트리스트 엔진 — 보안 관리 대시보드</h1><p>AI 모델 공급망 보안 파이프라인 | Adaptive Whitelist Engine v0.1.0</p></div>
-<div class="container">
+<div class="app">
+<aside class="sidebar">
+<div class="brand">
+<div class="brand-mark"><svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M12 2 4 5v6c0 5 3.4 8.5 8 11 4.6-2.5 8-6 8-11V5l-8-3Z" fill="#fff" fill-opacity=".95"/><path d="m9 12 2 2 4-4" stroke="#4a47b8" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+<div><div class="brand-name">HuggingMask</div><div class="brand-sub">Security Gateway</div></div>
+</div>
+<nav class="nav">
+<button class="tab nav-item active" onclick="switchTab('inspect',this)"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg>모델 검사</button>
+<button class="tab nav-item" onclick="switchTab('gate',this)"><svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4 3 6.6 7 8 4-1.4 7-4 7-8V6l-7-3Z"/></svg>다운로드 게이트</button>
+<button class="tab nav-item" onclick="switchTab('classify',this)"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>분류 테스트</button>
+<button class="tab nav-item" onclick="switchTab('pending',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>리뷰 대기</button>
+<button class="tab nav-item" onclick="switchTab('approved',this)"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>승인 목록</button>
+<button class="tab nav-item" onclick="switchTab('feedback',this)"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.5 7.2L4 20l1.2-4.3A8 8 0 1 1 21 12Z"/></svg>오탐 피드백</button>
+<button class="tab nav-item" onclick="switchTab('audit',this)"><svg viewBox="0 0 24 24"><path d="M14 3H7a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7l-4-4Z"/><path d="M9 13h6M9 17h4"/></svg>감사 로그</button>
+</nav>
+<div class="side-foot"><span class="status-dot"></span>시스템 정상 · v0.1.0</div>
+</aside>
+<main class="main">
+<div class="topbar"><div class="page-title">보안 관리 대시보드</div><div class="page-sub">AI Model Supply-Chain Security Gateway</div></div>
+<div class="content">
 <div class="stats-row">
 <div class="stat-card approved"><div class="label">승인된 API</div><div class="value" id="stat-approved">-</div></div>
 <div class="stat-card pending"><div class="label">리뷰 대기</div><div class="value" id="stat-pending">-</div></div>
 <div class="stat-card blocked"><div class="label">차단</div><div class="value" id="stat-blocked">-</div></div>
 <div class="stat-card total"><div class="label">영구 차단 목록</div><div class="value">16</div></div>
 </div>
-<div class="tabs">
-<button class="tab active" onclick="switchTab('classify',this)">🔍 분류 테스트</button>
-<button class="tab" onclick="switchTab('pending',this)">📋 리뷰 대기</button>
-<button class="tab" onclick="switchTab('approved',this)">✅ 승인 목록</button>
-<button class="tab" onclick="switchTab('feedback',this)">📨 오탐 피드백</button>
-<button class="tab" onclick="switchTab('audit',this)">📜 감사 로그</button>
+
+<div class="tab-content active" id="tab-inspect">
+<div class="section">
+<div class="section-header"><h2>모델 검사 — 전체 검증 파이프라인</h2></div>
+<div class="inspect-bar">
+<input type="text" id="insp-repo" placeholder="HuggingFace repo_id (예: THUDM/chatglm3-6b)" value="THUDM/chatglm3-6b">
+<input type="text" id="insp-rev" class="rev" placeholder="revision" value="main">
+<label><input type="checkbox" id="insp-skipw" checked> 가중치 제외(빠름)</label>
+<button class="btn btn-primary" id="insp-run" onclick="inspectModel()">검사 실행</button>
+</div>
+<div class="quick-row"><span class="ql">데모 모델</span>
+<button class="chip-btn" onclick="quickPick('THUDM/chatglm3-6b',true)">THUDM/chatglm3-6b<span class="tag deny">코드 DENY</span></button>
+<button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-custom-architecture',false)">tiny-random-custom-architecture<span class="tag sb">샌드박스 레인</span></button>
+<button class="chip-btn" onclick="quickPick('hf-internal-testing/tiny-random-bert',false)">tiny-random-bert<span class="tag wt">가중치 단계</span></button>
+<button class="chip-btn" onclick="quickPick('demo:b2-sandbox',true)">B-2 샌드박스 데모<span class="tag sb">runsc 실행</span></button>
+<button class="chip-btn" onclick="quickPick('demo:clean-model',false)">정상 모델<span class="tag ok">APPROVE</span></button>
+<button class="chip-btn" onclick="quickPick('demo:pickle-malicious',false)">악성 모델<span class="tag deny">DENY</span></button>
+<button class="chip-btn" onclick="quickPick('vmaca123/korean-pii-ner-v3',true)">vmaca123/korean-pii-ner-v3<span class="tag ok">REVIEW</span></button>
+</div>
+</div>
+<div id="insp-result"><div class="insp-empty"><span class="big"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/></svg></span>모델 repo_id를 입력하고 <b>검사 실행</b>을 누르면<br>각 파일이 어떤 검증 단계를 거쳐 최종 판정에 이르는지 전 과정이 표시됩니다.</div></div>
 </div>
 
-<div class="tab-content active" id="tab-classify">
-<div class="section"><div class="section-header"><h2>🔍 API 분류 테스트</h2></div>
+<div class="tab-content" id="tab-gate">
+<div class="section">
+<div class="section-header"><h2>다운로드 게이트 — 받기 전에 검사하고 차단</h2></div>
+<div class="inspect-bar">
+<input type="text" id="gate-repo" placeholder="HuggingFace repo_id (다운로드 전 검사)" value="THUDM/chatglm3-6b">
+<button class="btn btn-primary" id="gate-run" onclick="gateModel()">게이트 검사</button>
+</div>
+<div class="quick-row"><span class="ql">데모</span>
+<button class="chip-btn" onclick="gatePick('hf-internal-testing/tiny-random-bert')">정상 tiny-random-bert<span class="tag ok">통과·Nexus 저장</span></button>
+<button class="chip-btn" onclick="gatePick('THUDM/chatglm3-6b')">악성 chatglm3-6b<span class="tag deny">격리·차단</span></button>
+</div>
+<div style="padding:0 20px 8px;font-size:12px;color:#888;line-height:1.6">프록시가 가중치를 받기 <b>전에</b> 코드/config를 먼저 검사합니다. <span style="color:#a32d2d">위험 → 격리(다운로드 차단)</span> · <span style="color:#0f6e56">안전 → 통과·저장(Nexus)</span> · <span style="color:#ba7517">불확실 → 검토 보류</span>.</div>
+</div>
+<div id="gate-result"></div>
+<div class="section"><div class="section-header"><h2>게이트 판정 이력</h2><button class="btn btn-primary btn-sm" onclick="loadAcquired()">새로고침</button></div>
+<div class="audit-row table-header" style="grid-template-columns:1.4fr 110px 90px 90px 1fr"><div>repo_id</div><div>상태</div><div>검사</div><div>차단</div><div>사유</div></div>
+<div id="acquired-list"></div></div>
+<div class="section"><div class="section-header"><h2>Nexus 저장소 — 검사 통과 모델</h2></div>
+<div id="nexus-files"></div></div>
+</div>
+
+<div class="tab-content" id="tab-classify">
+<div class="section"><div class="section-header"><h2>API 분류 테스트</h2></div>
 <div class="classify-form"><textarea id="api-input">torch.nn.Linear
 torch.nn.functional.gelu
 torch.load
@@ -35,15 +251,15 @@ subprocess.Popen
 torch.utils.data.DataLoader</textarea>
 <div class="row"><input type="text" id="model-id" value="test-model"><button class="btn btn-primary" onclick="classifyApis()">분류 실행</button></div></div>
 <div id="classify-results"></div></div>
-<div class="section"><div class="section-header"><h2>📊 분류 결과</h2></div><div id="recent-results"><div class="empty">분류 테스트를 실행하면 결과가 표시됩니다</div></div></div>
+<div class="section"><div class="section-header"><h2>분류 결과</h2></div><div id="recent-results"><div class="empty">분류 테스트를 실행하면 결과가 표시됩니다</div></div></div>
 </div>
 
 <div class="tab-content" id="tab-pending">
-<div class="section"><div class="section-header"><h2>📋 Pending List</h2><button class="btn btn-primary btn-sm" onclick="loadPending()">새로고침</button></div><div id="pending-list"></div></div>
+<div class="section"><div class="section-header"><h2>리뷰 대기 목록</h2><div style="display:flex;gap:8px"><button class="btn btn-approve btn-sm" onclick="autoReducePending()">안전 항목 자동 승인</button><button class="btn btn-primary btn-sm" onclick="loadPending()">새로고침</button></div></div><div id="pending-list"></div></div>
 </div>
 
 <div class="tab-content" id="tab-approved">
-<div class="section"><div class="section-header"><h2>✅ 승인된 API 목록</h2>
+<div class="section"><div class="section-header"><h2>승인된 API 목록</h2>
 <div class="search-row"><input type="text" id="approved-search" placeholder="API 검색..." oninput="loadApproved()">
 <select id="approved-filter" onchange="loadApproved()"><option value="">전체</option><option value="INITIAL">시드</option><option value="AUTO_CRAWL">크롤링</option><option value="MANUAL_REVIEW">수동 승인</option></select></div></div>
 <div class="approved-row table-header"><div>API 경로</div><div>네임스페이스</div><div>추가 경로</div><div>승인자</div><div>승인 사유</div></div>
@@ -51,27 +267,27 @@ torch.utils.data.DataLoader</textarea>
 </div>
 
 <div class="tab-content" id="tab-feedback">
-<div class="section"><div class="section-header"><h2>📨 오탐 피드백 보고 (모듈 5)</h2></div>
+<div class="section"><div class="section-header"><h2>오탐 피드백 보고</h2></div>
 <div class="classify-form">
 <div class="row" style="margin-top:0;gap:8px"><input type="text" id="fb-api" placeholder="차단된 API 경로 (예: torch.nn.functional.scaled_dot_product_attention)" style="flex:2"><input type="text" id="fb-model" placeholder="모델 ID" style="flex:1"></div>
 <div class="row" style="gap:8px"><input type="text" id="fb-reporter" placeholder="보고자 ID" value="dev_user_01" style="flex:1"><input type="text" id="fb-purpose" placeholder="사용 목적" style="flex:2"><button class="btn btn-primary" onclick="submitFeedback()">보고 제출</button></div>
 </div>
 <div id="fb-result"></div></div>
-<div class="section"><div class="section-header"><h2>📋 접수된 보고 목록</h2><button class="btn btn-primary btn-sm" onclick="loadFeedback()">새로고침</button></div>
+<div class="section"><div class="section-header"><h2>접수된 보고 목록</h2><button class="btn btn-primary btn-sm" onclick="loadFeedback()">새로고침</button></div>
 <div class="audit-row table-header" style="grid-template-columns:140px 1fr 140px 100px 100px 100px"><div>Report ID</div><div>API 경로 / 목적</div><div>모델</div><div>분류</div><div>SLA</div><div>상태</div></div>
 <div id="fb-list"></div></div>
 </div>
 
 <div class="tab-content" id="tab-audit">
-<div class="section"><div class="section-header"><h2>📜 감사 로그 — 해시 체인 무결성 보장</h2>
+<div class="section"><div class="section-header"><h2>감사 로그 — 해시 체인 무결성</h2>
 <div class="search-row"><input type="text" id="audit-search" placeholder="API 검색..." oninput="loadAudit()">
 <select id="audit-action" onchange="loadAudit()"><option value="">전체</option><option value="seed_loaded">시드</option><option value="review_approve">승인</option><option value="review_reject">거부</option><option value="review_defer">보류</option><option value="pending_registered">등록</option><option value="feedback_received">오탐신고</option><option value="crawl_auto_approved">크롤</option></select></div></div>
 <div class="audit-row table-header"><div>#</div><div>시각</div><div>액션</div><div>API 경로</div><div>수행자</div><div>사유</div><div>해시 체인</div></div>
 <div id="audit-list"></div><div class="pagination" id="audit-pagination"></div></div>
 </div>
-</div>
+</div></main></div>
 
-<div class="modal-overlay" id="review-modal"><div class="modal"><h3>🔎 API 리뷰</h3>
+<div class="modal-overlay" id="review-modal"><div class="modal"><h3>API 리뷰</h3>
 <div class="field"><label>API 경로</label><input type="text" id="review-api" readonly></div>
 <div class="field"><label>분류 결과</label><input type="text" id="review-classification" readonly></div>
 <div class="field"><label>리뷰어 ID</label><input type="text" id="review-reviewer" value="security_admin"></div>
@@ -106,7 +322,7 @@ function _uuid(){return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c
 
 async function fetchJson(u,o){try{const r=await fetch(u,o);return await r.json()}catch(e){showToast('서버 연결 실패');return null}}
 
-function switchTab(n,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.getElementById('tab-'+n).classList.add('active');if(n==='approved')loadApproved();if(n==='audit')loadAudit();if(n==='pending')loadPending();if(n==='feedback')loadFeedback()}
+function switchTab(n,btn){document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));btn.classList.add('active');document.getElementById('tab-'+n).classList.add('active');if(n==='approved')loadApproved();if(n==='audit')loadAudit();if(n==='pending')loadPending();if(n==='feedback')loadFeedback();if(n==='gate')loadAcquired()}
 
 async function submitFeedback(){
   const api=document.getElementById('fb-api').value.trim();
@@ -167,6 +383,17 @@ async function classifyApis(){
   loadStats();loadPending()
 }
 
+async function autoReducePending(){
+  const pre=await fetchJson(API+'/pending/reclassify?apply=false',{method:'POST'});
+  if(!pre){showToast('서버 연결 실패');return}
+  const n=pre.auto_approve_candidates||0;
+  if(n===0){showToast('자동 승인 가능한 안전 항목이 없습니다');return}
+  if(!confirm('빌트인/로컬 데이터연산 등 안전 항목 '+n+'개를 자동 승인합니다.\n(위험·미지 라이브러리 API는 검토 대기로 유지)'))return;
+  const d=await fetchJson(API+'/pending/reclassify?apply=true',{method:'POST'});
+  if(!d){showToast('승인 실패');return}
+  showToast((d.approved||0)+'개 자동 승인 — 리뷰 대기 감소');
+  loadPending();loadStats();
+}
 async function loadPending(){
   const d=await fetchJson(API+'/pending');if(!d)return;
   const el=document.getElementById('pending-list');
@@ -253,6 +480,233 @@ function rvBadge(s){const m={PENDING:['대기','badge-pending'],UNDER_REVIEW:['�
 function statusBadge(s){const m={ALLOWED:['허용','badge-approved'],BLOCKED:['차단','badge-blocked'],PENDING:['대기','badge-pending'],UNKNOWN:['미등록','badge-conditional']};const[l,c]=m[s]||[s,''];return'<span class="badge '+c+'">'+l+'</span>'}
 
 function showToast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),3000)}
+
+// ── 모델 검사 (가로 파이프라인 흐름) ─────────────────────────────────
+// route_kind → 검증 단계 메타 (파이프라인 순서)
+const STAGES=[
+  {k:'SAFETENSORS_FAST_PATH',icon:'<svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="10" rx="2"/><path d="M8 10V7a4 4 0 018 0v3"/></svg>',name:'안전텐서 해시 검증'},
+  {k:'PICKLE_PATH_A',icon:'<svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h11M4 17h7"/></svg>',name:'피클 opcode 스캔'},
+  {k:'PICKLE_PATH_B',icon:'<svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/></svg>',name:'피클 샌드박스 (Path B)'},
+  {k:'CODE_AST_SCAN',icon:'<svg viewBox="0 0 24 24"><path d="m8 7-4 5 4 5M16 7l4 5-4 5"/></svg>',name:'코드 AST 정적분석'},
+  {k:'CODE_RESTRICTED_RUNTIME',icon:'<svg viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 4 3 6.6 7 8 4-1.4 7-4 7-8V6l-7-3Z"/></svg>',name:'제한 런타임 실행'},
+  {k:'CODE_SANDBOX_RUNTIME',icon:'<svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2.5"/><path d="M4 10h16"/></svg>',name:'gVisor 샌드박스'},
+  {k:'CONFIG_SCHEMA_VALIDATION',icon:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 4v2M12 18v2M4 12h2M18 12h2"/></svg>',name:'Config 스키마 검증'},
+  {k:'PREPROCESSING_SEMANTIC_SCAN',icon:'<svg viewBox="0 0 24 24"><path d="M14 3H7a1 1 0 00-1 1v16a1 1 0 001 1h10a1 1 0 001-1V7l-4-4Z"/><path d="M14 3v4h4"/></svg>',name:'전처리 의미 스캔'},
+];
+const ST={PASS:{l:'통과',c:'pass'},BLOCK:{l:'차단',c:'block'},PENDING_REVIEW:{l:'검토대기',c:'pending'},SKIPPED:{l:'건너뜀',c:'skip'},ERROR:{l:'오류',c:'error'}};
+const DEC={
+  DENY:{l:'DENY',s:'배포 차단 — 위험 행위 탐지',c:'dec-deny'},
+  REVIEW_REQUIRED:{l:'REVIEW REQUIRED',s:'사람 검토 필요 — 자동 판정 보류',c:'dec-review'},
+  APPROVE:{l:'APPROVE',s:'배포 허용 — 위험 요소 없음',c:'dec-approve'},
+  ERROR:{l:'ERROR',s:'검증 오류',c:'dec-error'}
+};
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function cntCard(c,l,n){return '<div class="cnt '+c+'"><div class="n">'+n+'</div><div class="l">'+l+'</div></div>'}
+function hlStage(k,on){document.querySelectorAll(".lane[data-st='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on));document.querySelectorAll(".fcard[data-rk='"+k+"']").forEach(e=>e.classList.toggle('hl',!!on))}
+function quickPick(id,skipw){document.getElementById('insp-repo').value=id;if(skipw!==undefined)document.getElementById('insp-skipw').checked=skipw;inspectModel()}
+function durMs(r){const a=Date.parse(r.started_at),b=Date.parse(r.finished_at);if(isNaN(a)||isNaN(b))return null;return Math.max(0,b-a)}
+function fmtMs(n){if(n==null)return '';if(n<1)return '<1ms';if(n<1000)return Math.round(n)+'ms';return (n/1000).toFixed(2)+'s'}
+function toggleDetail(el){const row=el.parentElement;row.classList.toggle('open');const d=row.querySelector('.art-detail');if(d)d.style.display=row.classList.contains('open')?'block':'none'}
+// 미사용(대상 없음) 단계의 이유 — '고장'이 아니라 라우팅 결과임을 명확히
+function idleReason(k,data){
+  if(k==='SAFETENSORS_FAST_PATH'||k==='PICKLE_PATH_A'||k==='PICKLE_PATH_B')
+    return data.skip_weights?'가중치 제외 옵션 — safetensors/pickle 미제출':'해당 가중치 파일 없음';
+  if(k==='CODE_RESTRICTED_RUNTIME')
+    return '제한런타임 대상 없음 — 정적 분석에서 확정(B-1 후보 아님)';
+  if(k==='CODE_SANDBOX_RUNTIME')
+    return '샌드박스 검토 대상(커스텀 코드) 없음';
+  return '이번 모델에 해당 종류 파일 없음';
+}
+
+async function inspectModel(){
+  const repo=document.getElementById('insp-repo').value.trim();
+  if(!repo){showToast('repo_id를 입력하세요');return}
+  const rev=document.getElementById('insp-rev').value.trim()||'main';
+  const skipw=document.getElementById('insp-skipw').checked;
+  const btn=document.getElementById('insp-run');
+  btn.disabled=true;btn.innerHTML='<span class="spinner"></span>검사 중...';
+  document.getElementById('insp-result').innerHTML='<div class="insp-empty"><span class="big">⏳</span><b>'+esc(repo)+'</b> 다운로드 + 검증 중...<br>큰 모델은 시간이 걸릴 수 있습니다.</div>';
+  const data=await fetchJson(API+'/validation/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_id:repo,revision:rev,skip_weights:skipw})});
+  btn.disabled=false;btn.textContent='검사 실행';
+  const box=document.getElementById('insp-result');
+  if(!data){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>서버 연결 실패</div>';return}
+  if(!data.ok){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>'+esc(data.error||'검사 실패')+'</div>';return}
+  renderInspect(data);loadStats()
+}
+
+function buildPipelineHtml(data){
+  const resp=data.response||{};
+  // config auto_map이 참조 코드를 재검증해 동일 (파일|단계|상태) 항목이 중복될 수 있어
+  // 정확히 같은 발견은 한 번만 표시(검사 대상 수와 일치하게).
+  const seen={},results=[];
+  for(const r of (resp.artifact_results||[])){
+    const key=r.artifact.repo_path+'|'+r.route_kind+'|'+r.status;
+    if(seen[key])continue;seen[key]=1;results.push(r);
+  }
+  const byStage={};
+  for(const r of results){(byStage[r.route_kind]=byStage[r.route_kind]||[]).push(r)}
+  const c={PASS:0,BLOCK:0,PENDING_REVIEW:0,SKIPPED:0,ERROR:0};
+  for(const r of results){c[r.status]=(c[r.status]||0)+1}
+  const dec=DEC[resp.overall_decision]||{l:resp.overall_decision,s:'',c:'dec-error'};
+  // 단계별/전체 소요시간(started_at~finished_at)
+  let totalMs=0;for(const r of results){const m=durMs(r);if(m!=null)totalMs+=m;}
+  let h='';
+  h+='<div class="verdict pop '+dec.c+'"><div><div class="vbig">'+esc(dec.l)+'</div><div class="vsub">'+esc(dec.s)+'</div></div>'
+    +'<div class="vmeta"><b>'+esc(data.repo_id)+'</b>@'+esc(data.revision)+'<br>검사 '+data.validated_count+'개 · '+fmtMs(totalMs)+' · release='+esc(resp.release_action)+'</div></div>';
+  h+='<div class="insp-counts">'+cntCard('pass','통과',c.PASS)+cntCard('block','차단',c.BLOCK)
+    +cntCard('pending','검토대기',c.PENDING_REVIEW)+cntCard('skip','건너뜀',c.SKIPPED)
+    +(c.ERROR?cntCard('error','오류',c.ERROR):'')+'</div>';
+  // 라우팅 안내 — '미사용/대상 없음'이 비활성이 아님을 명확히
+  h+='<div class="flow-legend">ℹ <b>각 파일은 종류·위험도에 따라 적합한 단계로만 검사됩니다</b> (전 단계 일괄 통과 아님). '
+    +'<b>대상 없음</b> = 이번 모델에 해당 파일이 없거나, 앞 단계에서 이미 판정돼 더 비싼 검사가 불필요한 경우입니다.</div>';
+  // 3-컬럼 흐름: 입력 → 단계 → 판정 (단계가 파이프라인 순서로 순차 등장)
+  h+='<div class="flow"><div><div class="flow-col-title">입력 아티팩트</div>';
+  let fi=0;
+  for(const r of results){
+    const cc=(ST[r.status]||{c:'skip'}).c;
+    h+='<div class="fcard reveal b-'+cc+'" style="animation-delay:'+(fi++*45)+'ms" data-rk="'+esc(r.route_kind)+'" onmouseenter="hlStage(\''+esc(r.route_kind)+'\',1)" onmouseleave="hlStage(\''+esc(r.route_kind)+'\',0)">'
+      +'<div class="fn">'+esc(r.artifact.file_name)+'</div><div class="fk">'+esc(r.artifact.file_kind)+'</div></div>';
+  }
+  h+='</div><div class="flow-arrow">→</div><div><div class="flow-col-title">검증 단계 (행위 기반)</div>';
+  let li=0;
+  for(const s of STAGES){
+    const arts=byStage[s.k]||[];const active=arts.length>0;
+    const delay=(active?(li++):0)*130+results.length*45;  // 입력 카드 다음에 단계가 순차로
+    let laneMs=0;for(const r of arts){const m=durMs(r);if(m!=null)laneMs+=m;}
+    h+='<div class="lane reveal '+(active?'active scanning':'idle')+'" style="animation-delay:'+delay+'ms" data-st="'+s.k+'"><div class="lane-head">'
+      +'<span class="lic">'+s.icon+'</span><div><div class="lname">'+s.name+'</div></div>'
+      +'<span class="lcount">'+(active?arts.length+'개'+(laneMs?'<span class="lane-time">'+fmtMs(laneMs)+'</span>':''):'대상 없음')+'</span></div>';
+    if(!active){h+='<div class="idle-reason">'+esc(idleReason(s.k,data))+'</div>';}
+    if(active){
+      h+='<div class="lane-body">';
+      for(const r of arts){
+        const st=ST[r.status]||{l:r.status,c:'skip'};
+        const reasons=r.reason_entries||[];
+        const m=durMs(r);
+        // 펼침 헤더(클릭) — PASS 포함 모든 아티팩트 상세 열람 가능
+        h+='<div class="art-row"><div class="arl" onclick="toggleDetail(this)"><span class="caret">▸</span>'
+          +'<span class="afn">'+esc(r.artifact.file_name)+'</span>'
+          +(m!=null?'<span class="ms">'+fmtMs(m)+'</span>':'')
+          +(r.grade&&r.grade!=='NA'?'<span class="grade-tag">등급 '+esc(r.grade)+'</span>':'')
+          +'<span class="st-chip st-'+st.c+'">'+esc(st.l)+'</span></div>';
+        h+='<div class="art-detail" style="display:none">';
+        if(reasons.length){
+          h+='<div class="reasons">';
+          for(const re of reasons){  // 전체 사유(잘림 없음)
+            const ev=(re.evidence||[]).join(', ');
+            h+='<div class="reason"><span class="sev sev-'+esc(re.severity||'LOW')+'">'+esc(re.severity||'')+'</span>'
+              +'<div><span class="rc">'+esc(re.code)+'</span> <span class="rm">'+esc(re.message||'')+'</span>'
+              +(ev?'<br><span class="rev">'+esc(ev)+'</span>':'')+'</div></div>';
+          }
+          h+='</div>';
+        }else{
+          h+='<div class="pass-note">✓ 위험 신호 없음 — 이 단계 통과</div>';
+        }
+        // gVisor 샌드박스 실제 실행 evidence (B-2 + 실 sandbox 토글 ON일 때)
+        const sc=r.details&&r.details.sandbox_check;
+        if(sc){
+          const re_=sc.runtime_evidence||{},ex=sc.execution||{};
+          const dec=sc.decision||'',clean=dec==='B2_POLICY_REVIEW_REQUIRED';
+          const rt=sc.sandbox_runtime||re_.runtime||'';
+          const isolated=(re_.runtime||'').indexOf('runsc')>=0&&re_.network_mode==='none';
+          h+='<div class="sbx"><b>gVisor 샌드박스 실제 실행</b>'
+            +(rt?' · runtime=<b>'+esc(rt)+'</b>':'')
+            +(isolated?' · <span class="ok">격리 검증 ✓</span>':'')
+            +(re_.network_mode?' · net='+esc(re_.network_mode):'')
+            +(re_.rootfs_readonly?' · read-only':'')
+            +(re_.cap_drop_all?' · cap-drop=ALL':'')
+            +(ex.forward_status&&ex.forward_status!=='not_run'?' · forward='+esc(ex.forward_status):'')
+            +'<br>판정 <b>'+esc(dec)+'</b>'
+            +(clean?' <span class="ok">(샌드박스 통과 — 사람 검토 대기)</span>':(sc.reason?' · '+esc(sc.reason):''))
+            +' · deployable='+(sc.deployable?'true':'false')+'</div>';
+        }
+        const sha=(r.artifact.sha256||'').slice(0,12);
+        h+='<div class="art-meta">'+esc(r.route_kind)+' · '+esc(r.review_action||'')
+          +(sha?' · sha256:'+esc(sha)+'…':'')+(r.cache_hit?' · cache-hit':'')+'</div>';
+        h+='</div></div>';
+      }
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+  h+='</div><div class="flow-arrow">→</div><div><div class="flow-col-title">최종 판정</div>'
+    +'<div class="verdict pop '+dec.c+'" style="margin:0;flex-direction:column;align-items:flex-start;gap:6px;animation-delay:'+(li*130+results.length*45)+'ms">'
+    +'<div class="vbig" style="font-size:24px">'+esc(dec.l)+'</div>'
+    +'<div class="vsub">'+(c.BLOCK?c.BLOCK+'건 차단':c.PENDING_REVIEW?c.PENDING_REVIEW+'건 검토대기':'위험 없음')+'</div></div></div></div>';
+  const so=data.skipped_other||[],sw=data.skipped_weights||[];
+  if(so.length||sw.length){
+    h+='<div class="insp-skipped">';
+    if(sw.length)h+='⏭ 가중치 제외('+sw.length+'): '+esc(sw.slice(0,6).join(', '))+(sw.length>6?' …':'')+'<br>';
+    if(so.length)h+='⏭ 검사 대상 아님(OTHER '+so.length+'): '+esc(so.slice(0,6).join(', '))+(so.length>6?' …':'');
+    h+='</div>';
+  }
+  return h;
+}
+function renderInspect(data){document.getElementById('insp-result').innerHTML=buildPipelineHtml(data)}
+
+// ── 다운로드 게이트 (받기 전 검사 → 허용/격리/보류 + 저장소) ──────────────
+const GATE={
+  ACQUIRED:{l:'다운로드 허용',s:'안전 — Nexus 저장소에 보관',c:'dec-approve',ic:'<svg viewBox="0 0 24 24"><path d="m5 13 4 4L19 7"/></svg>'},
+  QUARANTINED:{l:'격리 — 다운로드 차단',s:'위험 탐지 — 가중치도 받지 않음',c:'dec-deny',ic:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M5.6 5.6 18.4 18.4"/></svg>'},
+  PENDING:{l:'검토 보류',s:'사람 승인 전 미배포',c:'dec-review',ic:'<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'}
+};
+function gatePick(id){document.getElementById('gate-repo').value=id;gateModel()}
+async function gateModel(){
+  const repo=document.getElementById('gate-repo').value.trim();
+  if(!repo){showToast('repo_id를 입력하세요');return}
+  const btn=document.getElementById('gate-run');btn.disabled=true;btn.innerHTML='<span class="spinner"></span>검사 중...';
+  document.getElementById('gate-result').innerHTML='<div class="insp-empty"><span class="big">⏳</span><b>'+esc(repo)+'</b> 다운로드 전 검사 중...</div>';
+  const d=await fetchJson(API+'/proxy/acquire',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({repo_id:repo})});
+  btn.disabled=false;btn.textContent='게이트 검사';
+  const box=document.getElementById('gate-result');
+  if(!d){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>서버 연결 실패</div>';return}
+  if(!d.ok){box.innerHTML='<div class="insp-empty"><span class="big">⚠</span>'+esc(d.error||'게이트 실패')+'</div>';return}
+  const g=GATE[d.status]||{l:d.status,s:'',c:'dec-error',ic:'?'};
+  let h='<div class="verdict pop '+g.c+'"><div><div class="vbig">'+g.ic+' '+esc(g.l)+'</div><div class="vsub">'+esc(g.s)+'</div></div>'
+    +'<div class="vmeta"><b>'+esc(d.repo_id)+'</b><br>판정='+esc(d.decision)+' · 검사 '+d.validated_count+'개 · 차단 '+d.blocked_count+'개'+(d.reason?'<br>'+esc(d.reason):'')+'</div></div>';
+  // 받기 전 검사한 파이프라인도 그대로 보여줌
+  h+=buildPipelineHtml({repo_id:d.repo_id,revision:d.revision||'main',validated_count:d.validated_count,skipped_other:[],skipped_weights:[],response:d.response});
+  box.innerHTML=h;
+  loadAcquired();loadStats()
+}
+async function loadAcquired(){
+  loadNexus();
+  const d=await fetchJson(API+'/proxy/acquired');if(!d)return;
+  const el=document.getElementById('acquired-list');
+  if(!d.items?.length){el.innerHTML='<div class="empty">게이트 통과한 모델이 없습니다</div>';return}
+  const sb={ACQUIRED:['통과·저장','badge-approved'],QUARANTINED:['격리','badge-blocked'],PENDING:['보류','badge-pending']};
+  let h='';
+  for(const i of d.items){
+    const[l,c]=sb[i.status]||[i.status,''];
+    h+='<div class="audit-row" style="grid-template-columns:1.4fr 110px 90px 90px 1fr"><div class="api-path">'+esc(i.repo_id)+'</div>'
+      +'<div><span class="badge '+c+'">'+l+'</span></div><div>'+i.validated_count+'</div>'
+      +'<div style="color:'+(i.blocked_count?'#a32d2d':'#888')+'">'+i.blocked_count+'</div>'
+      +'<div style="font-size:11px;color:#666">'+esc(i.reason||'—')+'</div></div>';
+  }
+  el.innerHTML=h
+}
+async function loadNexus(){
+  const d=await fetchJson(API+'/proxy/nexus');if(!d)return;
+  const el=document.getElementById('nexus-files');if(!el)return;
+  if(!d.items?.length){el.innerHTML='<div class="empty">보관된 모델이 없습니다 (정상 모델이 게이트를 통과하면 여기에 실제 파일이 저장됩니다)</div>';return}
+  let h='';
+  for(const m of d.items){
+    const mb=(((m.bytes||0)/1048576).toFixed(2));
+    const zipurl=API+'/proxy/nexus/zip?repo='+encodeURIComponent(m.repo_id)+'&revision='+encodeURIComponent(m.revision||'main');
+    h+='<div style="margin:8px 0;border:1px solid #e5e7eb;border-radius:8px;padding:10px 14px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+      +'<div style="font-weight:600">'+esc(m.repo_id)+' <span style="color:#888;font-weight:400">@'+esc(m.revision||'main')+' · '+(m.file_count||0)+'개 파일 · '+mb+' MB</span></div>'
+      +'<a href="'+zipurl+'" download class="btn btn-primary btn-sm" style="text-decoration:none">⬇ 전체 다운로드 (ZIP)</a></div>';
+    for(const f of (m.files||[])){
+      const url=API+'/proxy/nexus/file?repo='+encodeURIComponent(m.repo_id)+'&revision='+encodeURIComponent(m.revision||'main')+'&path='+encodeURIComponent(f.path);
+      h+='<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px;border-top:1px solid #f3f4f6">'
+        +'<a href="'+url+'" download style="color:#4f46e5;text-decoration:none">⬇ '+esc(f.path)+'</a>'
+        +'<span style="color:#999">'+(((f.bytes||0)/1024).toFixed(1))+' KB</span></div>';
+    }
+    h+='</div>';
+  }
+  el.innerHTML=h;
+}
 
 loadStats();loadPending()
 </script>

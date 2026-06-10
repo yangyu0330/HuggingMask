@@ -13,8 +13,13 @@ from typing import Any, Iterable
 
 from sandbox.b2.schemas import SecurityEvents
 
+# syscall은 strace의 "콜 위치"에서만 매칭한다. gVisor 실 strace는
+# ``... python X openat(...)`` (E/X enter/exit 마커 다음), fixture는
+# ``123 openat(...)`` (pid 다음). 둘 다 syscall 직전이 ``[EX]`` 또는 숫자(pid)다.
+# 이 앵커가 없으면 ``read()``가 덤프한 파일 내용(소스 코드의 ``.mkdir(`` 등)을
+# 진짜 syscall로 오인한다(실 strace에서 실측된 오탐).
 _SYSCALL_RE = re.compile(
-    r"\b(?P<syscall>execve|connect|socket|sendto|recvfrom|sendmsg|recvmsg|openat|open|write|creat|mkdir|rename|unlink|clone3|clone)\s*\(",
+    r"(?:^|\s)(?:[EX]|\d+)\s+(?P<syscall>execve|connect|socket|sendto|recvfrom|sendmsg|recvmsg|openat|open|write|creat|mkdir|rename|unlink|clone3|clone)\s*\(",
 )
 _QUOTED_RE = re.compile(r'"([^"]*)"')
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from fastapi import Depends, FastAPI
 from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from analyzer.schemas import ValidationJobRequest
@@ -21,6 +22,7 @@ from analyzer.service import validate_job
 from proxy.auth import require_internal_token
 from whitelist.database import get_db
 from whitelist.full_pipeline import run_full_validation
+from whitelist.model_inspector import inspect_model_repo
 
 app = FastAPI(title="HuggingMask Proxy Bootstrap")
 from whitelist.bootstrap import init_whitelist
@@ -85,6 +87,139 @@ def validation_full(payload: ValidationJobRequest, db: Session = Depends(get_db)
     return run_full_validation(_apply_operator_path_b(payload), db=db)
 
 
+class InspectModelRequest(BaseModel):
+    """대시보드 '모델 검사' 입력 — repo_id만 받아 서버측에서 다운로드/검증."""
+
+    repo_id: str
+    revision: str = "main"
+    skip_weights: bool = True
+    enable_path_b: bool = False
+
+
+@app.post(
+    "/internal/v1/validation/inspect",
+    dependencies=[Depends(require_internal_token)],
+)
+def validation_inspect(payload: InspectModelRequest, db: Session = Depends(get_db)):
+    """repo_id를 받아 서버에서 텍스트 아티팩트를 내려받아 통합 검증 실행.
+
+    대시보드 '모델 검사' 탭의 가시화용. 브라우저가 HF 모델을 직접 받을 수
+    없으므로 서버가 다운로드까지 대행한다. ``/validation/full``과 동일한
+    응답 + 다운로드/분류 메타를 묶어 반환(실패도 200 + ``ok:false``).
+
+    실 검증 파이프라인을 돌리므로 ``/full``과 동일하게 내부 토큰 인증
+    적용(미설정 시 no-op — 데모/dev 경로 보존).
+    """
+    return inspect_model_repo(
+        payload.repo_id,
+        db=db,
+        revision=payload.revision,
+        skip_weights=payload.skip_weights,
+        enable_path_b=payload.enable_path_b,
+    )
+
+
+class ProxyGateRequest(BaseModel):
+    """프록시 다운로드 게이트 입력."""
+
+    repo_id: str
+    revision: str = "main"
+
+
+@app.post(
+    "/internal/v1/proxy/acquire",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_acquire(payload: ProxyGateRequest, db: Session = Depends(get_db)):
+    """다운로드 게이트 — 받기 전에 검사하고 안전하면 통과·저장, 아니면 차단.
+
+    HuggingMask 제품 thesis 를 다운로드 경로에 적용: 코드/config 를 먼저 검사
+    (가중치 제외)해 DENY 면 격리(다운로드 차단), 안전하면 acquire + 저장소 기록.
+    """
+    from whitelist.acquisition import gate_model
+
+    return gate_model(payload.repo_id, db=db, revision=payload.revision)
+
+
+@app.get(
+    "/internal/v1/proxy/acquired",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_acquired(db: Session = Depends(get_db)):
+    """게이트 저장소(Nexus 역할) 목록 — ACQUIRED/QUARANTINED/PENDING."""
+    from whitelist.acquisition import list_acquired
+
+    return {"items": list_acquired(db)}
+
+
+@app.post(
+    "/internal/v1/pending/reclassify",
+    dependencies=[Depends(require_internal_token)],
+)
+def pending_reclassify(apply: bool = False, db: Session = Depends(get_db)):
+    """리뷰 대기 감축 — pending 재분류 + 안전 항목(빌트인/로컬 데이터연산) 자동 승인.
+
+    ``apply=false``(기본)는 dry-run(요약만), ``apply=true``는 실제 승인. 위험/미지
+    라이브러리 API 는 그대로 검토 대기로 남는다.
+    """
+    from whitelist.reclassify import reclassify_pending
+
+    return reclassify_pending(db, apply=apply, reviewer_id="dashboard-auto")
+
+
+@app.get(
+    "/internal/v1/proxy/nexus",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_nexus():
+    """Nexus 사내 저장소에 실제 보관된 모델 파일 목록(매니페스트 기반)."""
+    from whitelist.acquisition import list_nexus
+
+    return {"items": list_nexus()}
+
+
+@app.get(
+    "/internal/v1/proxy/nexus/file",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_nexus_file(repo: str, path: str, revision: str = "main"):
+    """Nexus 에 보관된 개별 파일 다운로드(저장 디렉터리 밖 접근 차단)."""
+    from fastapi.responses import FileResponse, JSONResponse
+
+    from whitelist.acquisition import nexus_file_path
+
+    target = nexus_file_path(repo, revision, path)
+    if target is None:
+        return JSONResponse(
+            {"error": "file not found in nexus store", "repo": repo, "path": path},
+            status_code=404,
+        )
+    return FileResponse(str(target), filename=path.split("/")[-1])
+
+
+@app.get(
+    "/internal/v1/proxy/nexus/zip",
+    dependencies=[Depends(require_internal_token)],
+)
+def proxy_nexus_zip(repo: str, revision: str = "main"):
+    """Nexus 에 보관된 모델 '전체'를 ZIP 1개로 다운로드(브라우저 일괄 받기)."""
+    from fastapi.responses import JSONResponse, Response
+
+    from whitelist.acquisition import build_nexus_zip
+
+    data = build_nexus_zip(repo, revision)
+    if data is None:
+        return JSONResponse(
+            {"error": "model not stored in nexus", "repo": repo}, status_code=404
+        )
+    fname = repo.replace("/", "__") + ".zip"
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 # ─────────────────────────────────────────────
 # 운영 대시보드 (보안 담당자 UI)
 # ─────────────────────────────────────────────
@@ -115,3 +250,10 @@ app.include_router(
     whitelist_router,
     dependencies=[Depends(require_internal_token)],
 )
+
+# HuggingFace 다운로드 transparent 가로채기(HF_ENDPOINT 리버스 프록시).
+# catch-all 라우트('/{full_path:path}')를 포함하므로 반드시 맨 마지막에 등록해
+# /dashboard·/health·/internal/v1/* 등 명시 라우트를 가리지 않게 한다.
+from proxy.app.hf_proxy import router as hf_proxy_router
+
+app.include_router(hf_proxy_router)
