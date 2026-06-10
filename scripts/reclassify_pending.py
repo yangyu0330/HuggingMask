@@ -18,18 +18,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from sqlalchemy import select
-
 from whitelist.database import SessionLocal, init_db
-from whitelist.engine import _Classifier, apply_review_decision
-from whitelist.models import PendingClassification, ReviewStatus
-from whitelist.tables import PendingApi
-
-
-def _reclassify(classifier: _Classifier, api_path: str) -> PendingClassification:
-    base, _ = classifier.match_namespace(api_path)
-    risk = classifier.find_risk_keywords(api_path)
-    return classifier.escalate(base, risk)
+from whitelist.reclassify import reclassify_pending
 
 
 def main() -> None:
@@ -39,44 +29,18 @@ def main() -> None:
 
     init_db()
     db = SessionLocal()
-    classifier = _Classifier()
+    result = reclassify_pending(db, apply=args.apply)
 
-    rows = (
-        db.execute(select(PendingApi).where(PendingApi.review_status == ReviewStatus.PENDING))
-        .scalars()
-        .all()
-    )
-
-    counts: dict[str, int] = {}
-    auto: list[str] = []
-    for row in rows:
-        new = _reclassify(classifier, row.api_path)
-        counts[new.value] = counts.get(new.value, 0) + 1
-        if new is PendingClassification.AUTO_APPROVE:
-            auto.append(row.api_path)
-
-    print(f"PENDING {len(rows)}개 재분류: {counts}")
-    print(f"자동승인 대상(빌트인/로컬 데이터연산): {len(auto)}개")
+    print(f"PENDING {result['scanned']}개 재분류: {result['counts']}")
+    print(f"자동승인 대상(빌트인/로컬 데이터연산): {result['auto_approve_candidates']}개")
 
     if not args.apply:
         print("\n(dry-run) 실제 반영하려면 --apply. 자동승인 예시:")
-        for api in auto[:25]:
+        for api in result["samples"]:
             print("   ", api)
         return
 
-    approved = 0
-    for api_path in auto:
-        result = apply_review_decision(
-            db,
-            api_path,
-            decision="approve",
-            reviewer_id="auto-reclassify",
-            review_note="builtin/local-data-op auto-approved by classifier rule (LIBRARY_ROOTS + BENIGN_LEAF_NAMES)",
-        )
-        if getattr(result, "applied", False):
-            approved += 1
-    db.commit()
-    print(f"\n승인 완료: {approved}개 → 리뷰 대기에서 제거. (위험/미지 API는 그대로 검토 대기)")
+    print(f"\n승인 완료: {result['approved']}개 → 리뷰 대기에서 제거. (위험/미지 API는 그대로 검토 대기)")
 
 
 if __name__ == "__main__":

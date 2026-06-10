@@ -152,6 +152,21 @@ def proxy_acquired(db: Session = Depends(get_db)):
     return {"items": list_acquired(db)}
 
 
+@app.post(
+    "/internal/v1/pending/reclassify",
+    dependencies=[Depends(require_internal_token)],
+)
+def pending_reclassify(apply: bool = False, db: Session = Depends(get_db)):
+    """리뷰 대기 감축 — pending 재분류 + 안전 항목(빌트인/로컬 데이터연산) 자동 승인.
+
+    ``apply=false``(기본)는 dry-run(요약만), ``apply=true``는 실제 승인. 위험/미지
+    라이브러리 API 는 그대로 검토 대기로 남는다.
+    """
+    from whitelist.reclassify import reclassify_pending
+
+    return reclassify_pending(db, apply=apply, reviewer_id="dashboard-auto")
+
+
 @app.get(
     "/internal/v1/proxy/nexus",
     dependencies=[Depends(require_internal_token)],
