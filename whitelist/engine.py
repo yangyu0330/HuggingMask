@@ -28,8 +28,8 @@ from whitelist.models import (
 )
 from whitelist.pending_store import upsert_pending
 from whitelist.rules import (
-    DANGER_KEYWORDS, DANGER_KEYWORDS_EXEC, DANGER_KEYWORDS_IO,
-    NAMESPACE_RULES, PERMANENTLY_BLOCKED_APIS,
+    BENIGN_LEAF_NAMES, DANGER_KEYWORDS, DANGER_KEYWORDS_EXEC, DANGER_KEYWORDS_IO,
+    LIBRARY_ROOTS, NAMESPACE_RULES, PERMANENTLY_BLOCKED_APIS,
     WHITELIST_VERSION, documentation_url_for,
 )
 from whitelist.tables import ApprovedApi
@@ -58,10 +58,18 @@ class _Classifier:
     def match_namespace(
         self, api_path: str,
     ) -> tuple[PendingClassification, str | None]:
-        """longest-prefix match. 매칭 안 되면 (MANUAL, None)"""
+        """longest-prefix match. 매칭 안 되면 라이브러리 루트 여부로 분기."""
         for prefix, classification in self._sorted_rules:
             if api_path.startswith(prefix) or api_path == prefix.rstrip("."):
                 return classification, prefix.rstrip(".") + ".*"
+        # 루트가 제어 대상 라이브러리가 아니고(로컬 변수/빌트인) 리프가 명시적 양성
+        # 빌트인·데이터 연산이면 화이트리스트 제어 대상 외부 API 가 아님 → 자동 승인 권고.
+        # 미지 라이브러리(`my_lib.UnknownClass`)·모호 메서드(`conn.send`)는 MANUAL 유지.
+        # 위험 키워드는 escalate()에서 한 번 더 MANUAL 로 격상된다(이중 안전).
+        root = api_path.split(".", 1)[0]
+        leaf = api_path.rsplit(".", 1)[-1]
+        if root not in LIBRARY_ROOTS and leaf in BENIGN_LEAF_NAMES:
+            return PendingClassification.AUTO_APPROVE, "builtin/local-data-op"
         return PendingClassification.MANUAL, None
 
     def find_risk_keywords(self, api_path: str) -> list[str]:

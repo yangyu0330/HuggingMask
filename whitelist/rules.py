@@ -61,6 +61,56 @@ NAMESPACE_RULES: dict[str, PendingClassification] = {
 
 
 # ─────────────────────────────────────────────
+# 제어 대상 라이브러리 루트 (top-level 모듈)
+# 이 루트로 시작하는 API만 namespace/위험 규칙으로 정밀 분류한다. 그 외 루트
+# (로컬 변수 메서드 `t.append`, 빌트인 `type` 등)는 외부 라이브러리 API가 아니므로
+# 화이트리스트 제어 대상이 아니다 → 위험 키워드만 없으면 자동 승인 권고.
+# (위험 키워드 write/load/run/exec... 는 escalate()에서 MANUAL 로 격상되어 안전.)
+# ─────────────────────────────────────────────
+
+LIBRARY_ROOTS: set[str] = {
+    # ML/수치
+    "torch", "torchvision", "torchaudio", "numpy", "np", "scipy", "pandas", "sklearn",
+    "transformers", "tensorflow", "tf", "keras", "jax", "jaxlib", "flax", "PIL", "cv2",
+    "matplotlib", "datasets", "accelerate", "safetensors", "tokenizers", "huggingface_hub",
+    "onnx", "onnxruntime", "timm", "einops", "sentencepiece",
+    # 직렬화/동적실행/시스템/네트워크 (위험 sink 포함)
+    "os", "sys", "subprocess", "shutil", "pathlib", "io", "socket", "ssl", "requests",
+    "urllib", "urllib3", "httpx", "aiohttp", "pickle", "cloudpickle", "dill", "joblib",
+    "marshal", "shelve", "importlib", "ctypes", "cffi", "yaml", "json", "builtins",
+    "threading", "multiprocessing", "asyncio", "tempfile", "glob", "zipfile", "tarfile",
+    "gzip", "base64", "codecs", "struct", "mmap", "pty", "platform", "signal",
+}
+
+
+# ─────────────────────────────────────────────
+# 명시적 양성 리프 — 빌트인 / 순수 데이터구조·문자열 연산
+# (위험 키워드 write/read/load/save/open/exec/eval/run/call/system 등은 절대 포함 안 함)
+# "루트가 LIBRARY_ROOTS 가 아니고(로컬 변수/빌트인) AND 리프가 이 집합" 일 때만 자동 승인.
+# → 미지 서드파티 라이브러리(`my_lib.UnknownClass`)·모호한 메서드(`conn.send`)는 MANUAL 유지.
+# ─────────────────────────────────────────────
+
+BENIGN_LEAF_NAMES: set[str] = {
+    # builtins
+    "type", "len", "isinstance", "issubclass", "hasattr", "repr", "str", "int", "float",
+    "bool", "bytes", "bytearray", "list", "dict", "set", "tuple", "frozenset", "range",
+    "enumerate", "zip", "map", "filter", "sorted", "reversed", "min", "max", "sum", "abs",
+    "round", "all", "any", "print", "format", "ord", "chr", "hex", "oct", "bin", "divmod",
+    "pow", "vars", "dir",
+    # list/set/dict 메서드 (순수 데이터 연산)
+    "append", "extend", "insert", "pop", "remove", "clear", "index", "count", "sort",
+    "reverse", "copy", "get", "keys", "values", "items", "setdefault", "update", "add",
+    "discard", "union", "intersection", "difference", "symmetric_difference", "issubset",
+    "issuperset", "popitem",
+    # str 메서드
+    "join", "split", "rsplit", "strip", "lstrip", "rstrip", "lower", "upper", "title",
+    "capitalize", "casefold", "swapcase", "replace", "find", "rfind", "ljust", "rjust",
+    "center", "zfill", "splitlines", "startswith", "endswith", "encode", "decode",
+    "expandtabs", "isdigit", "isalpha", "isalnum", "isspace", "isupper", "islower",
+}
+
+
+# ─────────────────────────────────────────────
 # 명시적 차단 목록 (block 우선 — engine.md:21)
 # 어떤 경우에도 ALLOWED가 될 수 없다
 # ─────────────────────────────────────────────
